@@ -1,0 +1,37 @@
+# Exemple de plan « tâches-as-code » Striart.
+#
+# Un plan déclare un graphe de tâches et leurs dépendances dans un fichier
+# versionné avec le code — commit, diff, revue en PR, rejouable.
+#   striart plan examples/plan.example.yaml --dry-run   # revue, ne lance rien
+#   striart plan examples/plan.example.yaml             # applique
+#
+# `apply` équivaut à la séquence de `striart run` décrite, les `id` de plan
+# résolus en noms d'agents pour les dépendances `after`.
+
+version: 1
+
+tasks:
+  # Aucune dépendance : démarre immédiatement (clone isolé préparé).
+  - id: schema
+    agent: db-schema # optionnel — dérivé du prompt si absent
+    prompt: |
+      Ajoute une colonne `jwt_version` (int, défaut 0) à la table users
+      et la migration correspondante.
+
+  # Dépend de `schema` : n'est proposée qu'une fois `schema` terminé (mergé
+  # puis arrêté). La dépendance est SÉMANTIQUE — aucune collision de fichiers
+  # ne la déduirait, on la déclare.
+  - id: auth
+    agent: jwt-auth
+    prompt: Fais passer l'authentification aux JSON Web Tokens.
+    after: schema
+
+  # Tâche autonome : Striart pilote l'outil de bout en bout. Elle référence un
+  # PROFIL défini en config (agentProfiles) — jamais une commande shell brute :
+  # un plan est de la donnée qui circule, pas du code à exécuter.
+  - id: tests
+    prompt: Ajoute des tests unitaires pour le nouveau flux JWT.
+    after: auth
+    autonomous: true
+    profile: claude
+    timeout: 900000

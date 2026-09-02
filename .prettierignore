@@ -1,0 +1,8 @@
+# Prettier ne touche que le code. Les .md du projet sont de la prose française
+# soigneusement mise en page (tableaux, listes calibrées) : un reflow
+# automatique y ferait du bruit sans valeur.
+*.md
+node_modules/
+coverage/
+.striart/
+package-lock.json
