@@ -1,0 +1,72 @@
+{
+  "name": "@jumsay/striart",
+  "version": "0.10.0",
+  "description": "Orchestrateur Git multi-agents pour Claude Code et autres IA coding agents — isolation physique, routing préventif, fusion sémantique, Test Gate bloquant",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "git",
+    "orchestrator",
+    "multi-agent",
+    "claude-code",
+    "aider",
+    "llm",
+    "ai-coding",
+    "merge",
+    "cli"
+  ],
+  "bin": {
+    "striart": "./src/cli.js"
+  },
+  "files": [
+    "src/",
+    "examples/",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    ".env.example"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/personamanagmentlayer/striart.git"
+  },
+  "author": "jumsay",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "dev": "nodemon src/cli.js",
+    "test": "vitest run",
+    "test:unit": "vitest run --project unit",
+    "test:integration": "vitest run --project integration",
+    "test:watch": "vitest",
+    "test:ci": "tsc && vitest run --coverage",
+    "typecheck": "tsc",
+    "lint": "eslint . && prettier --check .",
+    "format": "prettier --write ."
+  },
+  "dependencies": {
+    "chokidar": "^4.0.0",
+    "commander": "^12.0.0",
+    "cosmiconfig": "^9.0.0",
+    "execa": "^9.0.0",
+    "pino": "^9.0.0",
+    "pino-pretty": "^11.0.0",
+    "simple-git": "^3.25.0",
+    "yaml": "^2.9.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.1.2",
+    "@vitest/coverage-v8": "^4.1.10",
+    "eslint": "^10.8.1",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.9.0",
+    "nodemon": "^3.0.0",
+    "prettier": "^3.9.6",
+    "@typescript/native": "npm:typescript@^7.0.2",
+    "typescript": "npm:@typescript/typescript6@^6.0.2",
+    "typescript-eslint": "^8.67.0",
+    "vitest": "^4.1.10"
+  }
+}

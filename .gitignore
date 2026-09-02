@@ -1,0 +1,9 @@
+node_modules/
+.striart/
+.env
+coverage/
+*.log
+.claude/settings.local.json
+roadmap/*
+.claude/*
+
