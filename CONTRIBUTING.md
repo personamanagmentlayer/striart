@@ -2,7 +2,7 @@
 
 Merci de votre intérêt ! Ce document couvre l'essentiel pour qu'une
 contribution se passe bien — pour le fond (architecture, décisions clés,
-conventions détaillées), la référence est le [README](README.md).
+conventions détaillées), la référence est la [documentation](docs/fr/README.md).
 
 ## Démarrer
 
