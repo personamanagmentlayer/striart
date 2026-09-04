@@ -3,99 +3,99 @@
 </h1>
 
 <p align="center">
-  <strong>Orchestrateur Git multi-agents</strong> pour Claude Code, Aider, Cursor et tout autre agent de coding IA.<br>
-  Isolation physique · Routing préventif · Fusion sémantique · Test Gate bloquant
+  <strong>Multi-agent Git orchestrator</strong> for Claude Code, Aider, Cursor, and any other AI coding agent.<br>
+  Physical isolation · Preventive routing · Semantic merging · Blocking Test Gate
 </p>
 
 <p align="center">
   <img alt="version 0.10.0" src="https://img.shields.io/badge/version-0.10.0-6e56cf">
   <img alt="Node.js ≥ 22.18" src="https://img.shields.io/badge/node-%E2%89%A5%2022.18-339933?logo=node.js&logoColor=white">
   <img alt="422 tests" src="https://img.shields.io/badge/tests-422%20%E2%9C%94-2da44e">
-  <img alt="zéro build" src="https://img.shields.io/badge/build-aucun-8250df">
-  <img alt="licence MIT" src="https://img.shields.io/badge/licence-MIT-blue">
+  <img alt="no build" src="https://img.shields.io/badge/build-none-8250df">
+  <img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue">
 </p>
 
 <p align="center">
-  <a href="#pourquoi-striart--et-pas-simplement-des-worktrees-">Pourquoi Striart</a> ·
+  <a href="#why-striart--and-not-just-worktrees">Why Striart</a> ·
   <a href="#installation">Installation</a> ·
-  <a href="#démarrage-express">Démarrage</a> ·
+  <a href="#quick-start">Quick start</a> ·
   <a href="#documentation">Documentation</a> ·
-  <a href="#règles-dor">Règles d'or</a>
+  <a href="#golden-rules">Golden rules</a>
 </p>
 
-<p align="center"><em>🇬🇧 <a href="README.en.md">English version</a> — the French README is the reference.</em></p>
+<p align="center"><em>🇫🇷 <a href="README.fr.md">Version française</a> — this is the default (English) README; the French version remains the content reference.</em></p>
 
-Quand plusieurs agents IA travaillent en parallèle sur le même repo, ils se marchent dessus :
-conflits Git, commits gloutons, merges sémantiquement cassés. Striart résout ça avec trois piliers :
+When several AI agents work on the same repo in parallel, they trample each other:
+Git conflicts, greedy commits, semantically broken merges. Striart solves this with three pillars:
 
-1. **Isolation physique** — chaque agent travaille dans un vrai clone Git indépendant, sans remote (`.striart/agents/<nom>/`).
-2. **Router préventif** — avant de lancer un agent, un LLM prédit les fichiers touchés et met en file d'attente les tâches en collision.
-3. **Fusion sémantique + Test Gate** — les commits des agents sont mergés automatiquement ; en cas de conflit, un LLM fusionne le code ; rien n'est commité tant que `npm test` (ou votre commande) ne passe pas.
+1. **Physical isolation** — each agent works in a real, independent Git clone with no remote (`.striart/agents/<name>/`).
+2. **Preventive Router** — before launching an agent, an LLM predicts which files will be touched and queues colliding tasks.
+3. **Semantic merge + Test Gate** — agent commits are merged automatically; on conflict, an LLM merges the code; nothing is committed until `npm test` (or your command) passes.
 
-Striart n'est pas un cerveau central opaque : c'est un **pacemaker Git**. L'humain voit tout, peut interrompre, corriger, valider.
+Striart is not an opaque central brain: it's a **Git pacemaker**. The human sees everything and can interrupt, correct, or approve.
 
 ---
 
-## Pourquoi Striart — et pas simplement des worktrees ?
+## Why Striart — and not just worktrees?
 
-Isoler les fichiers, c'est 10 % du problème. Un worktree (ou un clone fait à
-la main) évite que deux agents écrivent au même endroit *en même temps* — tout
-le reste reste à ta charge, à chaque tâche : éviter les collisions *avant*
-qu'elles n'arrivent, ramener N branches dans la branche cible, arbitrer les
-conflits, garantir que rien de cassé n'entre. Striart automatise précisément ce reste.
+Isolating files is 10% of the problem. A worktree (or a hand-made clone)
+keeps two agents from writing to the same place *at the same time* — all the
+rest stays on you, for every task: avoiding collisions *before* they happen,
+bringing N branches back into the target branch, arbitrating conflicts,
+guaranteeing nothing broken gets in. Striart automates precisely that rest.
 
-| Besoin | Worktrees à la main | Sous-agents Claude Code (worktrees intégrés) | Striart |
+| Need | Hand-managed worktrees | Claude Code subagents (built-in worktrees) | Striart |
 |---|---|---|---|
-| Isolation des fichiers | ✅ | ✅ (zéro friction) | ✅ clones complets |
-| Solidité face à un agent qui déraille | ⚠️ `.git/` partagé : un `reset --hard` ou un `gc` touche l'état commun | ⚠️ idem | ✅ refs/index propres, pas de remote, secrets exclus — rayon d'explosion borné au clone |
-| Prévention des collisions | ❌ à ta charge | ❌ dépend du découpage du modèle | ✅ Router LLM + file d'attente + dépendances `--after` |
-| Retour du travail dans la branche cible | ❌ merges manuels | ❌ à la charge de l'agent | ✅ merge auto, rebase de tous les agents après chaque merge, fusion sémantique 3-way |
-| Garde-fou de qualité | ❌ | ❌ | ✅ **Test Gate bloquant** — rien n'entre sans suite verte |
-| Multi-fournisseurs | ❌ | ❌ Claude uniquement | ✅ Claude + Aider + Codex + Ollama… côte à côte |
-| Durée de vie | la session | la session | ✅ des heures/jours, plusieurs sessions, file persistante |
-| Observabilité & contrôle | ❌ | limité à la session | ✅ dashboard temps réel, logs persistants, semi-autonome (tu arbitres les permissions), rollback |
+| File isolation | ✅ | ✅ (zero friction) | ✅ full clones |
+| Resilience to an agent going off the rails | ⚠️ shared `.git/`: a `reset --hard` or `gc` touches shared state | ⚠️ same | ✅ own refs/index, no remote, secrets excluded — blast radius bounded to the clone |
+| Collision prevention | ❌ on you | ❌ depends on the model's task split | ✅ LLM Router + queue + `--after` dependencies |
+| Getting work back into the target branch | ❌ manual merges | ❌ up to the agent | ✅ auto-merge, rebase of every agent after each merge, 3-way semantic merge |
+| Quality gate | ❌ | ❌ | ✅ **blocking Test Gate** — nothing lands without a green suite |
+| Multi-vendor | ❌ | ❌ Claude only | ✅ Claude + Aider + Codex + Ollama… side by side |
+| Lifespan | the session | the session | ✅ hours/days, multiple sessions, persistent queue |
+| Observability & control | ❌ | session-bound | ✅ real-time dashboard, persistent logs, semi-autonomous (you arbitrate permissions), rollback |
 
-Le détail du raisonnement (clones vs worktrees, emboîtement avec les
-sous-agents de Claude Code, symétrie MCP/ACP) est dans
-**[docs/fr/architecture.md](docs/fr/architecture.md)**.
+The full reasoning (clones vs worktrees, nesting with Claude Code's
+subagents, MCP/ACP symmetry) is in
+**[docs/en/architecture.md](docs/en/architecture.md)**.
 
 ---
 
 ## Installation
 
-Depuis les sources :
+From source:
 
 ```bash
 git clone https://github.com/personamanagmentlayer/striart.git
-cd striart && npm install && npm link   # expose la commande `striart`
-cd /chemin/vers/mon-projet
+cd striart && npm install && npm link   # exposes the `striart` command
+cd /path/to/my-project
 striart init
 ```
 
-Prérequis : Node.js 22.18+ (type stripping natif — rien à compiler), Git,
-**un repo Git avec au moins un commit**, et un LLM pour le Router/Merger —
-Ollama en local (défaut) **ou** n'importe quelle API cloud. Tout le détail :
-**[docs/fr/demarrage.md](docs/fr/demarrage.md)**.
+Prerequisites: Node.js 22.18+ (native type stripping — nothing to compile),
+Git, **a Git repository with at least one commit**, and an LLM for the
+Router/Merger — local Ollama (default) **or** any cloud API. Full details:
+**[docs/en/getting-started.md](docs/en/getting-started.md)**.
 
 ---
 
-## Démarrage express
+## Quick start
 
 ```bash
-cd mon-projet
-striart init                          # crée .striart/, la config, vérifie le LLM
+cd my-project
+striart init                          # creates .striart/, the config, checks the LLM
 
-# Onglet 1 — l'orchestrateur
-striart watch                         # merge + Test Gate + rebase automatiques
+# Tab 1 — the orchestrator
+striart watch                         # automatic merge + Test Gate + rebase
 
-# Lancer des agents (le Router vérifie les collisions avant chaque lancement)
-striart run "Refactor le module d'authentification" --command "claude" --open
-striart run "Ajoute la facturation Stripe" --agent billing --command "aider --model gpt-4o" --open
+# Launch agents (the Router checks for collisions before each launch)
+striart run "Refactor the authentication module" --command "claude" --open
+striart run "Add Stripe billing" --agent billing --command "aider --model gpt-4o" --open
 
-# ...et pour une tâche cadrée qu'on ne veut pas surveiller, Striart pilote seul :
-striart run "Ajoute des tests unitaires à src/parser.js" --autonomous --profile claude
+# ...and for a well-scoped task you don't want to babysit, Striart drives alone:
+striart run "Add unit tests to src/parser.js" --autonomous --profile claude
 
-# Suivi
+# Monitoring
 striart status / queue / dashboard / resolve
 ```
 
@@ -103,48 +103,48 @@ striart status / queue / dashboard / resolve
 
 ## Documentation
 
-La documentation complète vit dans **[docs/fr/](docs/fr/README.md)**
-(🇬🇧 [docs/en/](docs/en/README.md)) :
+The complete documentation lives in **[docs/en/](docs/en/README.md)**
+(🇫🇷 [docs/fr/](docs/fr/README.md) — the French version is the reference):
 
-| Page | Contenu |
+| Page | Content |
 |---|---|
-| [Démarrage](docs/fr/demarrage.md) | Prérequis, installation, `striart init`, guide « 3 agents en parallèle ». |
-| [Architecture](docs/fr/architecture.md) | Clones vs worktrees, chaîne sérialisée, flow d'un commit, les 6 statuts de sync, verrous. |
-| [Commandes](docs/fr/commandes.md) | Les 21 commandes en détail : options, garde-fous, codes de refus. |
-| [Configuration](docs/fr/configuration.md) | Référence complète de `striart.config.mjs`, providers LLM, prompts. |
-| [Branches et pipeline](docs/fr/branches.md) | `targetBranch` sur n'importe quelle branche (`dev`, `master`…), pipeline staging → main. |
-| [Modes d'exécution](docs/fr/modes-execution.md) | Supervisé, autonome, ACP, semi-autonome (arbitrage des permissions). |
-| [Plans](docs/fr/plans.md) | Tâches-as-code : le graphe de tâches YAML versionné. |
-| [Serveur MCP](docs/fr/mcp.md) | Piloter Striart depuis Claude Code, Cursor ou tout hôte MCP. |
-| [Projets volumineux](docs/fr/projets-volumineux.md) | Maîtriser le coût disque des clones. |
-| [Dépannage](docs/fr/depannage.md) | `striart doctor`, codes d'erreur, tickets, `rollback`, `reconcile`. |
+| [Getting started](docs/en/getting-started.md) | Prerequisites, installation, `striart init`, the "3 agents in parallel" guide. |
+| [Architecture](docs/en/architecture.md) | Clones vs worktrees, serialized chain, commit flow, the 6 sync statuses, locks. |
+| [Commands](docs/en/commands.md) | The 21 commands in detail: options, safeguards, refusal codes. |
+| [Configuration](docs/en/configuration.md) | Full `striart.config.mjs` reference, LLM providers, prompts. |
+| [Branches and pipeline](docs/en/branches.md) | `targetBranch` on any branch (`dev`, `master`…), staging → main pipeline. |
+| [Execution modes](docs/en/execution-modes.md) | Supervised, autonomous, ACP, semi-autonomous (permission arbitration). |
+| [Plans](docs/en/plans.md) | Tasks-as-code: the versioned YAML task graph. |
+| [MCP server](docs/en/mcp.md) | Driving Striart from Claude Code, Cursor, or any MCP host. |
+| [Large projects](docs/en/large-projects.md) | Keeping the disk cost of clones in check. |
+| [Troubleshooting](docs/en/troubleshooting.md) | `striart doctor`, error codes, tickets, `rollback`, `reconcile`. |
 
 ---
 
-## Règles d'or
+## Golden rules
 
-1. **Jamais de push depuis un agent.** Les clones sont des îlots sans remote ; seul l'orchestrateur pousse.
-2. **Jamais de commit sans Test Gate vert.** Même si le LLM de fusion est « sûr de lui ».
-3. **Jamais de suppression d'un clone pendant qu'un agent travaille.** `striart clean` refuse à deux niveaux : `IN_USE` (heuristique, `--force` possible en connaissance de cause) et `SESSION_LIVE` (fait vérifié, que **`--force` ne peut pas écraser**).
-4. **Fallback humain obligatoire.** 3 fusions sémantiques échouées d'affilée → mode manuel jusqu'à `striart resolve --unlock`, avec un ticket complet par échec dans `.striart/conflicts/`.
+1. **Never push from an agent.** Clones are islands with no remote; only the orchestrator pushes.
+2. **Never commit without a green Test Gate.** Even if the merging LLM is "sure of itself".
+3. **Never delete a clone while an agent is working.** `striart clean` refuses at two levels: `IN_USE` (heuristic, `--force` possible knowingly) and `SESSION_LIVE` (verified fact, which **`--force` cannot override**).
+4. **Mandatory human fallback.** 3 failed semantic merges in a row → manual mode until `striart resolve --unlock`, with a complete ticket per failure in `.striart/conflicts/`.
 
 ---
 
-## Développement
+## Development
 
-**422 tests** (244 unitaires + 178 d'intégration sur de vrais repos Git),
-typecheck `tsc` sur tout le code (TS natif + JS annoté JSDoc), zéro étape de
-build — `bin` pointe sur la source.
+**422 tests** (244 unit + 178 integration on real Git repos), `tsc` typecheck
+over all the code (native TS + JSDoc-annotated JS), zero build step — `bin`
+points at the source.
 
 ```bash
 npm install
-npm run test:unit        # 244 tests, ~20 s — la boucle de dev
-npm run test:integration # 178 tests, ~7 min — vrais repos Git temporaires
-npm test                 # les deux
+npm run test:unit        # 244 tests, ~20 s — the dev loop
+npm run test:integration # 178 tests, ~7 min — real temporary Git repos
+npm test                 # both
 npm run lint             # ESLint (correctness) + Prettier --check
-npm run test:ci          # typecheck + tout + coverage
+npm run test:ci          # typecheck + everything + coverage
 ```
 
-Voir [CONTRIBUTING.md](CONTRIBUTING.md) et [SECURITY.md](SECURITY.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
 
-Licence MIT.
+MIT license.

@@ -1,8 +1,9 @@
 # Striart Documentation
 
 > Complete documentation for Striart, the multi-agent Git orchestrator.
-> The root [README](../../README.en.md) is the showcase; all the detail lives here.
-> 🇫🇷 [Documentation française](../fr/README.md) — the French version is the reference.
+> The root [README.md](../../README.md) is the showcase and is shown by default;
+> all the detail lives here.
+> 🇫🇷 [Documentation française](../fr/README.md) — the [French README](../../README.fr.md) is the content reference.
 
 ## Contents
 
