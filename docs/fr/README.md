@@ -1,7 +1,8 @@
 # Documentation Striart
 
 > Documentation complète de Striart, l'orchestrateur Git multi-agents.
-> Le [README](../../README.md) à la racine est la vitrine ; tout le détail vit ici.
+> Le [README français](../../README.fr.md) à la racine est la vitrine (référence) ;
+> [README.md](../../README.md) y est désormais la version anglaise par défaut. Tout le détail vit ici.
 > 🇬🇧 [English documentation](../en/README.md).
 
 ## Sommaire
