@@ -10,7 +10,7 @@
 <p align="center">
   <img alt="version 0.10.0" src="https://img.shields.io/badge/version-0.10.0-6e56cf">
   <img alt="Node.js ≥ 22.18" src="https://img.shields.io/badge/node-%E2%89%A5%2022.18-339933?logo=node.js&logoColor=white">
-  <img alt="422 tests" src="https://img.shields.io/badge/tests-422%20%E2%9C%94-2da44e">
+  <img alt="526 tests" src="https://img.shields.io/badge/tests-526%20%E2%9C%94-2da44e">
   <img alt="zéro build" src="https://img.shields.io/badge/build-aucun-8250df">
   <img alt="licence MIT" src="https://img.shields.io/badge/licence-MIT-blue">
 </p>
@@ -110,7 +110,7 @@ La documentation complète vit dans **[docs/fr/](docs/fr/README.md)**
 |---|---|
 | [Démarrage](docs/fr/demarrage.md) | Prérequis, installation, `striart init`, guide « 3 agents en parallèle ». |
 | [Architecture](docs/fr/architecture.md) | Clones vs worktrees, chaîne sérialisée, flow d'un commit, les 6 statuts de sync, verrous. |
-| [Commandes](docs/fr/commandes.md) | Les 22 commandes en détail : options, garde-fous, codes de refus. |
+| [Commandes](docs/fr/commandes.md) | Les 23 commandes en détail : options, garde-fous, codes de refus. |
 | [Configuration](docs/fr/configuration.md) | Référence complète de `striart.config.mjs`, providers LLM, prompts. |
 | [Branches et pipeline](docs/fr/branches.md) | `targetBranch` sur n'importe quelle branche (`dev`, `master`…), pipeline staging → main. |
 | [Modes d'exécution](docs/fr/modes-execution.md) | Supervisé, autonome, ACP, semi-autonome (arbitrage des permissions). |
@@ -132,14 +132,14 @@ La documentation complète vit dans **[docs/fr/](docs/fr/README.md)**
 
 ## Développement
 
-**422 tests** (244 unitaires + 178 d'intégration sur de vrais repos Git),
+**526 tests** (294 unitaires + 232 d'intégration sur de vrais repos Git),
 typecheck `tsc` sur tout le code (TS natif + JS annoté JSDoc), zéro étape de
 build — `bin` pointe sur la source.
 
 ```bash
 npm install
-npm run test:unit        # 246 tests, ~20 s — la boucle de dev
-npm run test:integration # 216 tests, ~7 min — vrais repos Git temporaires
+npm run test:unit        # 294 tests, ~20 s — la boucle de dev
+npm run test:integration # 232 tests, ~7 min — vrais repos Git temporaires
 npm test                 # les deux
 npm run lint             # ESLint (correctness) + Prettier --check
 npm run test:ci          # typecheck + tout + coverage

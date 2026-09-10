@@ -10,7 +10,7 @@
 <p align="center">
   <img alt="version 0.10.0" src="https://img.shields.io/badge/version-0.10.0-6e56cf">
   <img alt="Node.js ≥ 22.18" src="https://img.shields.io/badge/node-%E2%89%A5%2022.18-339933?logo=node.js&logoColor=white">
-  <img alt="422 tests" src="https://img.shields.io/badge/tests-422%20%E2%9C%94-2da44e">
+  <img alt="526 tests" src="https://img.shields.io/badge/tests-526%20%E2%9C%94-2da44e">
   <img alt="no build" src="https://img.shields.io/badge/build-none-8250df">
   <img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue">
 </p>
@@ -110,7 +110,7 @@ The complete documentation lives in **[docs/en/](docs/en/README.md)**
 |---|---|
 | [Getting started](docs/en/getting-started.md) | Prerequisites, installation, `striart init`, the "3 agents in parallel" guide. |
 | [Architecture](docs/en/architecture.md) | Clones vs worktrees, serialized chain, commit flow, the 6 sync statuses, locks. |
-| [Commands](docs/en/commands.md) | The 22 commands in detail: options, safeguards, refusal codes. |
+| [Commands](docs/en/commands.md) | The 23 commands in detail: options, safeguards, refusal codes. |
 | [Configuration](docs/en/configuration.md) | Full `striart.config.mjs` reference, LLM providers, prompts. |
 | [Branches and pipeline](docs/en/branches.md) | `targetBranch` on any branch (`dev`, `master`…), staging → main pipeline. |
 | [Execution modes](docs/en/execution-modes.md) | Supervised, autonomous, ACP, semi-autonomous (permission arbitration). |
@@ -132,14 +132,14 @@ The complete documentation lives in **[docs/en/](docs/en/README.md)**
 
 ## Development
 
-**422 tests** (244 unit + 178 integration on real Git repos), `tsc` typecheck
+**526 tests** (294 unit + 232 integration on real Git repos), `tsc` typecheck
 over all the code (native TS + JSDoc-annotated JS), zero build step — `bin`
 points at the source.
 
 ```bash
 npm install
-npm run test:unit        # 246 tests, ~20 s — the dev loop
-npm run test:integration # 216 tests, ~7 min — real temporary Git repos
+npm run test:unit        # 294 tests, ~20 s — the dev loop
+npm run test:integration # 232 tests, ~7 min — real temporary Git repos
 npm test                 # both
 npm run lint             # ESLint (correctness) + Prettier --check
 npm run test:ci          # typecheck + everything + coverage

@@ -37,7 +37,7 @@ describe('runStriartCommand (intégration)', () => {
   });
 
   it(
-    "refuse explicitement mcp — resterait bloqué à lire son stdin (une pipe " +
+    'refuse explicitement mcp — resterait bloqué à lire son stdin (une pipe ' +
       "execa vide, jamais le terminal) jusqu'au timeout, pour rien",
     async () => {
       const result = await runStriartCommand(repo.root, ['mcp']);

@@ -11,7 +11,7 @@
 |---|---|
 | [Démarrage](demarrage.md) | Prérequis (repo Git, premier commit, LLM), installation, `striart init`, premier lancement, guide « 3 agents en parallèle ». |
 | [Architecture](architecture.md) | Pourquoi des clones et pas des worktrees, la chaîne sérialisée, le flow d'un commit agent, les 6 statuts de synchronisation, le verrou inter-processus, la sûreté du stash automatique. |
-| [Commandes](commandes.md) | Les 21 commandes du CLI, en détail : options, garde-fous, codes de refus. |
+| [Commandes](commandes.md) | Les 23 commandes du CLI, en détail : options, garde-fous, codes de refus. |
 | [Configuration](configuration.md) | La référence complète de `striart.config.mjs` : toutes les options, leurs défauts, les providers LLM, les prompts surchargeables. |
 | [Branches et pipeline](branches.md) | `targetBranch` sur n'importe quelle branche (`main`, `master`, `dev`…), la contrainte de branche courante, le pipeline staging → main (`striart promote`), `autoPush` et le remote. |
 | [Modes d'exécution](modes-execution.md) | Supervisé, autonome, transport ACP, mode semi-autonome (arbitrage humain des permissions), garanties du mode autonome, cohabitation des modes. |

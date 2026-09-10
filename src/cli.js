@@ -1281,7 +1281,10 @@ program
             console.log(
               `⚪ Dashboard daemon mort (PID file orphelin ${s.pid}) — "striart dashboard --daemon" pour relancer.`,
             );
-          else console.log('⚪ Aucun dashboard daemon. "striart dashboard --daemon" pour en lancer un.');
+          else
+            console.log(
+              '⚪ Aucun dashboard daemon. "striart dashboard --daemon" pour en lancer un.',
+            );
           return;
         }
         const chosenPort = port ? Number.parseInt(port, 10) : null;

@@ -20,8 +20,8 @@ le type stripping natif exécute les `.ts` tels quels), le typage (`.ts` et
 ## Boucle de développement
 
 ```bash
-npm run test:unit        # 246 tests, ~20 s — la boucle courte
-npm run test:integration # 216 tests, vrais repos Git temporaires, ~7 min
+npm run test:unit        # 294 tests, ~20 s — la boucle courte
+npm run test:integration # 232 tests, vrais repos Git temporaires, ~7 min
 npm test                 # les deux
 npm run typecheck        # tsc --checkJs — le filet de typage
 npm run lint             # ESLint (correctness) + Prettier --check

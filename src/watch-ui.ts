@@ -126,7 +126,10 @@ const ANSI_COLOR_TABLE: Record<number, string> = {
 };
 
 function rgbToHex(r: number, g: number, b: number): string {
-  const toHex = (c: number) => Math.max(0, Math.min(255, Math.round(c))).toString(16).padStart(2, '0');
+  const toHex = (c: number) =>
+    Math.max(0, Math.min(255, Math.round(c)))
+      .toString(16)
+      .padStart(2, '0');
   return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
 }
 
@@ -400,8 +403,10 @@ const FOREGROUND_ONLY_REASONS: Record<string, string> = {
   watch:
     'lancerait un second watcher en plus de celui qui héberge déjà ce panneau — doublons de merge, contention sur main.lock',
   mcp: "sert un protocole sur stdin/stdout — ce champ ne peut pas lui fournir un client, il resterait bloqué à lire jusqu'au timeout",
-  attach: 'doit posséder le terminal réel (mode raw) — incompatible avec ce panneau qui le possède déjà',
-  'pty-host-run': "commande interne, jamais destinée à un humain (lancée par --open via ensurePtyHost)",
+  attach:
+    'doit posséder le terminal réel (mode raw) — incompatible avec ce panneau qui le possède déjà',
+  'pty-host-run':
+    'commande interne, jamais destinée à un humain (lancée par --open via ensurePtyHost)',
 };
 
 export interface StriartCommandResult {
@@ -474,7 +479,10 @@ export async function runStriartCommand(
  * Ce n'est donc pas une élévation de privilège, juste un raccourci vers ce
  * que l'utilisateur pourrait déjà faire dans une autre fenêtre.
  */
-export async function runShellCommand(root: string, command: string): Promise<StriartCommandResult> {
+export async function runShellCommand(
+  root: string,
+  command: string,
+): Promise<StriartCommandResult> {
   const shell = defaultShell();
   const isPowerShell = process.platform === 'win32';
   const result = await execa(
@@ -779,15 +787,18 @@ interface StriartCommandInfo {
  */
 const STRIART_COMMANDS: StriartCommandInfo[] = [
   { name: 'status', description: 'Liste les agents actifs, leurs branches et commits en attente' },
-  { name: 'start', description: "<agent> — Clone le repo pour un nouvel agent isolé" },
-  { name: 'run', description: 'Router préventif : prédit les fichiers puis lance ou met en attente' },
-  { name: 'merge', description: "<agent> — Merge le dernier commit derrière le Test Gate" },
+  { name: 'start', description: '<agent> — Clone le repo pour un nouvel agent isolé' },
+  {
+    name: 'run',
+    description: 'Router préventif : prédit les fichiers puis lance ou met en attente',
+  },
+  { name: 'merge', description: '<agent> — Merge le dernier commit derrière le Test Gate' },
   { name: 'stop', description: '<agent> — Marque un agent comme terminé' },
   { name: 'sync', description: 'Rebase un agent (ou tous) sur la branche cible' },
   { name: 'clean', description: 'Supprime des clones pour libérer le disque' },
   { name: 'prune', description: 'Rétention : clones arrêtés inactifs et tickets résolus' },
   { name: 'history', description: 'Historique des merges et rollbacks' },
-  { name: 'doctor', description: "Diagnostic complet (git, repo, config, LLM, verrous, tickets)" },
+  { name: 'doctor', description: 'Diagnostic complet (git, repo, config, LLM, verrous, tickets)' },
   { name: 'rollback', description: 'Défait le dernier merge Striart de la branche cible' },
   { name: 'promote', description: 'Promotion staging → main' },
   { name: 'lock', description: 'Réserve/libère le repo principal pour une intervention directe' },
@@ -798,7 +809,10 @@ const STRIART_COMMANDS: StriartCommandInfo[] = [
   { name: 'plan', description: '<file> — Applique un plan « tâches-as-code » (YAML)' },
   { name: 'init', description: '.striart/ déjà là si tu es dans ce panneau — rarement utile ici' },
   { name: 'dashboard', description: '⛔ seul, tourne en premier plan — "--daemon" pour ce champ' },
-  { name: 'watch', description: '⛔ non disponible ici (doublerait le watcher qui héberge ce panneau)' },
+  {
+    name: 'watch',
+    description: '⛔ non disponible ici (doublerait le watcher qui héberge ce panneau)',
+  },
   { name: 'mcp', description: '⛔ non disponible ici (sert un protocole sur stdin/stdout)' },
   { name: 'attach', description: '⛔ non disponible ici (doit posséder le terminal réel)' },
   {
@@ -808,7 +822,8 @@ const STRIART_COMMANDS: StriartCommandInfo[] = [
   },
   {
     name: 'relaunch',
-    description: '[agent] — retape la commande de lancement (utile si l’outil hébergé s’est arrêté)',
+    description:
+      '[agent] — retape la commande de lancement (utile si l’outil hébergé s’est arrêté)',
   },
   { name: 'exit', description: 'Quitte ce panneau (comme Ctrl+C)' },
 ];
@@ -1264,7 +1279,9 @@ function App({ root }: AppProps) {
       // "suit" jamais un nouvel arrivage (comme le scrollback d'un vrai
       // terminal), on ne revient au direct qu'en rechangeant de tab (effect
       // plus haut) ou en redescendant explicitement.
-      setScrollOffset((offset) => Math.max(0, offset + (key.pageUp ? SCROLL_PAGE_SIZE : -SCROLL_PAGE_SIZE)));
+      setScrollOffset((offset) =>
+        Math.max(0, offset + (key.pageUp ? SCROLL_PAGE_SIZE : -SCROLL_PAGE_SIZE)),
+      );
       return;
     }
     if (key.upArrow || key.downArrow) {
@@ -1286,7 +1303,8 @@ function App({ root }: AppProps) {
         if (history.length === 0) return;
         if (key.upArrow) {
           if (historyIndex === -1) setDraftInput(input); // sauvegardé avant d'entrer dans l'historique
-          const nextIndex = historyIndex === -1 ? history.length - 1 : Math.max(historyIndex - 1, 0);
+          const nextIndex =
+            historyIndex === -1 ? history.length - 1 : Math.max(historyIndex - 1, 0);
           setHistoryIndex(nextIndex);
           setInput(history[nextIndex]);
         } else if (historyIndex !== -1) {
@@ -1305,7 +1323,9 @@ function App({ root }: AppProps) {
       // liste (contrairement à un agent qui peut s'arrêter).
       const names = [
         TERMINAL_TAB,
-        ...agents.filter((a) => a.status === 'ACTIVE' && a.mode !== 'autonomous').map((a) => a.name),
+        ...agents
+          .filter((a) => a.status === 'ACTIVE' && a.mode !== 'autonomous')
+          .map((a) => a.name),
       ];
       const idx = selected ? names.indexOf(selected) : -1;
       const nextIdx = key.upArrow
@@ -1529,7 +1549,11 @@ function App({ root }: AppProps) {
             const isActive = i === activeSuggestionIndex;
             return h(
               Text,
-              { key: `${s.kind}:${s.value}`, color: isActive ? COLOR.violet : undefined, inverse: isActive },
+              {
+                key: `${s.kind}:${s.value}`,
+                color: isActive ? COLOR.violet : undefined,
+                inverse: isActive,
+              },
               `${s.kind === 'agent' ? '@' : '/'}${s.value}  ${s.description}`,
             );
           }),

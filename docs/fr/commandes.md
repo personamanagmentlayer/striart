@@ -12,6 +12,7 @@ deux CLI concurrents ne se marchent jamais dessus.
 | `striart init` | Initialise `.striart/`, la config, diagnostique le LLM. |
 | `striart start <agent> [--command <cmd>] [--open]` | Clone isolé + branche de tâche, sans Router. |
 | `striart start <agent> --reuse [--force]` | Réutilise le clone conservé d'un agent arrêté. |
+| `striart attach <agent>` | Attache un terminal interactif au pty possédé d'un agent (rejoint une session déjà ouverte par `--open`). |
 | `striart run "<prompt>" [--agent <a>] [--command] [--open] [--force]` | Router préventif : prédit les fichiers, lance ou met en attente. |
 | `striart run "<prompt>" --autonomous [--profile <p>] [--timeout <ms>] [--force]` | Mode autonome : Striart pilote l'outil de bout en bout. |
 | `striart run "<prompt>" --on-main [--profile <p>] [--timeout <ms>]` | Lance l'agent DIRECTEMENT sur le repo principal (pas de clone), sous session protégée. |
@@ -20,6 +21,7 @@ deux CLI concurrents ne se marchent jamais dessus.
 | `striart profiles [--json]` | Liste les profils d'agents configurés. |
 | `striart watch [--no-merge]` | Surveille les commits, merge + Test Gate + rebase en continu. |
 | `striart watch --daemon [--status\|--stop]` | Watcher en arrière-plan (PID file, logs, détection d'orphelin). |
+| `striart watch --ui` | Panneau Ink interactif par-dessus le watcher : tail du pty par agent, commandes `/`, shell `!`, messages `@agent`. |
 | `striart merge <agent>` | Merge manuel du dernier commit d'un agent. |
 | `striart sync [agent]` | Rebase un agent (ou tous) sur la branche cible. |
 | `striart status [--json]` | État des agents : statut, session, mode, branche, outil, taille. |
@@ -34,7 +36,7 @@ deux CLI concurrents ne se marchent jamais dessus.
 | `striart clean [agent] [--stopped\|--all [--force]]` | Libère le disque (garde-fous à deux niveaux). |
 | `striart reconcile` | Réconciliation idempotente de tout l'état (sessions mortes, file, verrous). |
 | `striart prune [--days <n>] [--dry-run]` | Rétention des clones arrêtés inactifs et tickets résolus. |
-| `striart dashboard [--port <p>]` | Dashboard web local temps réel (127.0.0.1, SSE) + pilotage. |
+| `striart dashboard [--port <p>] [--daemon\|--stop\|--status]` | Dashboard web local temps réel (127.0.0.1, SSE) + pilotage ; `--daemon` le lance en arrière-plan. |
 | `striart mcp` | Serveur MCP stdio (7 outils sur l'orchestrateur). |
 
 ---
@@ -64,7 +66,12 @@ quelque chose refuse de fonctionner — voir [Dépannage](depannage.md).
 Crée le clone isolé et la branche de tâche `striart/<agent>/task-<uuid>`,
 **sans passer par le Router** (pas de prédiction de fichiers, pas de mise en
 file). `--command` remplace l'outil affiché (`agentCommand` en config) ;
-`--open` ouvre un onglet terminal dans le clone et y lance l'outil.
+`--open` ouvre un onglet terminal qui lance `striart attach <agent>`,
+lui-même connecté à un process **hôte de pty** détaché (un par agent, démarré
+de façon idempotente) qui possède réellement le pty — l'outil hébergé
+continue de tourner indépendamment de l'onglet, donc le fermer (voire fermer
+`striart` lui-même) ne tue pas la session ; le bus `@agent` de `watch --ui`
+ci-dessous peut rejoindre la même session depuis ailleurs.
 
 ### `striart start <agent> --reuse [--force]`
 
@@ -81,6 +88,20 @@ conservés (`node_modules` — repartir chaud). Refus explicites :
 `--force` assume la perte (ou, pour ce dernier refus, clone/réutilise quand
 même, en connaissance de cause). `striart run --reuse` passe par le Router en
 plus.
+
+### `striart attach <agent>`
+
+Attache un terminal interactif au pty déjà possédé par l'hôte détaché d'un
+agent — exactement ce que `--open` lance en interne, invocable directement
+pour (re)rejoindre une session (onglet fermé, seconde fenêtre qui observe la
+même session). Doit être lancé **depuis le dossier du clone de l'agent
+lui-même** (`.striart/agents/<agent>/`, vérifié strictement — le repo
+principal est dérivé de ce chemin plutôt que passé en argument, ce qui
+casserait le quoting shell ; refusé avec `ATTACH_WRONG_CWD` sinon). Ne
+démarre **pas** l'hôte de pty lui-même : s'il ne tourne pas, `attach` échoue
+avec une erreur renvoyant vers `--open` (qui le démarre de façon idempotente).
+À distinguer du bus `@agent` de `watch --ui` ci-dessous : `attach` donne le
+*vrai* terminal en mode raw, le bus envoie un message à la fois.
 
 ### `striart run "<prompt>" [--agent <a>] [--command] [--open] [--reuse] [--force]`
 
@@ -151,6 +172,53 @@ Le même watcher, en process détaché natif : PID file et logs sous
 `--stop` pour l'inspecter et l'arrêter. Sans dépendance à pm2 ni systemd ; la
 reprise au boot reste à la main de l'utilisateur (planificateur de l'OS).
 
+### `striart watch --ui`
+
+Le même watcher, plus un panneau Ink interactif (**incompatible avec
+`--daemon`**) : un onglet par agent **supervisé** actif (les agents autonomes
+ne sont pas suivis — pas de pty à rejoindre), chacun affichant en direct le
+tail du pty possédé de l'agent via le protocole d'attache ci-dessus, plus un
+onglet virtuel permanent **« 🖥️ Terminal »** (sélectionné par défaut) qui
+capture la sortie de toute commande `/…`/`!…` lancée depuis le champ de
+saisie.
+
+Grammaire du champ :
+
+- **`/commande`** lance `striart <commande>` (même binaire, `argv`,
+  `shell: false`) et affiche sa sortie dans l'onglet Terminal. `/exit` quitte
+  le panneau (comme Ctrl+C, natif au panneau — pas une vraie commande
+  `striart`) ; `/clear` vide l'historique propre de l'onglet Terminal, ou
+  envoie la vraie commande d'effacement du shell (`cls`/`clear`) à l'agent
+  sélectionné ; `/relaunch [agent]` retape la commande de lancement de
+  l'agent (même résolution que `--open`) — utile quand le badge 🟡 ci-dessous
+  signale que l'outil hébergé s'est arrêté. `watch`, `mcp`, `attach`,
+  `pty-host-run` sont refusées ici (un second watcher, un protocole lié à
+  stdin, ou une commande exigeant le vrai terminal — rien qui tienne dans un
+  champ en tâche de fond) ; `dashboard` est refusée sauf avec
+  `--daemon`/`--stop`/`--status`.
+- **`!commande`** lance une vraie commande via le shell par défaut de la
+  machine (`defaultShell()`), pipes, redirections et tout binaire installé
+  compris ; la sortie part aussi dans l'onglet Terminal.
+- **`@agent message`** envoie `message` au pty de l'agent supervisé nommé
+  (démarre son hôte de pty si besoin).
+- **Le texte sans préfixe** part vers l'agent de l'onglet actuellement
+  **sélectionné** — `@agent` n'est nécessaire que pour changer de cible, pas
+  pour continuer à parler au même agent.
+
+Autocomplétion sur `/` et `@` (Tab ou Entrée complète la suggestion active ;
+une seconde Entrée, une fois la liste vide, soumet). `↑`/`↓` rappellent
+l'historique de saisie quand le champ n'est pas vide et qu'aucune suggestion
+n'est active ; à champ vide, elles changent d'onglet affiché à la place. Page
+Up/Page Down font défiler les 500 lignes de scrollback de l'onglet affiché.
+Un `•` marque un onglet dont le contenu a changé pendant qu'un autre était
+affiché. Un badge 🟡 (vs 🟢) signale — à titre purement informatif, **jamais
+une relance automatique** — que le pty de l'outil hébergé semble être retombé
+sur une invite de shell nue ; `/relaunch` est le correctif.
+
+Même frontière de confiance que `--open`/`attach` : un message envoyé via le
+bus `@agent`, ou le shell `!`, a exactement le même pouvoir que taper
+directement dans le terminal — voir [SECURITY.md](../../SECURITY.md).
+
 ### `striart merge <agent>`
 
 Merge manuel du dernier commit d'un agent — même pipeline que le watcher
@@ -190,14 +258,17 @@ Le scheduler : tâches `RUNNING` / `WAITING` et ce qui bloque chacune.
 Historique des merges et rollbacks Striart, **reconstruit depuis le graphe
 Git** (pas un journal séparé qui pourrait diverger).
 
-### `striart dashboard [--port <p>]`
+### `striart dashboard [--port <p>] [--daemon|--stop|--status]`
 
 Dashboard web local, lié à `127.0.0.1` uniquement, **temps réel** (SSE —
 poussé à chaque changement, sans polling) : état des agents et de leur mode,
 bandeau d'état du watcher, logs de session, arbitrage des permissions
 semi-autonomes, et pilotage (merge, stop, relance, rollback, préparation et
 application de résolution de ticket sous Test Gate, clôture manuelle —
-protégé anti-CSRF, en-tête `Host` vérifié sur toute requête).
+protégé anti-CSRF, en-tête `Host` vérifié sur toute requête). `--daemon` le
+lance en process détaché natif (même mécanisme que `striart watch --daemon` :
+PID file et logs sous `.striart/`, détection d'orphelin) ; `--status`/
+`--stop` l'inspectent ou l'arrêtent.
 
 ## Réparer et nettoyer
 

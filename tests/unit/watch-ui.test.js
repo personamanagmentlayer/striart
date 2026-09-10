@@ -101,7 +101,7 @@ describe('readTerminalLines / writeToTerminal (émulation de terminal réelle)',
   });
 
   it(
-    "un outil hébergé qui redessine sa ligne de statut par positionnement de curseur " +
+    'un outil hébergé qui redessine sa ligne de statut par positionnement de curseur ' +
       "écrase l'ancien contenu — ne l'empile JAMAIS dessus (bug réel corrigé le " +
       '2026-09-09 : plusieurs états successifs de la même ligne apparaissaient ' +
       'concaténés — cf. capture watch --ui, "Try ... / auto mode on / connecting..." ' +
@@ -232,9 +232,9 @@ describe('looksLikeIdleShellPrompt', () => {
   const line = (text) => [{ text }];
 
   it('reconnaît une invite PowerShell inactive', () => {
-    expect(looksLikeIdleShellPrompt([line('PS C:\\Projets\\batilogis\\.striart\\agents\\agent-b>')])).toBe(
-      true,
-    );
+    expect(
+      looksLikeIdleShellPrompt([line('PS C:\\Projets\\batilogis\\.striart\\agents\\agent-b>')]),
+    ).toBe(true);
   });
 
   it('reconnaît une invite cmd.exe inactive', () => {
@@ -247,15 +247,15 @@ describe('looksLikeIdleShellPrompt', () => {
   });
 
   it("ne se déclenche pas sur la sortie normale d'un outil hébergé", () => {
-    expect(looksLikeIdleShellPrompt([line('Bonjour ! Sur quoi souhaitez-vous que je travaille ?')])).toBe(
-      false,
-    );
+    expect(
+      looksLikeIdleShellPrompt([line('Bonjour ! Sur quoi souhaitez-vous que je travaille ?')]),
+    ).toBe(false);
   });
 
   it('ignore les lignes vides en fin d’écran pour trouver la dernière ligne réelle', () => {
-    expect(
-      looksLikeIdleShellPrompt([line('PS C:\\agent-b>'), line(''), line('   '), []]),
-    ).toBe(true);
+    expect(looksLikeIdleShellPrompt([line('PS C:\\agent-b>'), line(''), line('   '), []])).toBe(
+      true,
+    );
   });
 
   it('écran entièrement vide : pas une invite inactive (rien à en conclure)', () => {
@@ -294,7 +294,7 @@ describe('LogTailManager.appendCommandOutput', () => {
     expect(text).toContain('❯ !ls');
   });
 
-  it('sortie vide : affiche un texte explicite plutôt qu\'une ligne blanche', async () => {
+  it("sortie vide : affiche un texte explicite plutôt qu'une ligne blanche", async () => {
     const manager = new LogTailManager('/chemin/jamais-touché', () => {});
     manager.appendCommandOutput('❯ /profiles', '');
     await waitFor(() => manager.get(TERMINAL_TAB).lines.length > 0);
