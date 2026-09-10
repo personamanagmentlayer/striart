@@ -17,32 +17,14 @@ import { StriartError } from './errors.js';
 import { initStriart } from './init.js';
 import { loadConfig } from './config.js';
 import {
-  assertInitialized,
-  cleanClones,
-  createAgent,
-  findRepoRoot,
-  formatBytes,
-  listAgents,
-  reuseAgent,
-} from './clone.js';
-import {
-  applyPlan,
-  checkAgentsBehind,
-  getQueueDashboard,
-  mergeAgentCommit,
-  promoteStaging,
-  reconcile,
-  retryQueue,
-  rollbackLastMerge,
-  runAutonomousTask,
-  runTask,
-  shouldWatcherMerge,
-  stopAgent,
-  syncAgentWithMain,
-  syncAllAgents,
-} from './orchestrator.js';
-import { closeConflictTicket, listConflictTickets } from './conflicts.js';
+  closeConflictTicket,
+  listConflictTickets,
+  prepareResolutionScaffold,
+} from './conflicts.js';
 import { readState, resetManualMode } from './state.js';
+import { readMainSession, startMainSession, stopMainSession } from './main-session.js';
+import { assertNoLiveMainSession, withMainLock } from './lock.js';
+import { isProcessAlive } from './process-tree.js';
 import { DEFAULT_PROFILE, listProfiles } from './session.js';
 import { openAgentTerminal } from './terminal.js';
 import { watchAgents } from './watcher.js';
@@ -56,6 +38,46 @@ program
     'Orchestrateur Git multi-agents pour Claude Code, Aider, Cursor et tout agent de coding IA',
   )
   .version(version);
+
+/**
+ * Par défaut Commander sort en 1 pour TOUTE erreur — y compris une erreur
+ * d'usage (flag/commande inconnue, argument manquant), qui doit sortir en 2
+ * pour rester distinguable d'un échec métier par un script appelant. Le
+ * callback appelle `process.exit` lui-même (jamais de `throw`) : la promesse
+ * de `program.parseAsync()` en bas de fichier ne voit donc jamais cette
+ * erreur, `--help`/`--version` gardent leur 0 par défaut (`err.exitCode`).
+ */
+const USAGE_ERROR_CODES = new Set([
+  'commander.unknownOption',
+  'commander.unknownCommand',
+  'commander.missingArgument',
+  'commander.optionMissingArgument',
+  'commander.missingMandatoryOptionValue',
+  'commander.excessArguments',
+  'commander.conflictingOption',
+  'commander.invalidArgument',
+]);
+program.exitOverride((err) => {
+  process.exit(USAGE_ERROR_CODES.has(err.code) ? 2 : err.exitCode);
+});
+
+/**
+ * `clone.js` et `orchestrator.js` importent tous deux `simple-git`, ~270 ms
+ * à froid (mesuré) — en imports statiques ES, ce coût s'exécute pour TOUTE
+ * invocation (tous les imports d'un module s'évaluent avant que son propre
+ * code ne tourne), y compris `--version`/`--help`/une erreur d'usage qui ne
+ * touchent jamais git. Chargés ici paresseusement, mémoïsés, au même titre
+ * que doctor.js/mcp.js/dashboard.js plus bas — seules les actions qui en ont
+ * réellement besoin paient le coût, une seule fois.
+ */
+let cloneModule;
+async function loadClone() {
+  return (cloneModule ??= await import('./clone.js'));
+}
+let orchestratorModule;
+async function loadOrchestrator() {
+  return (orchestratorModule ??= await import('./orchestrator.js'));
+}
 
 function fail(error) {
   if (error instanceof StriartError) {
@@ -103,10 +125,12 @@ program
   )
   .option(
     '--force',
-    'Avec --reuse : passe outre une archive récemment active ou du travail non commité/non mergé (PERDU)',
+    'Avec --reuse : passe outre une archive récemment active ou du travail non commité/non mergé (PERDU). ' +
+      "Sans --reuse : clone quand même malgré des secrets détectés dans l'historique du repo (voir secretPatterns)",
   )
   .action(async (agent, { command, open, reuse, force }) => {
     try {
+      const { findRepoRoot, reuseAgent, createAgent } = await loadClone();
       console.log(`🚀 ${reuse ? 'Réutilisation du clone de' : "Démarrage de l'agent"} ${agent}...`);
       const root = await findRepoRoot();
       const config = await loadConfig(root);
@@ -124,6 +148,7 @@ program
             command: command ?? null,
             cloneFilter: config.cloneFilter,
             secretPatterns: config.secretPatterns,
+            force: Boolean(force),
           });
       await announceAgent(root, info, { open });
     } catch (error) {
@@ -139,44 +164,95 @@ function printAgentStarted(info, agentCommand) {
   console.log(`   cd "${info.path}" && ${agentCommand ?? 'claude'}`);
 }
 
-/** Commande de l'agent : par-agent (registre) > config globale > 'claude'. */
-async function resolveAgentCommand(root, info) {
-  return info.command ?? (await loadConfig(root)).agentCommand ?? 'claude';
-}
-
+/**
+ * `--open` ouvre toujours un onglet natif (UX inchangée), mais ce qui y
+ * tourne n'est plus l'outil directement : c'est `striart attach`, un client
+ * léger du pty possédé par un process hôte détaché (`pty-host.ts`). Sans ce
+ * détour, le pty mourrait avec le process CLI éphémère qui a demandé
+ * l'ouverture — avant même que l'onglet soit utilisable — et rien d'autre
+ * (le bus `@agent` de `striart watch --ui`) ne pourrait jamais rejoindre
+ * cette même session.
+ */
 async function announceAgent(root, info, { open = false } = {}) {
-  const agentCmd = await resolveAgentCommand(root, info);
+  const { ensurePtyHost, defaultShell, resolveAttendedCommand } = await import('./pty-host.ts');
+  const agentCmd = await resolveAttendedCommand(root, info);
   printAgentStarted(info, agentCmd);
   if (!open) return;
+
+  await ensurePtyHost(root, info.name, {
+    shell: defaultShell(),
+    cwd: info.path,
+    initialCommand: agentCmd,
+  });
+
   const result = await openAgentTerminal({
     cwd: info.path,
     title: `STRIART: ${info.name}`,
-    command: agentCmd,
+    command: `striart attach ${info.name}`,
   });
   if (result.launched) {
-    console.log(`🖥️ Onglet ouvert pour ${info.name} (${agentCmd}).`);
+    console.log(`🖥️ Onglet ouvert pour ${info.name} (${agentCmd}, pilotable via le pty possédé).`);
   } else {
     console.log(
-      `⚠️ Ouverture du terminal impossible (${result.error}). Lance la commande ci-dessus manuellement.`,
+      `⚠️ Ouverture du terminal impossible (${result.error}). ` +
+        `L'hôte de pty tourne : "striart attach ${info.name}" pour t'y attacher manuellement, ` +
+        `ou lance "${agentCmd}" directement dans ${info.path}.`,
     );
   }
+}
+
+/** @param {string|undefined} timeout @returns {number|null} */
+function parseTimeoutMs(timeout) {
+  if (timeout === undefined) return null;
+  const timeoutMs = Number.parseInt(timeout, 10);
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1000) {
+    throw new StriartError('--timeout doit être un entier de millisecondes >= 1000.', {
+      code: 'INVALID_TIMEOUT',
+      details: { timeout },
+    });
+  }
+  return timeoutMs;
+}
+
+/**
+ * Agent lancé DIRECTEMENT dans le worktree du repo principal (pas un clone) —
+ * supervisé et protégé par une session principale (main-session.js) : toute
+ * autre opération mutante (merge, sync, promote, resolve --apply, l'auto-merge
+ * de watch) est refusée tant que le PID vit. Pas de merge de fin de cycle :
+ * l'agent travaille déjà sur la cible, il n'y a rien à fusionner.
+ */
+async function runMainSessionCli({ root, prompt, profile, timeout, reason }) {
+  const { runMainSession } = await loadOrchestrator();
+  const timeoutMs = parseTimeoutMs(timeout);
+  console.log(
+    `🤖 [SUR PRINCIPAL] Profil ${profile ?? DEFAULT_PROFILE} — travaille directement dans le repo principal.`,
+  );
+  console.log(
+    '   Toute autre opération Striart (merge, sync, promote, resolve --apply) est bloquée le temps de la session.',
+  );
+
+  const session = await runMainSession({
+    root,
+    prompt,
+    profile: profile ?? null,
+    timeoutMs,
+    reason,
+  });
+  const seconds = Math.round(session.durationMs / 1000);
+  console.log(
+    `   Session terminée en ${seconds}s — statut ${session.status}, code de sortie ${session.exitCode ?? 'n/a'}.`,
+  );
+  console.log(`   Log : ${session.logPath}`);
+  if (session.status !== 'COMPLETED') process.exitCode = 1;
 }
 
 /**
  * Mode autonome : Striart lance l'agent, le supervise, merge et nettoie.
  * Affichage seul — toute la logique est dans orchestrator.runAutonomousTask.
  */
-async function runAutonomousCli({ root, agent, prompt, profile, timeout, after, reuse }) {
-  let timeoutMs = null;
-  if (timeout !== undefined) {
-    timeoutMs = Number.parseInt(timeout, 10);
-    if (!Number.isInteger(timeoutMs) || timeoutMs < 1000) {
-      throw new StriartError('--timeout doit être un entier de millisecondes >= 1000.', {
-        code: 'INVALID_TIMEOUT',
-        details: { timeout },
-      });
-    }
-  }
+async function runAutonomousCli({ root, agent, prompt, profile, timeout, after, reuse, force }) {
+  const { runAutonomousTask } = await loadOrchestrator();
+  const timeoutMs = parseTimeoutMs(timeout);
 
   console.log(
     `🤖 [AUTONOME] Profil ${profile ?? DEFAULT_PROFILE} — Striart pilote la session de bout en bout.`,
@@ -191,6 +267,7 @@ async function runAutonomousCli({ root, agent, prompt, profile, timeout, after, 
     timeoutMs,
     after: after ?? null,
     reuse: Boolean(reuse),
+    force: Boolean(force),
   });
 
   if (result.status === 'QUEUED') {
@@ -236,12 +313,17 @@ program
   .option('--open', "Ouvre un onglet terminal dans le clone et y lance l'outil")
   .option('--autonomous', 'Striart lance et supervise l’agent lui-même, puis nettoie le clone')
   .option(
+    '--on-main',
+    'Lance l’agent DIRECTEMENT dans le repo principal (pas un clone) : session protégée, ' +
+      'toute opération mutante Striart est bloquée le temps de la session — pas de merge de fin de cycle',
+  )
+  .option(
     '--profile <name>',
-    'Avec --autonomous : profil d’invocation (claude, codex, aider, ollama...)',
+    'Avec --autonomous/--on-main : profil d’invocation (claude, codex, aider, ollama...)',
   )
   .option(
     '--timeout <ms>',
-    'Avec --autonomous : délai max de la session (défaut : config autonomousTimeoutMs)',
+    'Avec --autonomous/--on-main : délai max de la session (défaut : config autonomousTimeoutMs)',
   )
   .option(
     '--after <tâche|agent>',
@@ -251,16 +333,41 @@ program
     '--reuse',
     'Réhabilite le clone conservé de --agent au lieu de cloner (refuse une archive sale ou active)',
   )
+  .option(
+    '--force',
+    'Clone/réhabilite quand même malgré des secrets détectés dans l’historique du repo (voir secretPatterns)',
+  )
   .action(
     async (
       promptArg,
-      { agent, prompt: promptOpt, command, open, autonomous, profile, timeout, after, reuse },
+      {
+        agent,
+        prompt: promptOpt,
+        command,
+        open,
+        autonomous,
+        onMain,
+        profile,
+        timeout,
+        after,
+        reuse,
+        force,
+      },
     ) => {
       try {
+        const { findRepoRoot } = await loadClone();
+        const { runTask } = await loadOrchestrator();
         const root = await findRepoRoot();
         const prompt = promptArg ?? promptOpt;
+        if (onMain) {
+          if (!prompt) {
+            throw new StriartError('--on-main requiert un prompt.', { code: 'EMPTY_PROMPT' });
+          }
+          await runMainSessionCli({ root, prompt, profile, timeout, reason: prompt });
+          return;
+        }
         if (autonomous) {
-          await runAutonomousCli({ root, agent, prompt, profile, timeout, after, reuse });
+          await runAutonomousCli({ root, agent, prompt, profile, timeout, after, reuse, force });
           return;
         }
         console.log(`🧭 [ROUTER] Analyse de la tâche${agent ? ` de l'agent ${agent}` : ''}...`);
@@ -271,6 +378,7 @@ program
           command: command ?? null,
           after: after ?? null,
           reuse: Boolean(reuse),
+          force: Boolean(force),
         });
         const chosenAgent = result.status === 'STARTED' ? result.info.name : result.task.agent;
         if (!agent) console.log(`   Agent : ${chosenAgent} (nom dérivé du prompt)`);
@@ -324,6 +432,7 @@ program
   .option('--json', 'Sortie JSON (CI/scripts)')
   .action(async ({ json }) => {
     try {
+      const { findRepoRoot } = await loadClone();
       const root = await findRepoRoot();
       const config = await loadConfig(root);
       const rows = listProfiles(config);
@@ -356,6 +465,8 @@ program
   .option('--dry-run', 'Valide et affiche le plan sans rien lancer (revue avant exécution)')
   .action(async (file, { dryRun }) => {
     try {
+      const { findRepoRoot } = await loadClone();
+      const { applyPlan } = await loadOrchestrator();
       const root = await findRepoRoot();
       const planText = await readFile(file, 'utf8');
       const result = await applyPlan({ root, planText, dryRun: Boolean(dryRun) });
@@ -395,6 +506,8 @@ program
   .option('--retry', 'Relance les tâches dont les collisions ont disparu')
   .action(async ({ retry }) => {
     try {
+      const { findRepoRoot, assertInitialized } = await loadClone();
+      const { retryQueue, getQueueDashboard } = await loadOrchestrator();
       const root = await findRepoRoot();
       await assertInitialized(root);
       if (retry) {
@@ -447,6 +560,8 @@ program
   )
   .action(async () => {
     try {
+      const { findRepoRoot } = await loadClone();
+      const { reconcile } = await loadOrchestrator();
       const root = await findRepoRoot();
       const { sessionPidsCleared, started, stillWaiting } = await reconcile({ root });
       if (sessionPidsCleared.length > 0) {
@@ -473,6 +588,7 @@ program
   .option('--json', 'Sortie JSON (CI/scripts)')
   .action(async ({ json }) => {
     try {
+      const { findRepoRoot, listAgents, formatBytes } = await loadClone();
       const root = await findRepoRoot();
       const agents = await listAgents(root);
       if (json) {
@@ -596,6 +712,8 @@ program
   .description("Merge le dernier commit d'un agent derrière le Test Gate")
   .action(async (agent) => {
     try {
+      const { findRepoRoot } = await loadClone();
+      const { mergeAgentCommit } = await loadOrchestrator();
       const root = await findRepoRoot();
       console.log(`🔀 Merge de l'agent ${agent}...`);
       printMergeResult(await mergeAgentCommit({ root, agent }));
@@ -612,6 +730,8 @@ program
   .option('--force', 'Abandonne les commits non mergés')
   .action(async (agent, { force }) => {
     try {
+      const { findRepoRoot } = await loadClone();
+      const { stopAgent } = await loadOrchestrator();
       const root = await findRepoRoot();
       const result = await stopAgent({ root, agent, force });
       console.log(`🛑 Agent ${agent} retiré du registre. Clone conservé : ${result.clonePath}`);
@@ -676,6 +796,8 @@ program
   .description('Rebase un agent (ou tous) sur la branche cible du repo principal')
   .action(async (agent) => {
     try {
+      const { findRepoRoot } = await loadClone();
+      const { syncAgentWithMain, syncAllAgents } = await loadOrchestrator();
       const root = await findRepoRoot();
       if (agent) {
         printSyncResult(await syncAgentWithMain({ root, agent }));
@@ -702,6 +824,7 @@ program
   .option('--force', 'Avec --all : abandonne aussi le travail non mergé des agents actifs')
   .action(async (agent, { all, force }) => {
     try {
+      const { findRepoRoot, cleanClones, formatBytes } = await loadClone();
       const root = await findRepoRoot();
       const { removed, skipped } = await cleanClones({ root, agent: agent ?? null, all, force });
       for (const r of removed) {
@@ -749,6 +872,7 @@ program
   .option('--dry-run', 'Affiche ce qui serait supprimé, sans rien supprimer')
   .action(async ({ days, dryRun }) => {
     try {
+      const { findRepoRoot, formatBytes } = await loadClone();
       const root = await findRepoRoot();
       const { pruneWorkspace } = await import('./prune.js');
       const result = await pruneWorkspace({
@@ -789,6 +913,7 @@ program
   .option('--json', 'Sortie JSON (CI/scripts)')
   .action(async ({ limit, json }) => {
     try {
+      const { findRepoRoot } = await loadClone();
       const root = await findRepoRoot();
       const { listMergeHistory } = await import('./history.js');
       const entries = await listMergeHistory({
@@ -853,6 +978,8 @@ program
   )
   .action(async () => {
     try {
+      const { findRepoRoot } = await loadClone();
+      const { rollbackLastMerge } = await loadOrchestrator();
       const root = await findRepoRoot();
       const result = await rollbackLastMerge({ root });
       if (result.mode === 'reset') {
@@ -885,6 +1012,7 @@ program
   )
   .action(async () => {
     try {
+      const { findRepoRoot } = await loadClone();
       const root = await findRepoRoot();
       const { startMcpServer } = await import('./mcp.js');
       // Pas de console.log ici : stdout est le canal du protocole.
@@ -903,6 +1031,8 @@ program
   )
   .action(async ({ rollback }) => {
     try {
+      const { findRepoRoot } = await loadClone();
+      const { promoteStaging } = await loadOrchestrator();
       const root = await findRepoRoot();
       console.log('🚦 Promotion : Test Gate global en cours...');
       const result = await promoteStaging({ root, rollback: Boolean(rollback) });
@@ -934,13 +1064,105 @@ program
   });
 
 program
+  .command('lock')
+  .description(
+    'Réserve/libère le repo principal pour une intervention directe (édition manuelle sans ' +
+      'commit, résolution git à la main…) — bloque toute opération Striart mutante tant que ' +
+      'la session déclarée vit',
+  )
+  .option(
+    '--start <raison>',
+    'Déclare une occupation du repo principal, surveillée via le PID du shell courant (sauf --pid)',
+  )
+  .option(
+    '--stop',
+    'Libère le repo principal — sortie de secours, même si le PID déclaré vit encore',
+  )
+  .option('--pid <n>', 'Avec --start : PID à surveiller au lieu du shell appelant')
+  .action(async ({ start, stop, pid }) => {
+    try {
+      const { findRepoRoot, assertInitialized } = await loadClone();
+      const root = await findRepoRoot();
+      await assertInitialized(root);
+      if (stop) {
+        await stopMainSession(root);
+        console.log('🔓 Repo principal libéré.');
+        return;
+      }
+      if (start) {
+        // process.ppid par défaut : le shell qui a lancé cette commande —
+        // tant qu'il vit (le terminal reste ouvert), le repo principal reste
+        // réservé ; il se libère de lui-même à sa fermeture (contrôle de
+        // vitalité, pas de ménage actif requis).
+        const targetPid = pid !== undefined ? Number.parseInt(pid, 10) : process.ppid;
+        if (!Number.isInteger(targetPid) || targetPid <= 0) {
+          throw new StriartError('--pid doit être un entier positif.', {
+            code: 'INVALID_PID',
+            details: { pid },
+          });
+        }
+        if (!isProcessAlive(targetPid)) {
+          console.log(
+            `⚠️ PID ${targetPid} ne correspond à aucun process vivant — la réservation sera ` +
+              'immédiatement inopérante (un PID mort ne bloque rien).',
+          );
+        }
+        // Vérification ET publication sous le même verrou que les opérations
+        // mutantes : empêche deux "lock --start" concurrents de passer tous
+        // les deux le contrôle, et empêche de réserver PENDANT qu'un
+        // merge/sync/promote tient déjà le verrou (withMainLock attend sa
+        // fin avant de nous laisser passer). Réutilise assertNoLiveMainSession
+        // (lock.js) — seule implémentation de ce contrôle, jamais recopiée.
+        await withMainLock(root, 'lock:start', async () => {
+          await assertNoLiveMainSession(root);
+          await startMainSession(root, { pid: targetPid, reason: start });
+        });
+        console.log(`🔒 Repo principal réservé pour "${start}" (pid ${targetPid}).`);
+        console.log('   Toute opération Striart mutante (merge, sync, promote, resolve --apply,');
+        console.log("   l'auto-merge de watch) est bloquée tant que ce process vit.");
+        console.log(
+          `   "striart lock stop" pour libérer manuellement, ou ferme simplement le process ${targetPid}.`,
+        );
+        return;
+      }
+      const session = await readMainSession(root);
+      if (!session) {
+        console.log('🔓 Repo principal libre.');
+        return;
+      }
+      const alive = isProcessAlive(session.pid);
+      console.log(
+        `${alive ? '🔒' : '⚠️'} Repo principal ${alive ? 'occupé' : 'marqué occupé (PID mort)'} ` +
+          `par "${session.reason}" (pid ${session.pid}) depuis ${session.startedAt}.`,
+      );
+      if (!alive) {
+        console.log(
+          '   Le PID est mort — se libère tout seul à la prochaine opération Striart, ou via "striart lock --stop".',
+        );
+      }
+    } catch (error) {
+      fail(error);
+    }
+  });
+
+program
   .command('resolve')
   .description('Liste les tickets de conflit en attente de résolution humaine')
   .option('--unlock', 'Réactive la fusion sémantique après passage en mode manuel')
   .option('--close <id>', 'Marque un ticket comme résolu (fichier RESOLVED, dossier conservé)')
+  .option(
+    '--prepare <id>',
+    "Amorce <fichier>.resolved pour chaque fichier en conflit du ticket (repli sur la version de l'agent, à éditer)",
+  )
+  .option(
+    '--apply <id>',
+    'Rejoue le merge du ticket avec les résolutions préparées (*.resolved/*.delete), sous le Test Gate — commit et ferme le ticket si vert',
+  )
   .option('--all', 'Inclut les tickets déjà résolus')
-  .action(async ({ unlock, close, all }) => {
+  .action(async ({ unlock, close, prepare, apply, all }) => {
     try {
+      const { findRepoRoot, assertInitialized } = await loadClone();
+      const { applyTicketResolution } = await loadOrchestrator();
       const root = await findRepoRoot();
       await assertInitialized(root);
       if (unlock) {
@@ -951,6 +1173,40 @@ program
       if (close) {
         const ticket = await closeConflictTicket(root, close);
         console.log(`✅ Ticket ${ticket.id} marqué résolu (${ticket.dir}).`);
+        return;
+      }
+      if (prepare) {
+        const scaffold = await prepareResolutionScaffold(root, prepare);
+        for (const entry of scaffold) {
+          console.log(
+            entry.created
+              ? `📝 ${entry.path} — amorcé depuis .${entry.source} (à éditer avant --apply)`
+              : `⏭️  ${entry.path} — déjà préparé, inchangé`,
+          );
+        }
+        console.log(`\nÉdite les fichiers ci-dessus puis "striart resolve --apply ${prepare}".`);
+        return;
+      }
+      if (apply) {
+        const result = await applyTicketResolution({ root, ticketId: apply });
+        if (result.status === 'MERGED') {
+          console.log(`✅ Ticket ${apply} résolu et mergé (${result.sha.slice(0, 8)}).`);
+          console.log(`   fichiers : ${result.resolvedFiles.join(', ')}`);
+          if (result.closedTickets.length > 1) {
+            console.log(
+              `   tickets fermés (doublons du même conflit) : ${result.closedTickets.join(', ')}`,
+            );
+          }
+          if (result.pushError) console.log(`   ⚠️ Push échoué : ${result.pushError}`);
+          console.log(`   pense à "striart sync ${result.agent}" pour rebaser son clone.`);
+        } else if (result.status === 'ALREADY_CLEAN') {
+          console.log(`✅ Ticket ${apply} : plus de conflit à ce jour, rien à appliquer.`);
+        } else if (result.status === 'GATE_FAILED') {
+          console.log(
+            `⛔ Test Gate rouge après application de la résolution du ticket ${apply}. ` +
+              'Le ticket reste ouvert — ajuste les fichiers .resolved et relance --apply.',
+          );
+        }
         return;
       }
       const state = await readState(root);
@@ -982,7 +1238,8 @@ program
       const open = tickets.filter((t) => !t.resolved).length;
       if (open > 0)
         console.log(
-          `\n${open} ticket(s) ouvert(s). "striart resolve --close <id>" après correction.`,
+          `\n${open} ticket(s) ouvert(s). "striart resolve --prepare <id>" puis "--apply <id>" ` +
+            'pour résoudre sous le Test Gate, ou "--close <id>" si déjà corrigé à la main.',
         );
     } catch (error) {
       fail(error);
@@ -991,12 +1248,50 @@ program
 
 program
   .command('dashboard')
-  .description("Dashboard web local : agents, file d'attente, conflits, logs du Test Gate")
+  .description(
+    "Dashboard web local : agents, file d'attente, conflits, logs du Test Gate (foreground, ou --daemon)",
+  )
   .option('--port <port>', 'Port d’écoute (défaut : config dashboardPort, 3456)')
-  .action(async ({ port }) => {
+  .option('--daemon', 'Lance le dashboard en arrière-plan (PID + logs dans .striart/)')
+  .option('--stop', 'Arrête le dashboard daemon')
+  .option('--status', 'État du dashboard daemon')
+  .action(async ({ port, daemon, stop, status }) => {
     try {
+      const { findRepoRoot, assertInitialized } = await loadClone();
       const root = await findRepoRoot();
       await assertInitialized(root);
+      if (stop || status || daemon) {
+        const { startDashboardDaemon, stopDashboardDaemon, dashboardDaemonStatus } =
+          await import('./daemon.js');
+        if (stop) {
+          const r = await stopDashboardDaemon({ root });
+          if (r.stopped) console.log(`🛑 Dashboard daemon arrêté (PID ${r.pid}).`);
+          else if (r.wasStale)
+            console.log(`🧹 PID file orphelin nettoyé (PID ${r.pid} déjà mort).`);
+          else console.log('Aucun dashboard daemon en cours.');
+          return;
+        }
+        if (status) {
+          const s = await dashboardDaemonStatus({ root });
+          if (s.running)
+            console.log(
+              `🟢 Dashboard daemon actif (PID ${s.pid}, démarré ${s.startedAt}). Logs : ${s.logPath}`,
+            );
+          else if (s.stale)
+            console.log(
+              `⚪ Dashboard daemon mort (PID file orphelin ${s.pid}) — "striart dashboard --daemon" pour relancer.`,
+            );
+          else console.log('⚪ Aucun dashboard daemon. "striart dashboard --daemon" pour en lancer un.');
+          return;
+        }
+        const chosenPort = port ? Number.parseInt(port, 10) : null;
+        const r = await startDashboardDaemon({ root, port: chosenPort });
+        console.log(`🚀 Dashboard daemon lancé (PID ${r.pid}). Logs : ${r.logPath}`);
+        console.log(
+          '   "striart dashboard --status" pour vérifier, "striart dashboard --stop" pour arrêter.',
+        );
+        return;
+      }
       const { startDashboard } = await import('./dashboard.js');
       const config = await loadConfig(root);
       const chosenPort = port ? Number.parseInt(port, 10) : config.dashboardPort;
@@ -1017,10 +1312,26 @@ program
   .option('--daemon', 'Lance le watcher en arrière-plan (PID + logs dans .striart/)')
   .option('--stop', 'Arrête le watcher daemon')
   .option('--status', 'État du watcher daemon')
-  .action(async ({ merge, daemon, stop, status }) => {
+  .option(
+    '--ui',
+    "UI interactive (Ink) en plus du watcher habituel : panneau d'agents, bus de messages " +
+      '"@agent message" vers les sessions supervisées. Incompatible avec --daemon.',
+  )
+  .action(async ({ merge, daemon, stop, status, ui }) => {
     try {
+      const { findRepoRoot, assertInitialized } = await loadClone();
+      const { reconcile, checkAgentsBehind, shouldWatcherMerge, mergeAgentCommit, syncAllAgents } =
+        await loadOrchestrator();
       const root = await findRepoRoot();
       await assertInitialized(root);
+      if (ui && daemon) {
+        throw new StriartError(
+          '--ui est incompatible avec --daemon (UI interactive = foreground).',
+          {
+            code: 'UI_DAEMON_CONFLICT',
+          },
+        );
+      }
       if (stop || status || daemon) {
         const { startWatchDaemon, stopWatchDaemon, watchDaemonStatus } =
           await import('./daemon.js');
@@ -1179,6 +1490,108 @@ program
           });
         },
       });
+
+      if (ui) {
+        // La même boucle (merges, fetch, réconciliation) tourne toujours en
+        // fond — l'UI Ink s'ajoute, elle ne remplace rien. `patch-console`
+        // (dépendance d'Ink) route les logger.info/console.log ci-dessus
+        // au-dessus du panneau au lieu de corrompre son rendu. Résout au
+        // Ctrl+C de l'UI, qui termine tout le process (cf. watch-ui.ts).
+        const { runWatchUi } = await import('./watch-ui.ts');
+        await runWatchUi(root);
+      }
+    } catch (error) {
+      fail(error);
+    }
+  });
+
+program
+  .command('pty-host-run <agent>')
+  .description(
+    "Interne — process hôte détaché d'un pty possédé (lancé par --open via ensurePtyHost, jamais directement)",
+  )
+  .option('--root <path>', 'Racine du repo principal (jamais dérivée de cwd : cwd est le clone)')
+  .option('--shell <path>', 'Shell/outil à héberger dans le pty')
+  .option('--shell-arg <arg>', 'Argument du shell (répétable)', (val, prev) => [...prev, val], [])
+  .option('--cwd <path>', 'Répertoire de travail du pty (le clone de l’agent)')
+  .option(
+    '--initial <cmd>',
+    "Commande écrite dans le pty juste après démarrage (l'outil de l'agent)",
+  )
+  .action(async (agent, { root, shell, shellArg, cwd, initial }) => {
+    try {
+      const { startOwnedSession, stopOwnedSession, waitForSessionExit, writeToOwnedSession } =
+        await import('./pty-attach.ts');
+      await startOwnedSession(root, agent, { shell, args: shellArg, cwd });
+      if (initial) writeToOwnedSession(agent, initial);
+
+      let stopping = false;
+      const shutdown = async () => {
+        if (stopping) return;
+        stopping = true;
+        await stopOwnedSession(agent).catch(() => {});
+        process.exit(0);
+      };
+      process.on('SIGTERM', shutdown);
+      process.on('SIGINT', shutdown);
+
+      await waitForSessionExit(agent); // le pty EST la seule raison de vivre de ce process
+      process.exit(0);
+    } catch (error) {
+      fail(error);
+    }
+  });
+
+program
+  .command('attach <agent>')
+  .description(
+    "Attache un terminal interactif au pty possédé d'un agent (lancé en interne par --open, invocable directement pour rejoindre une session déjà ouverte)",
+  )
+  .action(async (agent) => {
+    try {
+      // `root` n'est jamais passé en argument (chemin potentiellement à
+      // espaces, dans une commande interpolée dans une ligne de shell par
+      // terminal.js — voir isShellSafe) : dérivé de la structure connue
+      // agentsDir = root/.striart/agents/<agent>, avec vérification stricte.
+      const cwd = path.resolve(process.cwd());
+      const root = path.resolve(cwd, '..', '..', '..');
+      if (path.join(root, '.striart', 'agents', agent) !== cwd) {
+        throw new StriartError(
+          `"striart attach" doit être lancé depuis le clone de l'agent (généré par --open). Répertoire courant inattendu : ${cwd}`,
+          { code: 'ATTACH_WRONG_CWD', details: { cwd } },
+        );
+      }
+      const { connectAttachClient } = await import('./pty-attach.ts');
+
+      const wasRaw = process.stdin.isTTY && process.stdin.isRaw;
+      const restoreTerminal = () => {
+        if (process.stdin.isTTY) process.stdin.setRawMode(Boolean(wasRaw));
+      };
+
+      const conn = connectAttachClient(root, agent, {
+        cols: process.stdout.columns,
+        rows: process.stdout.rows,
+        onData: (text) => process.stdout.write(text),
+        onExit: () => {
+          console.log('\n🔌 Session terminée côté agent.');
+          restoreTerminal();
+          process.exit(0);
+        },
+        onError: (error) => {
+          restoreTerminal();
+          console.error(
+            `❌ Impossible de rejoindre l'agent "${agent}" : ${error.message}. ` +
+              "L'hôte de pty tourne-t-il encore ? (relancé automatiquement par --open)",
+          );
+          process.exit(1);
+        },
+      });
+
+      if (process.stdin.isTTY) process.stdin.setRawMode(true);
+      process.stdin.resume();
+      process.stdin.on('data', (chunk) => conn.sendRaw(chunk.toString('utf8')));
+      process.stdout.on('resize', () => conn.resize(process.stdout.columns, process.stdout.rows));
+      process.on('exit', restoreTerminal);
     } catch (error) {
       fail(error);
     }

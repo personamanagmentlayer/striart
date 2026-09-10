@@ -3,7 +3,7 @@
 > [Documentation](README.md) · Commands
 
 Overview first, then details by functional group. Every mutating operation
-(`run`, `merge`, `sync`, `stop`, `promote`, queue retry) goes through the
+(`run`, `merge`, `sync`, `stop`, `promote`, `resolve --apply`, queue retry) goes through the
 [inter-process lock](architecture.md#inter-process-lock) — two concurrent
 CLIs never trample each other.
 
@@ -12,8 +12,9 @@ CLIs never trample each other.
 | `striart init` | Initializes `.striart/`, the config, diagnoses the LLM. |
 | `striart start <agent> [--command <cmd>] [--open]` | Isolated clone + task branch, no Router. |
 | `striart start <agent> --reuse [--force]` | Reuses the kept clone of a stopped agent. |
-| `striart run "<prompt>" [--agent <a>] [--command] [--open]` | Preventive Router: predicts files, launches or queues. |
-| `striart run "<prompt>" --autonomous [--profile <p>] [--timeout <ms>]` | Autonomous mode: Striart drives the tool end to end. |
+| `striart run "<prompt>" [--agent <a>] [--command] [--open] [--force]` | Preventive Router: predicts files, launches or queues. |
+| `striart run "<prompt>" --autonomous [--profile <p>] [--timeout <ms>] [--force]` | Autonomous mode: Striart drives the tool end to end. |
+| `striart run "<prompt>" --on-main [--profile <p>] [--timeout <ms>]` | Launches the agent DIRECTLY on the main repo (no clone), under a protected session. |
 | `striart run "<prompt>" --after <task\|agent>` | Declared dependency: waits for the referenced work to finish. |
 | `striart plan <file.yaml> [--dry-run]` | Tasks-as-code: apply a versioned YAML plan. |
 | `striart profiles [--json]` | Lists the configured agent profiles. |
@@ -28,12 +29,13 @@ CLIs never trample each other.
 | `striart doctor [--json]` | Full diagnosis — "why isn't this working?". |
 | `striart history [--limit <n>] [--json]` | Merge/rollback history, rebuilt from the Git graph. |
 | `striart promote [--rollback]` | Staging → main promotion (global Test Gate + fast-forward). |
-| `striart resolve [--unlock\|--close <id>\|--all]` | Conflict tickets. |
+| `striart resolve [--unlock\|--close <id>\|--prepare <id>\|--apply <id>\|--all]` | Conflict tickets. |
+| `striart lock [--start <reason> [--pid <n>]\|--stop]` | Reserves/releases the main repo for a direct intervention (manual edit, hand-resolved conflict). |
 | `striart clean [agent] [--stopped\|--all [--force]]` | Frees disk space (two-level safeguards). |
 | `striart reconcile` | Idempotent reconciliation of all state (dead sessions, queue, locks). |
 | `striart prune [--days <n>] [--dry-run]` | Retention for stopped inactive clones and resolved tickets. |
 | `striart dashboard [--port <p>]` | Real-time local web dashboard (127.0.0.1, SSE) + controls. |
-| `striart mcp` | Stdio MCP server (5 tools over the orchestrator). |
+| `striart mcp` | Stdio MCP server (7 tools over the orchestrator). |
 
 ---
 
@@ -51,7 +53,8 @@ diagnoses the LLM (warning, never blocking). Idempotent. Details:
 Full diagnosis: git version, repo validity, config loaded and validated, LLM
 reachability (Ollama ping or API key presence), locks in place, open tickets,
 **current branch vs `targetBranch`** (a mismatch shows "merge/watch will
-refuse"). The first reflex when something refuses to work — see
+refuse"), and the **main session** state (free / occupied — see `striart
+lock` below). The first reflex when something refuses to work — see
 [Troubleshooting](troubleshooting.md).
 
 ## Launching agents
@@ -72,12 +75,14 @@ start). Explicit refusals:
 
 - `REUSE_DIRTY` — the archive has uncommitted changes;
 - `REUSE_UNMERGED` — committed work was never merged;
-- `REUSE_IN_USE` — the clone's disk changed recently (`presenceMinutes`).
+- `REUSE_IN_USE` — the clone's disk changed recently (`presenceMinutes`);
+- `HISTORICAL_SECRETS_FOUND` — a path matching `secretPatterns` once existed
+  in the repo's history (see [Architecture](architecture.md)).
 
-`--force` accepts the loss. `striart run --reuse` additionally goes through
-the Router.
+`--force` accepts the loss (or, for the last refusal, clones/reuses anyway,
+knowingly). `striart run --reuse` additionally goes through the Router.
 
-### `striart run "<prompt>" [--agent <a>] [--command] [--open] [--reuse]`
+### `striart run "<prompt>" [--agent <a>] [--command] [--open] [--reuse] [--force]`
 
 The normal path: the **Router** sends the prompt to the LLM, gets the list of
 files likely to be touched, filters it (`isSafeProjectPath` — LLM output is
@@ -85,18 +90,36 @@ untrusted), then compares it to the predictions of active and queued tasks.
 Intersection → the task is **queued** instead of heading into a conflict;
 otherwise the agent starts. Without `--agent`, the name is derived from the
 prompt (e.g. `refactor-the-authentic`). `--prompt <p>` is the scriptable
-equivalent of the positional.
+equivalent of the positional. `--force` clones/reuses anyway despite
+`HISTORICAL_SECRETS_FOUND`; if the task is queued by a collision, the
+decision is remembered (`QueueTask.force`) and still honored whenever the
+queue later drains it — no confirmation is re-asked with no one around to
+give it.
 
 At launch, **semantic links** are reported for information (never blocking):
 mutual imports (JS/TS, Python, Ruby, PHP) and linked packages of a monorepo
 (npm/yarn, Cargo, Go, Maven).
 
-### `striart run … --autonomous [--profile <p>] [--timeout <ms>]`
+### `striart run … --autonomous [--profile <p>] [--timeout <ms>] [--force]`
 
 Striart launches the tool itself (an `agentProfiles` profile), supervises the
 process, merges, runs the Test Gate, and deletes the clone if everything is
 green. Full details: [Execution modes](execution-modes.md). Timeout
 precedence: `--timeout` > `profile.timeout` > `autonomousTimeoutMs`.
+
+### `striart run … --on-main [--profile <p>] [--timeout <ms>]`
+
+Launches the agent **directly in the main repo**, not a clone:
+`runMainSession` reserves a **main session** (`.striart/main-session.json`,
+publishing the PID **of the orchestrator process itself**, not the spawned
+agent's) under the main lock, briefly, then launches the tool without
+holding the lock during the session (which can run for hours). While the
+session is alive, every other mutating operation (`merge`, `sync`,
+`promote`, `resolve --apply`, `watch`'s auto-merge…) is refused with
+`MAIN_SESSION_LIVE`. No end-of-cycle merge: the agent is already working on
+the target branch. Two use cases protected by this mechanism: an agent
+launched directly in the main worktree, or a human editing/resolving a
+conflict by hand without committing (see `striart lock` below).
 
 ### `striart run … --after <task|agent>`
 
@@ -173,8 +196,8 @@ a separate journal that could diverge).
 Local web dashboard, bound to `127.0.0.1` only, **real-time** (SSE — pushed
 on every change, no polling): agent state and mode, watcher status banner,
 session logs, semi-autonomous permission arbitration, and controls (merge,
-stop, retry, rollback, ticket closing — CSRF-protected, `Host` header
-checked on every request).
+stop, retry, rollback, ticket resolution prepare/apply under the Test Gate,
+manual close — CSRF-protected, `Host` header checked on every request).
 
 ## Repairing and cleaning
 
@@ -184,12 +207,61 @@ Undoes the **last Striart merge**: local reset (recoverable via reflog) if
 the merge wasn't pushed, revert otherwise (published history is preserved).
 Refuses if the target branch's last commit is not a Striart merge.
 
-### `striart resolve [--unlock|--close <id>|--all]`
+### `striart resolve [--unlock|--close <id>|--prepare <id>|--apply <id>|--all]`
 
 Conflict tickets (`.striart/conflicts/<ticket>/`: BASE/OURS/THEIRS versions,
 LLM attempt, Test Gate log). Without options: lists. `--close <id>` marks a
-ticket resolved; `--unlock` re-enables semantic merging after manual mode
-kicked in (3 consecutive failures); `--all` closes everything.
+ticket resolved **without going through the Test Gate** (by hand, once the
+conflict has been fixed outside Striart); `--unlock` re-enables semantic
+merging after manual mode kicked in (3 consecutive failures); `--all` closes
+everything.
+
+`--prepare <id>` and `--apply <id>` form the **tested** path for human
+resolution — preferred over `--close`: the resolution goes through the same
+inter-process lock and the same blocking Test Gate as an automatic merge,
+instead of a `git merge` done by hand outside Striart's supervision (the
+source of a real incident: collision with an active `striart watch`).
+
+- `--prepare <id>` seeds `<file>.resolved` in the ticket's folder for every
+  conflicted file that has no resolution prepared yet, starting from
+  `.theirs` (falling back to `.ours` then `.base`) — a starting point to
+  edit, never overwritten if already present.
+- `--apply <id>` replays the ticket's **exact** merge (`ticket.sha`, not the
+  agent's current head, which may have moved on since) and applies the
+  `.resolved` files (final content, binary supported) and `.delete` files
+  (resolution = deletion) prepared in the ticket's folder, under the
+  blocking Test Gate. Green → commit, the ticket is closed (along with
+  duplicates covering the same files for the same agent), and the semantic
+  failure streak is reset. Red → the ticket stays open, and **nothing** is
+  touched on the streak or manual mode (a failed manual resolution is not an
+  LLM failure). Refused without changing anything when: the ticket is
+  already resolved, the conflict isn't a per-file one (e.g. `GATE_FAILED`
+  with no conflicted file), the resolution is incomplete, the agent is
+  unknown, an autonomous session is alive, or the ticket is stale (the main
+  repo or the agent's history has moved on since).
+
+### `striart lock [--start <reason> [--pid <n>]|--stop]`
+
+Reserves or releases the main repo for a **direct intervention outside the
+Router/agent path**: a manual edit without a commit, a conflict resolved by
+hand with a raw `git merge`. Same mechanism as `--on-main` (session declared
+in `.striart/main-session.json`, `assertNoLiveMainSession` guard inside
+`withMainLock`) — fixes a real incident where a manual resolution was
+undone by orphaned-merge recovery while an active `striart watch` held the
+lock.
+
+- `--start <reason>`: reserves, watched by default via the calling shell's
+  PID (`process.ppid` — releases itself when the terminal closes), or an
+  explicit `--pid <n>` (warns if that PID is not alive at declaration time).
+  Check and publish are atomic under the main lock.
+- `--stop`: releases — an **always-allowed escape hatch**, even if the
+  declared PID is still alive.
+- With no option: shows the status (free / occupied with reason, PID and
+  duration / dead PID).
+
+**No TTL** (unlike `.striart/main.lock`): a direct intervention can
+legitimately run for hours; `striart lock --stop` is the only way out if the
+PID was recycled by the OS.
 
 ### `striart clean [agent] [--stopped|--all [--force]]`
 

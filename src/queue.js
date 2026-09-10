@@ -12,10 +12,19 @@ export async function readQueue(root) {
   return readJson(queuePath(root), { fallback: [], code: 'QUEUE_CORRUPT' });
 }
 
-/** @param {string} root @param {{agent: string, prompt: string, predictedFiles: string[], collisions: import('./types.js').Collision[], command?: string|null, after?: string|null, reuse?: boolean}} task @returns {Promise<import('./types.js').QueueTask>} */
+/** @param {string} root @param {{agent: string, prompt: string, predictedFiles: string[], collisions: import('./types.js').Collision[], command?: string|null, after?: string|null, reuse?: boolean, force?: boolean}} task @returns {Promise<import('./types.js').QueueTask>} */
 export async function enqueueTask(
   root,
-  { agent, prompt, predictedFiles, collisions, command = null, after = null, reuse = false },
+  {
+    agent,
+    prompt,
+    predictedFiles,
+    collisions,
+    command = null,
+    after = null,
+    reuse = false,
+    force = false,
+  },
 ) {
   const queue = await readQueue(root);
   const task = /** @type {import('./types.js').QueueTask} */ ({
@@ -30,6 +39,9 @@ export async function enqueueTask(
     // (id de tâche en file ou nom d'agent actif) n'est pas terminé.
     after,
     reuse,
+    // Décision consciente prise à l'enfilage (bypass HISTORICAL_SECRETS_FOUND) :
+    // doit survivre au dégagement, comme `reuse`.
+    force,
     createdAt: new Date().toISOString(),
   });
   queue.push(task);

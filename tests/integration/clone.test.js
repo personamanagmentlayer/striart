@@ -1,10 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { stat, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { simpleGit } from 'simple-git';
 import { createTempRepo } from '../helpers/temp-repo.js';
 import { initStriart } from '../../src/init.js';
-import { createAgent, listAgents, readRegistry } from '../../src/clone.js';
+import {
+  agentsDir,
+  createAgent,
+  listAgents,
+  readRegistry,
+  scanHistoricalSecrets,
+} from '../../src/clone.js';
 import { StriartError } from '../../src/errors.js';
 
 describe('striart init + start + status (intégration)', () => {
@@ -244,10 +251,16 @@ describe('nettoyage des secrets au clonage (intégration)', () => {
   const DEFAULT_PATTERNS = ['.env', '.env.*', '*.pem', '*.key', 'credentials.json'];
 
   it('retire les secrets trackés du worktree du clone, status propre', async () => {
+    // force: true — .env et server.pem sont trackés AUJOURD'HUI, donc aussi
+    // détectés par scanHistoricalSecrets (--diff-filter=A capte l'ajout même
+    // encore présent) : ce test cible excludeTrackedSecrets (le masquage du
+    // worktree), pas le nouveau garde-fou HISTORICAL_SECRETS_FOUND, qui a sa
+    // propre suite ("scan des secrets historiques avant clonage").
     const info = await createAgent({
       root: repo.root,
       name: 'agent-a',
       secretPatterns: DEFAULT_PATTERNS,
+      force: true,
     });
 
     expect(info.secretsExcluded.sort()).toEqual(['.env', 'server.pem']);
@@ -328,6 +341,113 @@ describe('présence de session (intégration)', () => {
     expect(forced.removed).toEqual([
       { name: 'agent-a', freedBytes: expect.any(Number), wasActive: false },
     ]);
+  });
+});
+
+describe('scan des secrets historiques avant clonage (intégration)', () => {
+  let repo;
+
+  beforeEach(async () => {
+    repo = await createTempRepo();
+    await initStriart(repo.root);
+  });
+
+  afterEach(async () => {
+    await repo.cleanup();
+  });
+
+  /** Ajoute .env par erreur, puis le retire dans un commit suivant : absent du tracked actuel, présent dans l'historique. */
+  async function commitThenRemoveEnv() {
+    await writeFile(path.join(repo.root, '.env'), 'API_KEY=super-secret\n');
+    await simpleGit(repo.root).raw(['add', '-f', '.env']); // .gitignore de init l'ignore
+    await repo.git.commit('feat: ajoute .env par erreur');
+    await repo.git.rm(['.env']);
+    await repo.git.commit('fix: retire .env de l’historique courant');
+  }
+
+  it("scanHistoricalSecrets trouve un fichier supprimé depuis, encore présent dans l'historique", async () => {
+    await commitThenRemoveEnv();
+
+    // Absent du tracked actuel.
+    const tracked = (await repo.git.raw(['ls-files'])).split('\n').filter(Boolean);
+    expect(tracked).not.toContain('.env');
+
+    const found = await scanHistoricalSecrets(repo.root, ['.env']);
+    expect(found).toEqual(['.env']);
+  });
+
+  it('scanHistoricalSecrets détecte aussi un fichier encore tracké aujourd’hui (--diff-filter=A capte l’ajout initial)', async () => {
+    await writeFile(path.join(repo.root, '.env'), 'API_KEY=still-here\n');
+    await simpleGit(repo.root).raw(['add', '-f', '.env']);
+    await repo.git.commit('feat: .env toujours présent');
+
+    const found = await scanHistoricalSecrets(repo.root, ['.env']);
+    expect(found).toEqual(['.env']);
+  });
+
+  it('scanHistoricalSecrets([], null) retourne [] sans toucher git (pas d’erreur même hors repo)', async () => {
+    const notARepo = os.tmpdir();
+    await expect(scanHistoricalSecrets(notARepo, [])).resolves.toEqual([]);
+    await expect(scanHistoricalSecrets(notARepo, null)).resolves.toEqual([]);
+  });
+
+  it("scanHistoricalSecrets ne trouve rien sur un repo sans secret, à aucun moment de l'historique", async () => {
+    await writeFile(path.join(repo.root, 'app.js'), 'const app = 1;\n');
+    await repo.git.add(['app.js']);
+    await repo.git.commit('feat: app propre');
+
+    const found = await scanHistoricalSecrets(repo.root, ['.env', '*.pem', '*.key']);
+    expect(found).toEqual([]);
+  });
+
+  it('createAgent refuse (HISTORICAL_SECRETS_FOUND) sans avoir créé de clone sur disque', async () => {
+    await commitThenRemoveEnv();
+    const dest = path.join(agentsDir(repo.root), 'agent-a');
+
+    await expect(
+      createAgent({ root: repo.root, name: 'agent-a', secretPatterns: ['.env'] }),
+    ).rejects.toMatchObject({ code: 'HISTORICAL_SECRETS_FOUND' });
+
+    // Le refus arrive AVANT le git clone : aucun dossier de destination.
+    await expect(stat(dest)).rejects.toThrow();
+    expect((await readRegistry(repo.root))['agent-a']).toBeUndefined();
+  });
+
+  it('createAgent avec force: true clone quand même malgré un secret historique', async () => {
+    await commitThenRemoveEnv();
+
+    const info = await createAgent({
+      root: repo.root,
+      name: 'agent-a',
+      secretPatterns: ['.env'],
+      force: true,
+    });
+
+    await expect(stat(info.path)).resolves.toBeTruthy();
+    // .env n'est plus tracké aujourd'hui : excludeTrackedSecrets (contrôle
+    // séparé) n'a rien à exclure — ce n'est pas le rôle de ce garde-fou.
+    expect(info.secretsExcluded).toEqual([]);
+  });
+
+  it('force défaut à false : omettre force revient à le refuser', async () => {
+    await commitThenRemoveEnv();
+    await expect(
+      createAgent({ root: repo.root, name: 'agent-a', secretPatterns: ['.env'] }),
+    ).rejects.toMatchObject({ code: 'HISTORICAL_SECRETS_FOUND' });
+  });
+
+  it('createAgent réussit normalement sur un repo sans aucun secret historique (pas de faux positif)', async () => {
+    await writeFile(path.join(repo.root, 'app.js'), 'const app = 1;\n');
+    await repo.git.add(['app.js']);
+    await repo.git.commit('feat: app propre');
+
+    const info = await createAgent({
+      root: repo.root,
+      name: 'agent-a',
+      secretPatterns: ['.env', '*.pem', '*.key'],
+    });
+    expect(info.name).toBe('agent-a');
+    await expect(stat(info.path)).resolves.toBeTruthy();
   });
 });
 

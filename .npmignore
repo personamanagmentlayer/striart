@@ -1,0 +1,48 @@
+# Filtre npm pack/publish — appliqué EN PLUS de "files" dans package.json.
+#
+# "files" contrôle déjà ce qui est inclus au niveau racine (src/, examples/,
+# README*, CHANGELOG.md, LICENSE, .env.example) — ce fichier ne sert donc
+# qu'à exclure ce qui pourrait un jour atterrir PAR MÉGARDE à l'intérieur de
+# ces dossiers (aucun cas actuel : "npm pack --dry-run" est déjà propre).
+# Sans lui, npm retomberait sur .gitignore comme filtre par défaut — moins
+# sûr, puisque .gitignore évolue pour des raisons qui n'ont rien à voir avec
+# ce qui doit être publié.
+
+# Dépendances et artefacts d'exécution — jamais publiés.
+node_modules/
+.striart/
+coverage/
+*.log
+*.tgz
+
+# Secrets et environnement — .env.example reste inclus via "files", tout le
+# reste ne doit jamais quitter la machine du développeur.
+.env
+.env.*
+!.env.example
+
+# Tests et outillage de dev — sans objet pour un paquet qui s'exécute tel
+# quel (aucun build, TypeScript effacé nativement par Node) ; les tests
+# vivent dans le dépôt, pas dans le paquet installé.
+tests/
+*.test.js
+*.spec.js
+vitest.config.js
+eslint.config.js
+.prettierrc*
+.editorconfig
+
+# Métadonnées de dépôt et de session — n'ont aucun sens hors du checkout git.
+.git/
+.gitignore
+.gitea/
+.github/
+.claude/
+roadmap/
+docs/
+
+# Artefacts d'OS et d'éditeur.
+.DS_Store
+Thumbs.db
+*.swp
+*~

@@ -180,6 +180,7 @@ export type StriartEvent = { message?: string } & (
   | { type: 'merge:gate-red'; agent: string; ticketId: string; exitCode: number | null }
   | { type: 'merge:rename-hazard'; agent: string; source: string; ours: string; theirs: string }
   | { type: 'merge:manual-mode' }
+  | { type: 'merge:manual-resolution'; agent: string; ticketId: string; files: string[] }
   | { type: 'sync:rebase-conflict'; agent: string }
   | { type: 'sync:stash-conflict'; agent: string }
   | { type: 'sync:overlap'; agent: string; files: string[] }
@@ -317,6 +318,13 @@ export interface QueueTask {
   /** Au dégagement de la file : réhabiliter l'archive au lieu de cloner. */
   reuse?: boolean;
   /**
+   * Décision consciente prise à l'enfilage : cloner/réhabiliter malgré des
+   * secrets historiques détectés (voir HISTORICAL_SECRETS_FOUND). Persistée
+   * comme `reuse` — sans quoi le dégagement de file redemanderait une
+   * confirmation qu'aucun humain n'est là pour donner.
+   */
+  force?: boolean;
+  /**
    * Motif d'ajournement posé EN MÉMOIRE par retryQueue (ex: REUSE_DIRTY),
    * jamais persisté dans queue.json.
    */
@@ -365,6 +373,29 @@ export type MergeResult =
       semantic: boolean;
       manualMode: boolean;
       rebase: SyncResult | null;
+    };
+
+/** Résolution préparée pour un fichier en conflit (voir conflicts.js). */
+export type ResolutionInput =
+  | { path: string; kind: 'content'; content: Buffer }
+  | { path: string; kind: 'delete' }
+  | { path: string; kind: 'missing' };
+
+/** Résultat de applyTicketResolution — union discriminée sur `status`. */
+export type ManualResolutionResult =
+  | { status: 'ALREADY_CLEAN'; ticketId: string; agent: string; sha: string }
+  | { status: 'GATE_FAILED'; ticketId: string; agent: string; sha: string; gate: GateResult }
+  | {
+      status: 'MERGED';
+      ticketId: string;
+      agent: string;
+      sha: string;
+      gate: GateResult;
+      pushError: string | null;
+      memory: { updated: boolean; entry?: string; error?: string } | null;
+      resolvedFiles: string[];
+      /** [ticketId, ...doublons du même conflit fermés au passage]. */
+      closedTickets: string[];
     };
 
 /**
@@ -467,4 +498,11 @@ export type PromoteResult =
 export interface StriartState {
   semanticFailureStreak: number;
   manualMode: boolean;
+}
+
+/** Session déclarée sur le repo principal lui-même — voir main-session.js. */
+export interface MainSession {
+  pid: number | null;
+  reason: string;
+  startedAt: string;
 }

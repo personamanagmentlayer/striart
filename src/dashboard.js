@@ -10,6 +10,7 @@ import { logger } from './logger.js';
 import { watchDaemonStatus } from './daemon.js';
 import { DEFAULT_PROFILE, listProfiles, resolveAgentProfile, sessionLogPath } from './session.js';
 import {
+  applyTicketResolution,
   getQueueDashboard,
   mergeAgentCommit,
   promoteStaging,
@@ -20,7 +21,15 @@ import {
   runTask,
   stopAgent,
 } from './orchestrator.js';
-import { closeConflictTicket, listConflictTickets, readTicketDetail } from './conflicts.js';
+import {
+  closeConflictTicket,
+  listConflictTickets,
+  prepareResolutionScaffold,
+  readResolutionInputs,
+  readTicketDetail,
+} from './conflicts.js';
+import { readMainSession, stopMainSession } from './main-session.js';
+import { isProcessAlive } from './process-tree.js';
 import { readState, resetManualMode } from './state.js';
 import { answerPermissionRequest, listPendingPermissions } from './permissions.ts';
 import { loadConfig } from './config.js';
@@ -76,22 +85,40 @@ async function collectHeatmap(root, allTickets) {
 
 /** Agrège l'état complet pour l'API du dashboard. */
 export async function collectDashboardState(root) {
-  const [agents, tasks, tickets, allTickets, state, config, history, daemon, permissions] =
-    await Promise.all([
-      listAgents(root),
-      getQueueDashboard({ root }),
-      listConflictTickets(root),
-      listConflictTickets(root, { includeResolved: true }),
-      readState(root),
-      loadConfig(root),
-      listMergeHistory({ root, limit: HISTORY_LIMIT }),
-      // Le watcher n'est jamais lancé automatiquement : sans lui, les commits
-      // des agents supervisés ne sont pas mergés. Le dashboard doit donc dire
-      // s'il tourne, sinon l'utilisateur attend un merge qui ne viendra pas.
-      watchDaemonStatus({ root }),
-      // Demandes d'arbitrage des sessions semi-autonomes (ACP, politique 'ask').
-      listPendingPermissions(root),
-    ]);
+  const [
+    agents,
+    tasks,
+    tickets,
+    allTickets,
+    state,
+    config,
+    history,
+    daemon,
+    permissions,
+    mainSessionRaw,
+  ] = await Promise.all([
+    listAgents(root),
+    getQueueDashboard({ root }),
+    listConflictTickets(root),
+    listConflictTickets(root, { includeResolved: true }),
+    readState(root),
+    loadConfig(root),
+    listMergeHistory({ root, limit: HISTORY_LIMIT }),
+    // Le watcher n'est jamais lancé automatiquement : sans lui, les commits
+    // des agents supervisés ne sont pas mergés. Le dashboard doit donc dire
+    // s'il tourne, sinon l'utilisateur attend un merge qui ne viendra pas.
+    watchDaemonStatus({ root }),
+    // Demandes d'arbitrage des sessions semi-autonomes (ACP, politique 'ask').
+    listPendingPermissions(root),
+    // Session déclarée sur le repo principal (édition directe / agent hors clone).
+    readMainSession(root),
+  ]);
+  const mainSession =
+    mainSessionRaw && isProcessAlive(mainSessionRaw.pid)
+      ? { ...mainSessionRaw, alive: true }
+      : mainSessionRaw
+        ? { ...mainSessionRaw, alive: false }
+        : null;
   const heatmap = await collectHeatmap(root, allTickets);
 
   // Le log du Test Gate n'est PAS embarqué dans l'état de liste : le client
@@ -114,6 +141,7 @@ export async function collectDashboardState(root) {
     state,
     daemon,
     permissions,
+    mainSession,
     // Profils du mode autonome : clés d'env uniquement, jamais les valeurs
     // (même contrat que `striart profiles`).
     profiles: listProfiles(config),
@@ -205,6 +233,7 @@ export const PAGE = `<!doctype html>
 <div id="toast"></div>
 <div id="doctor-detail"></div>
 <div id="watcher"></div>
+<div id="main-session"></div>
 <div id="manual"></div>
 <div id="permissions"></div>
 <h2>Agents actifs</h2><div id="agents" class="empty">chargement…</div>
@@ -239,6 +268,12 @@ function setLive(ok) {
 function render(s) {
     document.getElementById('meta').textContent =
       s.config.targetBranch + ' · ' + s.config.testCommand + ' · maj ' + new Date(s.generatedAt).toLocaleTimeString();
+    setSection('main-session', !s.mainSession ? '' : '<div class="manual">'
+      + (s.mainSession.alive ? '🔒 Repo principal occupé par « ' + esc(s.mainSession.reason) + ' » (pid ' + esc(s.mainSession.pid) + ') — '
+        + 'merge/sync/promote/resolve --apply refusent tant que ce process vit '
+        + '<button data-act="main-session-stop" data-confirm="Libérer le repo principal MAINTENANT, même si le process tourne encore ?">🔓 Libérer</button>'
+        : '⚠️ Session principale déclarée mais PID ' + esc(s.mainSession.pid) + ' mort — se libère à la prochaine opération')
+      + '</div>');
     setSection('manual', s.state.manualMode
       ? '<div class="manual">🔒 Mode manuel actif — fusion sémantique désactivée '
         + '<button data-act="unlock" data-confirm="Réactiver la fusion sémantique (compteur d\\'échecs remis à zéro) ?">🔓 Déverrouiller</button></div>'
@@ -400,7 +435,7 @@ function bindActions() {
   for (const btn of document.querySelectorAll('button[data-act]')) {
     if (btn.dataset.bound) continue;
     btn.dataset.bound = '1';
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', async () => {
       if (btn.dataset.confirm && btn.dataset.armed !== '1') {
         btn.dataset.armed = '1';
         btn.dataset.label = btn.textContent;
@@ -425,7 +460,11 @@ function bindActions() {
       if (btn.dataset.ticket) body.id = btn.dataset.ticket;
       if (btn.dataset.perm) { body.id = btn.dataset.perm; body.option = btn.dataset.option; }
       if (btn.dataset.force === '1') body.force = true;
-      runAction(btn.dataset.act, body);
+      const ok = await runAction(btn.dataset.act, body);
+      // Le panneau de détail d'un ticket n'est pas dans le refresh SSE
+      // général (fetch à la demande) : le re-fetch explicitement après une
+      // action qui le concerne, pour voir l'état à jour sans rouvrir.
+      if (ok && btn.dataset.ticket) showTicket(btn.dataset.ticket);
     });
   }
 }
@@ -457,6 +496,9 @@ async function showTicket(id) {
   const t = await r.json();
   const unmergeable = (t.unmergeable ?? []).map((u) =>
     '<li>' + esc(u.path) + ' — <b>' + esc(u.kind) + '</b>' + (u.deletedBy ? ' (supprimé côté ' + (u.deletedBy === 'ours' ? 'main' : 'agent') + ')' : '') + '</li>').join('');
+  const kindLabel = { content: '📝 préparé', delete: '🗑️ suppression', missing: '⛔ manquant' };
+  const resolutionStatus = t.resolved ? '' : (t.resolutionInputs ?? []).map((r) =>
+    '<li>' + esc(r.path) + ' — ' + (kindLabel[r.kind] || esc(r.kind)) + '</li>').join('');
   const versions = (t.resolutions ?? []).map((res) => {
     const col = (label, content) => content == null ? ''
       : '<div class="version"><div class="muted">' + esc(label) + '</div><pre>' + esc(content) + '</pre></div>';
@@ -473,9 +515,14 @@ async function showTicket(id) {
     + '<div class="muted">Agent ' + esc(t.agent) + ' · branche ' + esc(t.branch) + ' · commit ' + esc((t.sha || '').slice(0, 8))
     + ' · prompt : ' + esc(t.prompt) + '</div>'
     + '<div class="muted">Dossier : <code>' + esc(t.dir) + '</code> — ouvrir dans l\\'éditeur : <code>code "' + esc(t.dir) + '"</code>'
-    + (t.resolved ? '' : ' <button data-act="ticket-close" data-ticket="' + esc(t.id) + '"'
-      + ' data-confirm="Marquer le ticket ' + esc(t.id) + ' comme résolu ?">✓ Clore le ticket</button>')
+    + (t.resolved ? '' : ' <button data-act="ticket-prepare" data-ticket="' + esc(t.id) + '"'
+      + ' data-confirm="Amorcer .resolved depuis la version de l\\'agent pour ' + esc(t.id) + ' ?">🧪 Préparer</button>'
+      + ' <button data-act="ticket-apply" data-ticket="' + esc(t.id) + '"'
+      + ' data-confirm="Rejouer le merge de ' + esc(t.id) + ' avec les résolutions préparées, sous le Test Gate ?">✅ Appliquer</button>'
+      + ' <button data-act="ticket-close" data-ticket="' + esc(t.id) + '"'
+      + ' data-confirm="Marquer le ticket ' + esc(t.id) + ' comme résolu (sans repasser par le Test Gate) ?">✓ Clore à la main</button>')
     + '</div>'
+    + (resolutionStatus ? '<h3>Résolution</h3><ul>' + resolutionStatus + '</ul>' : '')
     + (unmergeable ? '<h3>Hors de portée du Merger</h3><ul>' + unmergeable + '</ul>' : '')
     + versions
     + (t.log ? '<h3>Log du Test Gate</h3><pre>' + esc(t.log) + '</pre>' : '')
@@ -681,6 +728,8 @@ const ACTIONS = {
     })),
   promote: (root, body) => promoteStaging({ root, rollback: Boolean(body.rollback) }),
   unlock: (root) => resetManualMode(root).then(() => ({ status: 'fusion sémantique réactivée' })),
+  'main-session-stop': (root) =>
+    stopMainSession(root).then(() => ({ status: 'repo principal libéré' })),
   // Garde-fous de cleanClones inchangés : jamais all/force depuis le dashboard,
   // seuls les clones d'agents arrêtés sans travail en attente partent.
   clean: (root, body) =>
@@ -715,6 +764,21 @@ const ACTIONS = {
       throw new StriartError('Id de ticket invalide.', { code: 'TICKET_UNKNOWN' });
     }
     return closeConflictTicket(root, body.id);
+  },
+  'ticket-prepare': (root, body) => {
+    if (typeof body.id !== 'string' || !/^[A-Za-z0-9_-]+$/.test(body.id)) {
+      throw new StriartError('Id de ticket invalide.', { code: 'TICKET_UNKNOWN' });
+    }
+    return prepareResolutionScaffold(root, body.id).then((scaffold) => ({
+      status: `${scaffold.filter((s) => s.created).length} fichier(s) amorcé(s) — édite-les puis "Appliquer"`,
+      scaffold,
+    }));
+  },
+  'ticket-apply': (root, body) => {
+    if (typeof body.id !== 'string' || !/^[A-Za-z0-9_-]+$/.test(body.id)) {
+      throw new StriartError('Id de ticket invalide.', { code: 'TICKET_UNKNOWN' });
+    }
+    return applyTicketResolution({ root, ticketId: body.id });
   },
   rollback: (root) => rollbackLastMerge({ root }),
 };
@@ -925,8 +989,14 @@ export function startDashboard({ root, port = 3456 }) {
       if (ticketMatch) {
         try {
           const detail = await readTicketDetail(root, ticketMatch[1]);
+          const resolutionInputs = detail.resolved
+            ? []
+            : (await readResolutionInputs(root, ticketMatch[1])).map((i) => ({
+                path: i.path,
+                kind: i.kind,
+              }));
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(JSON.stringify(detail));
+          res.end(JSON.stringify({ ...detail, resolutionInputs }));
         } catch {
           res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(JSON.stringify({ error: 'ticket inconnu' }));

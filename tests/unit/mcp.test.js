@@ -14,13 +14,15 @@ describe('MCP — dispatch JSON-RPC', () => {
     expect(r.result.serverInfo.name).toBe('striart');
   });
 
-  it('tools/list expose les 5 outils, chacun avec description et schéma', async () => {
+  it('tools/list expose les 7 outils, chacun avec description et schéma', async () => {
     const r = await handleMcpRequest(CTX, { jsonrpc: '2.0', id: 2, method: 'tools/list' });
     const names = r.result.tools.map((t) => t.name).sort();
     expect(names).toEqual([
       'striart_merge',
       'striart_queue',
       'striart_resolve',
+      'striart_resolve_apply',
+      'striart_resolve_prepare',
       'striart_run',
       'striart_status',
     ]);
@@ -63,19 +65,22 @@ describe('MCP — dispatch JSON-RPC', () => {
 });
 
 describe('MCP — garde de profondeur (session autonome)', () => {
-  it.each(['striart_run', 'striart_merge', 'striart_resolve'])(
-    '%s est refusé sous STRIART_SESSION=1, avec le motif',
-    async (name) => {
-      const r = await handleMcpRequest(NESTED, {
-        jsonrpc: '2.0',
-        id: 6,
-        method: 'tools/call',
-        params: { name, arguments: { prompt: 'x', agent: 'a', ticketId: 't' } },
-      });
-      expect(r.result.isError).toBe(true);
-      expect(r.result.content[0].text).toContain('profondeur');
-    },
-  );
+  it.each([
+    'striart_run',
+    'striart_merge',
+    'striart_resolve',
+    'striart_resolve_prepare',
+    'striart_resolve_apply',
+  ])('%s est refusé sous STRIART_SESSION=1, avec le motif', async (name) => {
+    const r = await handleMcpRequest(NESTED, {
+      jsonrpc: '2.0',
+      id: 6,
+      method: 'tools/call',
+      params: { name, arguments: { prompt: 'x', agent: 'a', ticketId: 't' } },
+    });
+    expect(r.result.isError).toBe(true);
+    expect(r.result.content[0].text).toContain('profondeur');
+  });
 
   it('les outils de LECTURE restent accessibles à un agent (status, queue)', async () => {
     // Même refusée sur le fond (root inexistant), la garde ne doit PAS

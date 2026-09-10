@@ -20,7 +20,15 @@ import { buildImportGraph, detectSemanticNeighbors } from './imports.js';
 import { computeWorkspaceWarnings } from './workspaces.js';
 import { enqueueTask, readQueue, removeTask } from './queue.js';
 import { runTestGate } from './gate.js';
-import { createConflictTicket } from './conflicts.js';
+import {
+  createConflictTicket,
+  readTicketDetail,
+  closeConflictTicket,
+  listConflictTickets,
+  readResolutionInputs,
+  safeFileName,
+} from './conflicts.js';
+import { startMainSession, stopMainSession } from './main-session.js';
 import {
   MAX_MERGE_INPUT_CHARS,
   classifyConflict,
@@ -34,9 +42,10 @@ import { emitStriartEvent } from './events.js';
 import { syncAgentWithMain } from './sync.js';
 import { refreshCloneMemories, updateMemoryAfterMerge } from './memory.js';
 import { logger } from './logger.js';
-import { withMainLock } from './lock.js';
+import { assertNoLiveMainSession, withMainLock } from './lock.js';
 import { isProcessAlive } from './process-tree.js';
 import { parsePlan } from './plan.ts';
+import { stopPtyHost } from './pty-host.ts';
 
 const MAX_PROJECT_FILES = 400;
 
@@ -136,7 +145,7 @@ function hasAfterCycle(queue, newAgent, firstRef) {
   return false;
 }
 
-/** @param {{root: string, agent?: string|null, prompt: string, command?: string|null, mode?: 'attended'|'autonomous', profile?: string|null, after?: string|null, reuse?: boolean}} params @returns {Promise<import('./types.js').RunResult>} */
+/** @param {{root: string, agent?: string|null, prompt: string, command?: string|null, mode?: 'attended'|'autonomous', profile?: string|null, after?: string|null, reuse?: boolean, force?: boolean}} params @returns {Promise<import('./types.js').RunResult>} */
 export async function runTask(params) {
   return withMainLock(params.root, `run:${params.agent ?? 'auto'}`, () => runTaskImpl(params));
 }
@@ -158,7 +167,7 @@ async function refreshLiveMemory(root, config) {
   }
 }
 
-/** @param {{root: string, agent?: string|null, prompt: string, command?: string|null, mode?: 'attended'|'autonomous', profile?: string|null, after?: string|null, reuse?: boolean}} params @returns {Promise<import('./types.js').RunResult>} */
+/** @param {{root: string, agent?: string|null, prompt: string, command?: string|null, mode?: 'attended'|'autonomous', profile?: string|null, after?: string|null, reuse?: boolean, force?: boolean}} params @returns {Promise<import('./types.js').RunResult>} */
 async function runTaskImpl({
   root,
   agent = null,
@@ -168,6 +177,7 @@ async function runTaskImpl({
   profile = null,
   after = null,
   reuse = false,
+  force = false,
 }) {
   await assertInitialized(root);
 
@@ -236,6 +246,7 @@ async function runTaskImpl({
       command,
       after,
       reuse,
+      force,
     });
     const blockers = collisions.map((c) => `${c.agent} (${c.files.join(', ')})`).join(' ; ');
     const cause = [
@@ -320,6 +331,7 @@ async function runTaskImpl({
         secretPatterns: config.secretPatterns,
         mode,
         profile,
+        force,
       })
     : await createAgent({
         root,
@@ -331,6 +343,7 @@ async function runTaskImpl({
         secretPatterns: config.secretPatterns,
         mode,
         profile,
+        force,
       });
   await refreshLiveMemory(root, config);
   return {
@@ -390,7 +403,7 @@ export async function shouldWatcherMerge({ root, agent }) {
  *    matériel de diagnostic d'une session que personne n'a regardée ; le
  *    supprimer sur un échec détruirait la seule trace exploitable.
  *
- * @param {{root: string, agent?: string|null, prompt: string, profile?: string|null, timeoutMs?: number|null, after?: string|null, reuse?: boolean}} params
+ * @param {{root: string, agent?: string|null, prompt: string, profile?: string|null, timeoutMs?: number|null, after?: string|null, reuse?: boolean, force?: boolean}} params
  * @returns {Promise<import('./types.js').AutonomousResult>}
  */
 export async function runAutonomousTask({
@@ -401,6 +414,7 @@ export async function runAutonomousTask({
   timeoutMs = null,
   after = null,
   reuse = false,
+  force = false,
 }) {
   await assertInitialized(root);
   const config = await loadConfig(root);
@@ -419,6 +433,7 @@ export async function runAutonomousTask({
     profile: profileKey,
     after,
     reuse,
+    force,
   });
 
   if (started.status === 'QUEUED') {
@@ -534,6 +549,83 @@ export async function runAutonomousTask({
       ? null
       : `Merge réussi mais nettoyage sauté (${skipped?.reason ?? 'raison inconnue'}) — clone conservé.`,
   };
+}
+
+/**
+ * Lance un agent de coding EN DEHORS de tout clone, directement dans le
+ * worktree du repo principal — supervisé exactement comme un agent autonome
+ * (`runAgentSession`), mais sans merge de fin de cycle : il n'y a rien à
+ * fusionner, l'agent travaille déjà sur la branche cible.
+ *
+ * Publie une SESSION PRINCIPALE (main-session.js) pendant toute la durée :
+ * `withMainLock` (voir lock.js, `assertNoLiveMainSession`) refuse alors toute
+ * autre opération mutante — merge d'un autre agent, sync, promote, resolve
+ * --apply, l'auto-merge de watch — tant qu'elle vit. Symétrique de ce que
+ * `sessionPid` fait déjà pour un clone (décision architecturale n°6.4) : ce
+ * n'était pas décliné pour le principal, ce qui a permis à une résolution
+ * manuelle en cours (raw `git merge`) d'être traitée comme un débris de
+ * crash par `recoverOrphanMerge` et annulée.
+ *
+ * Le PID publié est CELUI DE CE PROCESS (`process.pid`), pas celui de
+ * l'agent — il n'est pas encore spawné au moment de la réservation, et sa
+ * durée de vie ne couvrirait pas exactement celle de cette fonction. Le
+ * process courant, lui, vit exactement le temps de tout `runMainSession`
+ * (spawn + attente + nettoyage compris) : c'est la bonne horloge.
+ *
+ * La vérification ET la réservation sont faites ATOMIQUEMENT sous
+ * `withMainLock` — pas seulement lues puis publiées à part — pour deux
+ * raisons à la fois : (1) empêcher deux appels concurrents de passer tous
+ * les deux le contrôle avant que l'un des deux ne publie ; (2) empêcher
+ * cette fonction de démarrer PENDANT qu'un merge/sync/promote/resolve
+ * --apply tient déjà le verrou — `withMainLock` attend alors leur fin avant
+ * de nous laisser réserver, on ne peut plus se glisser en dessous d'une
+ * opération déjà en vol (l'inverse de l'incident d'origine, tout aussi réel).
+ *
+ * Ne tient PAS `withMainLock` pendant la session elle-même (elle dure des
+ * minutes ou des heures) — seule cette réservation initiale, quasi
+ * instantanée, passe par le verrou ; la dépublication en fin de session est
+ * un accès direct au fichier, sans verrou (même principe que
+ * `updateAgentMeta` pour un clone).
+ *
+ * @param {{root: string, prompt: string, profile?: string|null, timeoutMs?: number|null, reason?: string|null}} params
+ * @returns {Promise<import('./types.js').SessionResult>}
+ */
+export async function runMainSession({
+  root,
+  prompt,
+  profile = null,
+  timeoutMs = null,
+  reason = null,
+}) {
+  await assertInitialized(root);
+  const config = await loadConfig(root);
+  // Profil validé AVANT toute réservation : un profil inconnu ne doit pas
+  // laisser une session principale publiée sans agent qui la justifie.
+  const profileKey = profile ?? DEFAULT_PROFILE;
+  const resolved = resolveAgentProfile(config, profileKey);
+
+  await withMainLock(root, 'main-session:reserve', async () => {
+    await assertNoLiveMainSession(root);
+    await startMainSession(root, { pid: process.pid, reason: reason ?? prompt });
+  });
+
+  const taskId = `main-${Date.now().toString(36)}`;
+  try {
+    return await runAgentSession({
+      root,
+      agent: 'main',
+      taskId,
+      cwd: root,
+      profile: resolved,
+      prompt,
+      timeoutMs: timeoutMs ?? resolved.timeout ?? config.autonomousTimeoutMs,
+    });
+  } finally {
+    // La réservation ci-dessus nous garantit d'être le seul propriétaire de
+    // cette entrée au moment où on l'a publiée — la dépublier ici sans
+    // condition est donc sûre, pas un unlink d'une session tierce.
+    await stopMainSession(root).catch(() => {});
+  }
 }
 
 async function abortMerge(git) {
@@ -734,6 +826,38 @@ async function assertMainReady(mainGit, expectedBranch) {
       { code: 'TARGET_BRANCH_MISMATCH', details: { currentBranch, expectedBranch } },
     );
   }
+}
+
+/**
+ * Post-commit partagé entre `mergeAgentCommitImpl` et
+ * `applyTicketResolutionImpl` : push (si `autoPush`) et Memory Layer (si
+ * `memoryLayer`). Factorisé pour que la résolution manuelle ait exactement
+ * le même comportement que le merge automatique — un oubli ici privait
+ * silencieusement `striart resolve --apply` du push et de la Memory Layer.
+ * @param {{mainGit: import('simple-git').SimpleGit, root: string, config: import('./types.js').StriartConfig, agent: string, sha: string}} params
+ * @returns {Promise<{pushError: string|null, memory: {updated: boolean, entry?: string, error?: string}|null}>}
+ */
+async function finalizeMergeCommit({ mainGit, root, config, agent, sha }) {
+  let pushError = null;
+  if (config.autoPush) {
+    try {
+      await mainGit.push('origin', config.targetBranch);
+    } catch (error) {
+      // Le merge local reste valide : on remonte l'erreur de push sans le défaire.
+      pushError = error.message;
+      logger.error({ err: error }, `Push vers origin/${config.targetBranch} échoué`);
+    }
+  }
+
+  // Memory Layer (advisory) : résumé LLM du merge, diffusé à tous les clones
+  // avec la section temps réel « qui travaille sur quoi ».
+  let memory = null;
+  if (config.memoryLayer) {
+    const diff = await mainGit.raw(['diff', 'HEAD^1', 'HEAD']).catch(() => '');
+    memory = await updateMemoryAfterMerge({ root, config, agent, sha, diff });
+    await refreshLiveMemory(root, config);
+  }
+  return { pushError, memory };
 }
 
 /**
@@ -1064,25 +1188,13 @@ async function mergeAgentCommitImpl({ root, agent }) {
   );
   if (semantic) await recordSemanticSuccess(root);
 
-  let pushError = null;
-  if (config.autoPush) {
-    try {
-      await mainGit.push('origin', config.targetBranch);
-    } catch (error) {
-      // Le merge local reste valide : on remonte l'erreur de push sans le défaire.
-      pushError = error.message;
-      logger.error({ err: error }, `Push vers origin/${config.targetBranch} échoué`);
-    }
-  }
-
-  // Memory Layer (advisory) : résumé LLM du merge, diffusé à tous les clones
-  // avec la section temps réel « qui travaille sur quoi ».
-  let memory = null;
-  if (config.memoryLayer) {
-    const diff = await mainGit.raw(['diff', 'HEAD^1', 'HEAD']).catch(() => '');
-    memory = await updateMemoryAfterMerge({ root, config, agent, sha: agentHead, diff });
-    await refreshLiveMemory(root, config);
-  }
+  const { pushError, memory } = await finalizeMergeCommit({
+    mainGit,
+    root,
+    config,
+    agent,
+    sha: agentHead,
+  });
 
   await updateAgentMeta(root, agent, { lastMergedCommit: agentHead });
   return {
@@ -1097,6 +1209,268 @@ async function mergeAgentCommitImpl({ root, agent }) {
     renameHazards,
     memory,
     rebase,
+  };
+}
+
+/** Tickets pour lesquels --apply a un sens : un ou plusieurs fichiers en
+ * conflit, chacun résolu individuellement. GATE_FAILED (sans fusion
+ * sémantique) n'en fait pas partie : le merge lui-même n'a produit aucun
+ * conflit, c'est l'arbre fusionné dans son ensemble qui casse les tests —
+ * rien à appliquer fichier par fichier, la correction se fait côté agent. */
+const MANUALLY_APPLICABLE_REASONS = new Set([
+  'MERGE_CONFLICT',
+  'UNMERGEABLE_CONFLICT',
+  'SEMANTIC_MERGE_FAILED',
+  'SEMANTIC_GATE_FAILED',
+]);
+
+/**
+ * Applique la résolution humaine d'un ticket de conflit (règle d'or n°3 :
+ * jamais de commit final sans Test Gate vert, ici comme ailleurs).
+ *
+ * Rejoue EXACTEMENT le merge qui a produit le ticket (`ticket.sha`, pas la
+ * tête courante de l'agent qui a pu avancer depuis) : la résolution humaine
+ * a été préparée contre cette version précise, préparée via
+ * `<ticket.dir>/<fichier>.resolved` (contenu final, binaire supporté) ou
+ * `<ticket.dir>/<fichier>.delete` (résolution = suppression) pour chaque
+ * fichier de `conflictedFiles` — voir `readResolutionInputs` /
+ * `prepareResolutionScaffold` dans conflicts.js.
+ *
+ * Tourne entièrement sous `withMainLock`, du fetch au commit (Test Gate
+ * inclus) : c'est le chemin qui manquait pour qu'une résolution manuelle ne
+ * puisse jamais entrer en collision avec un merge automatique concurrent
+ * (watch, ou une autre résolution) — la seule alternative avant cette
+ * fonction était un `git merge` fait à la main HORS du verrou.
+ */
+/** @param {{root: string, ticketId: string}} params @returns {Promise<import('./types.js').ManualResolutionResult>} */
+export async function applyTicketResolution(params) {
+  return withMainLock(params.root, `resolve-apply:${params.ticketId}`, () =>
+    applyTicketResolutionImpl(params),
+  );
+}
+
+/** @returns {Promise<import('./types.js').ManualResolutionResult>} */
+async function applyTicketResolutionImpl({ root, ticketId }) {
+  await assertInitialized(root);
+  const config = await loadConfig(root);
+  const ticket = await readTicketDetail(root, ticketId);
+
+  if (ticket.resolved) {
+    throw new StriartError(`Ticket "${ticketId}" déjà marqué résolu.`, {
+      code: 'TICKET_ALREADY_RESOLVED',
+      details: { ticketId },
+    });
+  }
+  if (!MANUALLY_APPLICABLE_REASONS.has(ticket.reason) || ticket.conflictedFiles.length === 0) {
+    throw new StriartError(
+      `Ticket "${ticketId}" (${ticket.reason}) : --apply ne couvre que les conflits fichier par ` +
+        "fichier. Ici le merge n'a produit aucun conflit de ce type — corrige le code de l'agent " +
+        'puis relance un merge normal ("striart merge <agent>").',
+      { code: 'TICKET_NOT_APPLICABLE', details: { ticketId, reason: ticket.reason } },
+    );
+  }
+
+  // Certains kinds d'UNMERGEABLE_CONFLICT ne peuvent pas être résolus par un
+  // simple writeFile+add : un symlink écrit ainsi devient un fichier régulier
+  // (dégradation silencieuse du mode 120000 → 100644, invisible à l'humain),
+  // et un submodule (gitlink 160000) est un répertoire dans le worktree —
+  // writeFile y échoue avec EISDIR une fois le merge déjà ouvert. Refusé tôt,
+  // avant tout `git merge`, plutôt que découvert au milieu de l'application.
+  const UNSUPPORTED_RESOLUTION_KINDS = new Set(['symlink', 'submodule']);
+  const unmergeableKindByPath = new Map((ticket.unmergeable ?? []).map((u) => [u.path, u.kind]));
+  const unsupported = ticket.conflictedFiles.filter((f) =>
+    UNSUPPORTED_RESOLUTION_KINDS.has(unmergeableKindByPath.get(f)),
+  );
+  if (unsupported.length > 0) {
+    throw new StriartError(
+      `Ticket "${ticketId}" : ${unsupported.join(', ')} — résolution de type symlink/submodule ` +
+        'non supportée par --apply (le mode ne se restaure pas via un simple contenu de fichier). ' +
+        'Résous ces fichiers avec git directement dans le repo principal, puis "striart resolve --close ' +
+        `${ticketId}".`,
+      { code: 'UNSUPPORTED_RESOLUTION_KIND', details: { ticketId, unsupported } },
+    );
+  }
+
+  const inputs = await readResolutionInputs(root, ticketId);
+  const missing = inputs.filter((i) => i.kind === 'missing').map((i) => i.path);
+  if (missing.length > 0) {
+    const hint = missing.map((f) => path.join(ticket.dir, `${safeFileName(f)}.resolved`));
+    throw new StriartError(
+      `Résolution incomplète pour "${ticketId}" : ${missing.join(', ')}. Écris le contenu final ` +
+        `dans ${hint.join(', ')} (ou un fichier ".delete" à la place pour supprimer), ou lance ` +
+        `"striart resolve --prepare ${ticketId}" pour amorcer depuis la version de l'agent.`,
+      { code: 'RESOLUTION_INCOMPLETE', details: { ticketId, missing } },
+    );
+  }
+
+  const registry = await readRegistry(root);
+  const meta = registry[ticket.agent];
+  if (!meta) {
+    throw new StriartError(
+      `Agent inconnu : "${ticket.agent}" (clone supprimé depuis la création du ticket ?).`,
+      { code: 'AGENT_UNKNOWN', details: { agent: ticket.agent } },
+    );
+  }
+  assertNoLiveSession(ticket.agent, meta, 'Résolution manuelle');
+
+  const mainGit = simpleGit(root);
+  await assertMainReady(mainGit, config.targetBranch);
+
+  // Refetch avant de vérifier l'accessibilité : après un merge --abort, les
+  // objets fetchés restent en général en place, mais rien ne le garantit
+  // (gc). Un fetch réhydrate sans coût si c'est déjà là.
+  await mainGit.fetch(meta.path, meta.branch).catch(() => {});
+  const shaReachable = await mainGit.raw(['cat-file', '-e', ticket.sha]).then(
+    () => true,
+    () => false,
+  );
+  if (!shaReachable) {
+    throw new StriartError(
+      `Commit "${ticket.sha.slice(0, 8)}" du ticket "${ticketId}" introuvable dans le repo ` +
+        `principal — l'historique de "${ticket.agent}" a peut-être été réécrit. Ce ticket est ` +
+        'périmé, relance un merge normal pour en régénérer un à jour.',
+      { code: 'STALE_TICKET', details: { ticketId, sha: ticket.sha } },
+    );
+  }
+
+  let mergeError = null;
+  try {
+    await mainGit.raw(['merge', ticket.sha, '--no-commit', '--no-ff']);
+  } catch (error) {
+    mergeError = error;
+  }
+  const status = await mainGit.status();
+  if (status.conflicted.length === 0 && !mergeError) {
+    // Déjà mergé, ou le conflit ne se reproduit plus : rien à appliquer, et
+    // le ticket (et ses doublons éventuels) n'a plus de raison de rester ouvert.
+    await abortMerge(mainGit);
+    await closeConflictTicket(root, ticketId);
+    const staleDuplicates = (await listConflictTickets(root)).filter(
+      (t) =>
+        t.id !== ticketId &&
+        t.agent === ticket.agent &&
+        t.conflictedFiles.some((f) => ticket.conflictedFiles.includes(f)),
+    );
+    for (const dup of staleDuplicates) await closeConflictTicket(root, dup.id);
+    return { status: 'ALREADY_CLEAN', ticketId, agent: ticket.agent, sha: ticket.sha };
+  }
+
+  const expectedConflicted = new Set(ticket.conflictedFiles);
+  const actualConflicted = new Set(status.conflicted);
+  const sameSet =
+    actualConflicted.size === expectedConflicted.size &&
+    [...actualConflicted].every((f) => expectedConflicted.has(f));
+  if (!sameSet) {
+    await abortMerge(mainGit);
+    throw new StriartError(
+      `Le conflit a changé depuis la création du ticket "${ticketId}" (le repo principal a bougé ` +
+        `entre-temps) : attendu {${[...expectedConflicted].join(', ')}}, obtenu ` +
+        `{${[...actualConflicted].join(', ')}}. Ce ticket est périmé — relance un merge normal ` +
+        'pour en régénérer un à jour.',
+      {
+        code: 'STALE_TICKET',
+        details: { ticketId, expected: [...expectedConflicted], actual: [...actualConflicted] },
+      },
+    );
+  }
+
+  // Le merge est déjà ouvert (MERGE_HEAD posé) à ce stade : toute exception
+  // dans cette boucle (permission refusée, disque plein, chemin invalide)
+  // doit annuler le merge avant de remonter — sinon le repo principal reste
+  // bloqué en état "merging" jusqu'à intervention manuelle, exactement
+  // l'incident que cette fonction devait éliminer.
+  try {
+    const stageModes = parseStageModes(await mainGit.raw(['ls-files', '-u', '-z']));
+    for (const input of inputs) {
+      if (input.kind === 'delete') {
+        await mainGit.raw(['rm', '-f', '--ignore-unmatch', '--', input.path]);
+        continue;
+      }
+      if (input.kind === 'missing') continue; // impossible ici (garde plus haut) — pour le typage
+      await writeFile(path.join(root, input.path), input.content);
+      await mainGit.add(input.path);
+      const modes = stageModes[input.path] ?? {};
+      // writeFile ne préserve pas le bit exécutable (et il n'existe pas sur
+      // NTFS) : reposé dans l'index si l'un des deux côtés l'avait.
+      if (isExecutableMode(modes.ours) || isExecutableMode(modes.theirs)) {
+        await mainGit.raw(['update-index', '--chmod=+x', '--', input.path]);
+      }
+    }
+  } catch (error) {
+    await abortMerge(mainGit);
+    throw error;
+  }
+
+  const stillConflicted = (await mainGit.status()).conflicted;
+  if (stillConflicted.length > 0) {
+    await abortMerge(mainGit);
+    throw new StriartError(
+      `Fichier(s) encore en conflit après application : ${stillConflicted.join(', ')}.`,
+      { code: 'RESOLUTION_INCOMPLETE', details: { ticketId, stillConflicted } },
+    );
+  }
+
+  const gate = await runTestGate({
+    cwd: root,
+    testCommand: config.testCommand,
+    timeoutMs: config.testTimeoutMs,
+  });
+  if (!gate.success) {
+    await abortMerge(mainGit);
+    // Pas un échec du LLM : le compteur de fusion sémantique n'est pas touché,
+    // une résolution manuelle ratée ne doit pas pousser vers le mode manuel.
+    return { status: 'GATE_FAILED', ticketId, agent: ticket.agent, sha: ticket.sha, gate };
+  }
+
+  await mainGit.commit(
+    `merge(striart): ${ticket.agent} ${ticket.branch} (${ticket.sha.slice(0, 8)}) ` +
+      `[résolution manuelle: ${ticketId}]`,
+  );
+  await recordSemanticSuccess(root);
+
+  const { pushError, memory } = await finalizeMergeCommit({
+    mainGit,
+    root,
+    config,
+    agent: ticket.agent,
+    sha: ticket.sha,
+  });
+
+  await updateAgentMeta(root, ticket.agent, { lastMergedCommit: ticket.sha });
+
+  await closeConflictTicket(root, ticketId);
+  // Referme aussi les autres tickets ouverts du même agent portant sur (au
+  // moins un) des mêmes fichiers : des tentatives successives du même
+  // conflit (l'agent a recommité avant que le précédent soit traité), pas
+  // des conflits distincts.
+  const otherOpenTickets = (await listConflictTickets(root)).filter(
+    (t) =>
+      t.id !== ticketId &&
+      t.agent === ticket.agent &&
+      t.conflictedFiles.some((f) => expectedConflicted.has(f)),
+  );
+  for (const other of otherOpenTickets) await closeConflictTicket(root, other.id);
+
+  await emitStriartEvent(config, {
+    type: 'merge:manual-resolution',
+    agent: ticket.agent,
+    ticketId,
+    files: ticket.conflictedFiles,
+    message:
+      `✅ [Striart] Résolution manuelle appliquée pour ${ticket.agent} (ticket ${ticketId}) — ` +
+      `${ticket.conflictedFiles.join(', ')}.`,
+  });
+
+  return {
+    status: 'MERGED',
+    ticketId,
+    agent: ticket.agent,
+    sha: ticket.sha,
+    gate,
+    pushError,
+    memory,
+    resolvedFiles: ticket.conflictedFiles,
+    closedTickets: [ticketId, ...otherOpenTickets.map((t) => t.id)],
   };
 }
 
@@ -1154,6 +1528,11 @@ async function stopAgentImpl({ root, agent, force = false }) {
   }
 
   await removeAgentFromRegistry(root, agent);
+  // Best-effort : un hôte de pty absent (agent jamais ouvert via --open) ou
+  // déjà mort ne doit jamais faire échouer un stop par ailleurs valide.
+  await stopPtyHost(root, agent).catch((error) => {
+    logger.warn({ agent, err: error.message }, "Arrêt de l'hôte de pty ignoré (best-effort)");
+  });
   const { started, stillWaiting } = await retryQueue({ root });
   return { agent, clonePath: meta.path, started, stillWaiting };
 }
@@ -1194,6 +1573,7 @@ async function retryQueueImpl({ root }) {
             predictedFiles: task.predictedFiles,
             command: task.command ?? null,
             secretPatterns: config.secretPatterns,
+            force: task.force ?? false,
           })
         : await createAgent({
             root,
@@ -1203,17 +1583,22 @@ async function retryQueueImpl({ root }) {
             command: task.command ?? null,
             cloneFilter: config.cloneFilter,
             secretPatterns: config.secretPatterns,
+            force: task.force ?? false,
           });
     } catch (error) {
       // Une archive devenue inutilisable entre la mise en file et le
       // dégagement (travail non commité apparu, activité disque, clone
       // nettoyé) ne doit pas faire échouer TOUT le passage de la file : la
       // tâche reste en attente avec le motif, les suivantes sont examinées.
-      if (error instanceof StriartError && error.code?.startsWith('REUSE_')) {
-        logger.warn(
-          { err: error, task: task.id },
-          'Réutilisation impossible, tâche maintenue en file',
-        );
+      // HISTORICAL_SECRETS_FOUND rejoint ce même traitement : un secret entré
+      // dans l'historique du repo PENDANT que la tâche attendait (sans
+      // `force` posé à l'enfilage) ne doit geler que cette tâche précise, pas
+      // tout le dégagement de la file.
+      if (
+        error instanceof StriartError &&
+        (error.code?.startsWith('REUSE_') || error.code === 'HISTORICAL_SECRETS_FOUND')
+      ) {
+        logger.warn({ err: error, task: task.id }, 'Démarrage impossible, tâche maintenue en file');
         stillWaiting.push({ ...task, collisions, blockedReason: error.code });
         continue;
       }

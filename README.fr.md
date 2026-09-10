@@ -110,7 +110,7 @@ La documentation complète vit dans **[docs/fr/](docs/fr/README.md)**
 |---|---|
 | [Démarrage](docs/fr/demarrage.md) | Prérequis, installation, `striart init`, guide « 3 agents en parallèle ». |
 | [Architecture](docs/fr/architecture.md) | Clones vs worktrees, chaîne sérialisée, flow d'un commit, les 6 statuts de sync, verrous. |
-| [Commandes](docs/fr/commandes.md) | Les 21 commandes en détail : options, garde-fous, codes de refus. |
+| [Commandes](docs/fr/commandes.md) | Les 22 commandes en détail : options, garde-fous, codes de refus. |
 | [Configuration](docs/fr/configuration.md) | Référence complète de `striart.config.mjs`, providers LLM, prompts. |
 | [Branches et pipeline](docs/fr/branches.md) | `targetBranch` sur n'importe quelle branche (`dev`, `master`…), pipeline staging → main. |
 | [Modes d'exécution](docs/fr/modes-execution.md) | Supervisé, autonome, ACP, semi-autonome (arbitrage des permissions). |
@@ -138,8 +138,8 @@ build — `bin` pointe sur la source.
 
 ```bash
 npm install
-npm run test:unit        # 244 tests, ~20 s — la boucle de dev
-npm run test:integration # 178 tests, ~7 min — vrais repos Git temporaires
+npm run test:unit        # 246 tests, ~20 s — la boucle de dev
+npm run test:integration # 216 tests, ~7 min — vrais repos Git temporaires
 npm test                 # les deux
 npm run lint             # ESLint (correctness) + Prettier --check
 npm run test:ci          # typecheck + tout + coverage

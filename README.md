@@ -110,7 +110,7 @@ The complete documentation lives in **[docs/en/](docs/en/README.md)**
 |---|---|
 | [Getting started](docs/en/getting-started.md) | Prerequisites, installation, `striart init`, the "3 agents in parallel" guide. |
 | [Architecture](docs/en/architecture.md) | Clones vs worktrees, serialized chain, commit flow, the 6 sync statuses, locks. |
-| [Commands](docs/en/commands.md) | The 21 commands in detail: options, safeguards, refusal codes. |
+| [Commands](docs/en/commands.md) | The 22 commands in detail: options, safeguards, refusal codes. |
 | [Configuration](docs/en/configuration.md) | Full `striart.config.mjs` reference, LLM providers, prompts. |
 | [Branches and pipeline](docs/en/branches.md) | `targetBranch` on any branch (`dev`, `master`…), staging → main pipeline. |
 | [Execution modes](docs/en/execution-modes.md) | Supervised, autonomous, ACP, semi-autonomous (permission arbitration). |
@@ -138,8 +138,8 @@ points at the source.
 
 ```bash
 npm install
-npm run test:unit        # 244 tests, ~20 s — the dev loop
-npm run test:integration # 178 tests, ~7 min — real temporary Git repos
+npm run test:unit        # 246 tests, ~20 s — the dev loop
+npm run test:integration # 216 tests, ~7 min — real temporary Git repos
 npm test                 # both
 npm run lint             # ESLint (correctness) + Prettier --check
 npm run test:ci          # typecheck + everything + coverage

@@ -39,6 +39,7 @@ Sources d'entrée non fiables, traitées comme telles :
 | Plan YAML (`striart plan`) | donnée, jamais code | parse pur, validation complète avant tout effet ; une tâche autonome ne référence qu'un `profile` défini en config, jamais une commande |
 | Requêtes fs d'un agent ACP (chemins) | identifiant à contraindre | bornées au clone — chemin absolu tiers ou `..` refusé |
 | Chemin du repo cible | hors du contrôle de Striart | refus si caractères cassant le shell (terminal) |
+| Message du bus `@agent` (`striart watch --ui`) | entrée terminal directe (comme `--open`), jamais du code | canal d'attache local, nommé par agent (validé, motif contraint) ; `ensurePtyHost` exige un agent réellement inscrit au registre |
 
 ## Périmètre — ce que Striart promet
 
@@ -58,6 +59,18 @@ contourner est une vulnérabilité à signaler :
   défense contre le DNS rebinding, où un site tiers fait pointer son domaine
   vers 127.0.0.1 pour lire l'état du repo à travers le navigateur. Les actions
   mutantes exigent en plus l'en-tête anti-CSRF `X-Striart`.
+- **Le canal d'attache du pty possédé (`--open`, `striart attach`, le bus
+  `@agent` de `watch --ui`) ne sort jamais de la machine.** Socket Unix ou
+  named pipe Windows, jamais une adresse réseau. Côté POSIX, le fichier du
+  socket est explicitement mis à `0600` (propriétaire seul) après ouverture
+  — sans ce durcissement explicite, l'umask du process aurait pu laisser un
+  autre utilisateur local (sans accès en écriture au repo, donc en dehors du
+  reste du modèle de menace) s'y attacher et injecter des frappes dans une
+  session en cours. Fenêtre TOCTOU résiduelle assumée : le fichier existe
+  brièvement avant le `chmod`, sur la même machine locale. Côté Windows, la
+  DACL par défaut des named pipes créées par Node n'a **pas** été vérifiée
+  indépendamment — à durcir/documenter avant de considérer ce canal aussi
+  sûr sous Windows que sous POSIX.
 - **Les secrets trackés sont retirés des clones agents** (`secretPatterns`,
   sparse-checkout) — un échec de ce nettoyage fait échouer le `start`, jamais
   de dégradation silencieuse.
@@ -113,6 +126,31 @@ accepter.
   modèle), mais à savoir sur une machine partagée. Comme le reste de l'ACP :
   défense en profondeur, pas une sandbox — l'outil garde son propre accès
   disque et réseau hors protocole.
+- **Le bus `@agent` de `watch --ui` a le même pouvoir que taper dans le
+  terminal.** Un message envoyé via `@agent instruction` est écrit tel quel
+  dans le pty de l'agent — c'est *exactement* ce que fait `--open` ou
+  `attach`, juste depuis une autre fenêtre. Ce n'est pas une élévation de
+  privilège : quiconque peut envoyer un message a, de fait, déjà accès local
+  à `watch --ui` lui-même (même frontière que le dashboard). N'exposez
+  jamais `watch --ui`, `attach`, ou le dossier `.striart/pty/` à un accès
+  distant — rien ici n'est prévu pour ça (cf. le canal d'attache ci-dessus).
+  Portée actuelle, assumée : seuls les agents **supervisés** (mode
+  `attended`) sont adressables — une session autonome (argv ou ACP) est
+  refusée explicitement, jamais silencieusement (voir roadmap, Phase E).
+- **"!" dans `watch --ui` lance un VRAI shell — même frontière que le bus
+  `@agent` ci-dessus, poussée un cran plus loin.** `runShellCommand`
+  (`watch-ui.ts`) exécute la commande via le shell par défaut de la machine
+  (PowerShell sous Windows, `$SHELL`/bash ailleurs — même `defaultShell()`
+  que pour héberger les agents), pas via l'argv contraint `striart <tokens>`
+  qu'utilise le reste du champ : pipes, redirections, n'importe quel binaire
+  installé. Même raisonnement que le bus `@agent` : l'entrée vient
+  exclusivement des frappes locales de ce panneau, jamais d'un agent, d'un
+  fichier ou d'un réseau, et quiconque peut taper ici a de toute façon déjà
+  un vrai shell sur cette machine (l'adversaire réaliste du modèle de menace
+  n'est pas quelqu'un qui a déjà un shell local, cf. « Modèle de menace »
+  plus haut). Ni argument de commande ni sortie ne repassent par un chemin
+  de fichier ou une variable d'environnement Striart — c'est un raccourci
+  vers un vrai terminal, pas une nouvelle capacité.
 - **Le webhook part vers l'URL que vous configurez.** `notifiers` peut pointer
   vers n'importe quelle URL, y compris interne (pas de filtre SSRF) : c'est
   votre config, pour votre usage. Ne mettez pas dans `notifiers` une URL reçue

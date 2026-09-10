@@ -66,6 +66,13 @@ on a task branch `striart/<agent>/task-<uuid>`. The orchestrator runs
 `git fetch ../agent-a/` then merges into the main repo. **Tracked** secrets
 (`secretPatterns` in the config: `.env`, `*.pem`…) are removed from clone
 worktrees via sparse-checkout; untracked files are never cloned by git.
+`.git/` objects, though, are hardlinked in full (see above): a **historical**
+secret — deleted since, absent from both the worktree and today's tracked
+files — remains readable via `git show <sha>:<file>`. `createAgent`/
+`reuseAgent` scan the whole history against `secretPatterns` before cloning
+and refuse (`HISTORICAL_SECRETS_FOUND`, fail closed, no clone created) if a
+historical path matches; `--force` (`striart start`, `striart run`, `striart
+run --autonomous`) overrides it as a conscious decision.
 
 ## The `.striart/` layout
 
@@ -174,13 +181,49 @@ postponed needlessly; never a false "safe".
 
 The serialized chain protects *within* the `watch` process. Across processes
 (a manual `striart merge` while `watch` runs, two CLIs…), every mutating
-operation (`run`, `merge`, `sync`, `stop`, `promote`, queue retry) goes
-through a **file lock** `.striart/main.lock` created in exclusive `wx` mode —
-atomicity is guaranteed by the OS kernel. The lock is reentrant within a
-process, waits its turn by polling (2 min timeout), **automatically breaks
-orphaned locks** (dead holder process, or 30 min TTL exceeded — a defense
-against PID reuse), and on every acquisition, any merge abandoned by a
-previous crash (orphaned `MERGE_HEAD`) is cleanly aborted.
+operation (`run`, `merge`, `sync`, `stop`, `promote`, `resolve --apply`, queue
+retry) goes through a **file lock** `.striart/main.lock` created in exclusive
+`wx` mode — atomicity is guaranteed by the OS kernel. The lock is reentrant
+within a process, waits its turn by polling (2 min timeout), **automatically
+breaks orphaned locks** (dead holder process, or 30 min TTL exceeded — a
+defense against PID reuse), and on every acquisition — unless a main session
+is declared alive, see below —, any merge abandoned by a previous crash
+(orphaned `MERGE_HEAD`) is cleanly aborted. `resolve --apply` (human
+resolution of a conflict ticket) runs entirely under this lock, Test Gate
+included — the path that was missing so a manual resolution could no
+longer collide with a concurrent automatic merge (a real incident: a `git
+merge` done by hand outside Striart's supervision while a `striart watch` was
+running).
+
+## Main session (the main repo itself, outside clones)
+
+`sessionPid` (the `agents.json` registry) protects each **clone** while its
+autonomous session is alive — but nothing protected the **main repo itself**:
+an agent launched directly in its worktree, or a human editing/resolving a
+conflict by hand without committing. `main-session.js` closes that gap with a
+singleton `.striart/main-session.json` (`{pid, reason, startedAt}`, a single
+file for the whole repo — not one per agent) and two producers:
+`runMainSession` (`striart run --on-main`, publishing the PID of the
+**orchestrator process itself**, not the spawned agent's) and `striart lock
+--start` (human editing, the calling shell's PID by default).
+
+`assertNoLiveMainSession` (`lock.js`) is called inside `withMainLock` **right
+before** the orphaned-merge recovery above: while the declared PID is alive,
+every mutating operation is refused (`MAIN_SESSION_LIVE`) — without this
+guard, the orphaned-`MERGE_HEAD` recovery would treat an in-progress manual
+resolution as crash debris and abort it (the real incident that motivated the
+guard: a manual resolution interrupted by `recoverOrphanMerge` while an
+active `striart watch` held the lock). A dead PID blocks nothing (re-read on
+every call, no active cleanup required); `stopMainSession` (the escape hatch,
+`striart lock --stop`) is always allowed, even if the declared PID is still
+alive. **No TTL** here (unlike `main.lock`): a deliberate choice — a session
+on the main repo can legitimately run for hours, and an automatic circuit
+breaker would risk disarming a still-real session.
+
+Display surfaces only (no way to start a session from them): `striart doctor`
+(the "Main repo" check), the dashboard banner ("🔓 Release" button when
+occupied), and MCP's `striart_status` (`mainSession` field, `alive` computed
+server-side).
 
 ## Why serialization makes auto-stash safe
 

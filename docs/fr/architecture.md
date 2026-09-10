@@ -68,7 +68,14 @@ orphelins, sur une branche de tâche `striart/<agent>/task-<uuid>`.
 L'orchestrateur fait `git fetch ../agent-a/` puis merge dans le repo
 principal. Les secrets **trackés** (`secretPatterns` en config : `.env`,
 `*.pem`…) sont retirés du worktree des clones via sparse-checkout ; les
-untracked ne sont jamais clonés par git.
+untracked ne sont jamais clonés par git. Les objets `.git/`, eux, sont
+hardlinkés en entier (voir plus haut) : un secret **historique** — supprimé
+depuis, absent du worktree et du tracké actuel — reste lisible via `git show
+<sha>:<fichier>`. `createAgent`/`reuseAgent` scannent tout l'historique contre
+`secretPatterns` avant de cloner et refusent (`HISTORICAL_SECRETS_FOUND`,
+fail closed, aucun clone créé) si un chemin historique matche ; `--force`
+(`striart start`, `striart run`, `striart run --autonomous`) passe outre en
+connaissance de cause.
 
 ## Le layout `.striart/`
 
@@ -179,14 +186,51 @@ reporté inutilement, jamais un faux « safe ».
 
 La chaîne sérialisée protège *dans* le processus `watch`. Entre processus
 (un `striart merge` manuel pendant que `watch` tourne, deux CLI…), toute
-opération mutante (`run`, `merge`, `sync`, `stop`, `promote`, retry de la
-file) passe par un **verrou fichier** `.striart/main.lock` créé en mode
+opération mutante (`run`, `merge`, `sync`, `stop`, `promote`, `resolve --apply`,
+retry de la file) passe par un **verrou fichier** `.striart/main.lock` créé en mode
 exclusif `wx` — l'atomicité est garantie par le noyau de l'OS. Le verrou
 est réentrant dans un même processus, attend son tour par polling (timeout
 2 min), **casse automatiquement les verrous orphelins** (processus détenteur
 mort, ou TTL de 30 min dépassé — parade à la réutilisation de PID), et à
-chaque acquisition, un éventuel merge abandonné par un crash précédent
-(`MERGE_HEAD` orphelin) est annulé proprement.
+chaque acquisition — sauf session principale déclarée vivante, voir
+ci-dessous —, un éventuel merge abandonné par un crash précédent
+(`MERGE_HEAD` orphelin) est annulé proprement. `resolve --apply` (résolution
+humaine d'un ticket de conflit) tourne entièrement sous ce verrou, Test Gate
+inclus — c'est le chemin qui manquait pour qu'une résolution manuelle ne
+puisse plus entrer en collision avec un merge automatique concurrent (un
+incident réel : un `git merge` fait à la main hors du cadre de Striart pendant
+qu'un `striart watch` tournait).
+
+## Session principale (repo principal, hors clones)
+
+`sessionPid` (registre `agents.json`) protège chaque **clone** tant que sa
+session autonome vit — mais rien ne protégeait le **repo principal
+lui-même** : un agent lancé directement dans son worktree, ou un humain qui
+édite/résout un conflit à la main sans committer. `main-session.js` comble ce
+trou avec un singleton `.striart/main-session.json`
+(`{pid, reason, startedAt}`, un seul fichier pour tout le repo — pas un par
+agent) et deux producteurs : `runMainSession` (`striart run --on-main`, publie
+le PID du **process orchestrateur lui-même**, pas celui de l'agent spawné) et
+`striart lock --start` (édition humaine, PID du shell appelant par défaut).
+
+`assertNoLiveMainSession` (`lock.js`) est appelée dans `withMainLock` **juste
+avant** la récupération de merge orphelin ci-dessus : tant que le PID déclaré
+vit, toute opération mutante est refusée (`MAIN_SESSION_LIVE`) — sans cette
+garde, la récupération de `MERGE_HEAD` orphelin traiterait une résolution
+manuelle en cours comme un débris de crash et l'annulerait (l'incident réel
+qui a motivé la garde : une résolution manuelle interrompue par
+`recoverOrphanMerge` pendant qu'un `striart watch` actif prenait le verrou).
+Un PID mort ne bloque rien (relu à chaque appel, pas de nettoyage actif
+requis) ; `stopMainSession` (sortie de secours, `striart lock --stop`) est
+toujours permis, même si le PID déclaré vit encore. **Aucun TTL** ici
+(contrairement à `main.lock`) : choix délibéré — une session sur le principal
+peut légitimement durer des heures, et un disjoncteur automatique risquerait
+de désarmer une session encore réelle.
+
+Surfaces d'affichage uniquement (aucun démarrage possible depuis elles) :
+`striart doctor` (check « Repo principal »), la bannière du dashboard (bouton
+« 🔓 Libérer » si occupé), et `striart_status` côté MCP (champ `mainSession`,
+`alive` calculé côté serveur).
 
 ## Pourquoi la sérialisation rend le stash auto sûr
 

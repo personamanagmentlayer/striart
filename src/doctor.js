@@ -16,6 +16,8 @@ import { pingOllama } from './ollama.js';
 import { dirStats, formatBytes, listAgents, striartDir } from './clone.js';
 import { listConflictTickets } from './conflicts.js';
 import { readState } from './state.js';
+import { readMainSession } from './main-session.js';
+import { isProcessAlive } from './process-tree.js';
 import { readQueue } from './queue.js';
 
 /** Version minimale pour sparse-checkout --no-cone (nettoyage des secrets). */
@@ -191,6 +193,25 @@ export async function runDoctor(cwd = process.cwd()) {
         ? 'main.lock présent — opération en cours, ou verrou orphelin (récupéré automatiquement au prochain run)'
         : 'libre',
     );
+  }
+
+  // 7bis. Session principale déclarée (édition directe / agent hors clone).
+  if (root && initialized) {
+    const session = await readMainSession(root).catch(() => null);
+    if (!session) {
+      add('main-session', 'Repo principal', 'ok', 'libre');
+    } else {
+      const alive = isProcessAlive(session.pid);
+      add(
+        'main-session',
+        'Repo principal',
+        alive ? 'warn' : 'ok',
+        alive
+          ? `occupé par "${session.reason}" (pid ${session.pid}) depuis ${session.startedAt} — ` +
+              'merge/sync/promote/resolve --apply refusent tant que ce process vit'
+          : `session déclarée mais PID ${session.pid} mort — se libère à la prochaine opération`,
+      );
+    }
   }
 
   // 8. Agents, file d'attente, espace disque.

@@ -9,7 +9,7 @@ import { StriartError } from './errors.js';
  * ticket.json (métadonnées) + test-output.log (sortie du Test Gate).
  * C'est le fallback humain obligatoire (règle d'or n°4).
  */
-function safeFileName(filePath) {
+export function safeFileName(filePath) {
   return filePath.replaceAll(/[\\/]/g, '__');
 }
 
@@ -148,4 +148,85 @@ export async function closeConflictTicket(root, ticketId) {
   }
   await writeFile(path.join(ticket.dir, 'RESOLVED'), `${new Date().toISOString()}\n`, 'utf8');
   return { ...ticket, resolved: true };
+}
+
+/**
+ * Contenu final que l'humain a préparé pour chaque fichier en conflit d'un
+ * ticket, à côté des sandbox `.base`/`.ours`/`.theirs` déjà écrites par
+ * `createConflictTicket` :
+ *  - `<prefix>.resolved` : contenu final du fichier (binaire supporté, lu en
+ *    Buffer — un lockfile ou une image n'est pas du texte) ;
+ *  - `<prefix>.delete` (contenu ignoré) : résolution = supprimer le fichier.
+ * `striart resolve --apply` refuse tant qu'il en manque un pour un fichier
+ * conflictuel — pas de fusion partielle silencieuse.
+ * @param {string} root @param {string} ticketId
+ * @returns {Promise<import('./types.js').ResolutionInput[]>}
+ */
+export async function readResolutionInputs(root, ticketId) {
+  const tickets = await listConflictTickets(root, { includeResolved: true });
+  const ticket = tickets.find((t) => t.id === ticketId);
+  if (!ticket) {
+    throw new StriartError(`Ticket inconnu : "${ticketId}".`, {
+      code: 'TICKET_UNKNOWN',
+      details: { ticketId },
+    });
+  }
+  return Promise.all(
+    (ticket.conflictedFiles ?? []).map(async (filePath) => {
+      const prefix = safeFileName(filePath);
+      const deleteMarker = await stat(path.join(ticket.dir, `${prefix}.delete`)).then(
+        () => true,
+        () => false,
+      );
+      if (deleteMarker) return { path: filePath, kind: 'delete' };
+      const content = await readFile(path.join(ticket.dir, `${prefix}.resolved`)).catch(() => null);
+      if (content === null) return { path: filePath, kind: 'missing' };
+      return { path: filePath, kind: 'content', content };
+    }),
+  );
+}
+
+/**
+ * Amorce `<prefix>.resolved` pour chaque fichier en conflit qui n'a encore
+ * aucune résolution préparée, à partir de `.theirs` (repli `.ours`, puis
+ * `.base`) — un point de départ à éditer, jamais une résolution automatique :
+ * un fichier déjà marqué (`.resolved` ou `.delete`) n'est jamais écrasé.
+ * @param {string} root @param {string} ticketId
+ * @returns {Promise<Array<{path: string, created: boolean, source: 'theirs' | 'ours' | 'base' | null}>>}
+ */
+export async function prepareResolutionScaffold(root, ticketId) {
+  const tickets = await listConflictTickets(root, { includeResolved: true });
+  const ticket = tickets.find((t) => t.id === ticketId);
+  if (!ticket) {
+    throw new StriartError(`Ticket inconnu : "${ticketId}".`, {
+      code: 'TICKET_UNKNOWN',
+      details: { ticketId },
+    });
+  }
+  return Promise.all(
+    (ticket.conflictedFiles ?? []).map(async (filePath) => {
+      const prefix = safeFileName(filePath);
+      const resolvedPath = path.join(ticket.dir, `${prefix}.resolved`);
+      const alreadyMarked =
+        (await stat(resolvedPath).then(
+          () => true,
+          () => false,
+        )) ||
+        (await stat(path.join(ticket.dir, `${prefix}.delete`)).then(
+          () => true,
+          () => false,
+        ));
+      if (alreadyMarked) return { path: filePath, created: false, source: null };
+      for (const source of /** @type {const} */ (['theirs', 'ours', 'base'])) {
+        const content = await readFile(path.join(ticket.dir, `${prefix}.${source}`)).catch(
+          () => null,
+        );
+        if (content !== null) {
+          await writeFile(resolvedPath, content);
+          return { path: filePath, created: true, source };
+        }
+      }
+      return { path: filePath, created: false, source: null };
+    }),
+  );
 }

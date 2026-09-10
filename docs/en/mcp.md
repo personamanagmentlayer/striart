@@ -11,18 +11,20 @@ a *client* of Striart instead of bypassing it.
 claude mcp add striart -- striart mcp
 ```
 
-## The five tools
+## The seven tools
 
 Mapped directly onto the orchestrator — same locks, same safeguards as the
 CLI and the dashboard:
 
 | Tool | Nature | Role |
 |---|---|---|
-| `striart_status` | read | Agent state (status, mode, branch, pending commits). |
+| `striart_status` | read | Agent state (status, mode, branch, pending commits) + `mainSession` (session declared on the main repo, `alive` computed). |
 | `striart_queue` | read | The scheduler queue and its blockers. |
 | `striart_run` | mutating | Launch a task through the Router (or queue it). |
 | `striart_merge` | mutating | Merge an agent's latest commit (full pipeline: rebase, semantic merge, Test Gate). |
-| `striart_resolve` | mutating | Manage conflict tickets. |
+| `striart_resolve` | mutating | Mark a ticket resolved (without going through the Test Gate — after fixing the conflict by hand). |
+| `striart_resolve_prepare` | mutating | Seed `<file>.resolved` for every conflicted file of the ticket, from the agent's version (falling back to ours/base) — never overwritten if already prepared. |
+| `striart_resolve_apply` | mutating | Replay the ticket's exact merge with the prepared resolutions (`.resolved`/`.delete`), under the blocking Test Gate — commit and close if green, ticket left open otherwise (manual mode untouched). |
 
 ## The orchestration depth cap
 

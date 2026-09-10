@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createTempRepo } from '../helpers/temp-repo.js';
 import { initStriart } from '../../src/init.js';
@@ -133,5 +134,69 @@ describe('striart run --after (dépendances de tâches)', () => {
     await expect(
       runTask({ root: repo.root, agent: 'z', prompt: 'toiture', after: 'w' }),
     ).rejects.toMatchObject({ code: 'AFTER_CYCLE' });
+  });
+});
+
+describe('striart run --force (secrets historiques) à travers la file', () => {
+  let repo;
+
+  beforeEach(async () => {
+    repo = await createTempRepo();
+    await initStriart(repo.root);
+    // Fichiers IDENTIQUES par prompt : collision garantie entre 'a' et 'b'.
+    mockRouter({ fondation: ['shared.js'], facade: ['shared.js'] });
+  });
+
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    await repo.cleanup();
+  });
+
+  /** .env tracké puis retiré : absent du worktree actuel, présent dans
+   *  l'historique — secretPatterns par défaut (config.js) inclut '.env'. */
+  async function commitThenRemoveEnv() {
+    await writeFile(path.join(repo.root, '.env'), 'API_KEY=super-secret\n');
+    await repo.git.raw(['add', '-f', '.env']);
+    await repo.git.commit('feat: ajoute .env par erreur');
+    await repo.git.rm(['.env']);
+    await repo.git.commit('fix: retire .env de l’historique courant');
+  }
+
+  it('force posé à l’enfilage survit au dégagement de la file (HISTORICAL_SECRETS_FOUND contourné)', async () => {
+    // 'a' démarre AVANT que le secret n'entre dans l'historique : seul le
+    // dégagement (différé) de 'b' doit affronter le garde-fou.
+    const a = await runTask({ root: repo.root, agent: 'a', prompt: 'fondation' });
+    expect(a.status).toBe('STARTED');
+    await commitThenRemoveEnv();
+
+    const b = await runTask({ root: repo.root, agent: 'b', prompt: 'facade', force: true });
+    expect(b.status).toBe('QUEUED');
+    expect(b.task.force).toBe(true);
+    expect((await readQueue(repo.root))[0].force).toBe(true);
+
+    // Fin de 'a' → déblocage automatique de 'b', malgré le secret historique.
+    const stopped = await stopAgent({ root: repo.root, agent: 'a' });
+    expect(stopped.started.map((s) => s.task.agent)).toEqual(['b']);
+    expect((await readRegistry(repo.root)).b).toBeDefined();
+  });
+
+  it('sans force : la tâche reste ajournée (HISTORICAL_SECRETS_FOUND), sans casser le dégagement des autres', async () => {
+    const a = await runTask({ root: repo.root, agent: 'a', prompt: 'fondation' });
+    expect(a.status).toBe('STARTED');
+    await commitThenRemoveEnv();
+
+    const b = await runTask({ root: repo.root, agent: 'b', prompt: 'facade' });
+    expect(b.status).toBe('QUEUED');
+    expect(b.task.force).toBe(false);
+
+    const stopped = await stopAgent({ root: repo.root, agent: 'a' });
+    expect(stopped.started).toEqual([]);
+    expect(stopped.stillWaiting.map((t) => t.agent)).toEqual(['b']);
+    expect(stopped.stillWaiting[0].blockedReason).toBe('HISTORICAL_SECRETS_FOUND');
+    expect((await readRegistry(repo.root)).b).toBeUndefined();
+
+    // La tâche reste en file (pas perdue) pour un futur `queue --retry`
+    // une fois le secret révoqué ou --force ajouté manuellement.
+    expect((await readQueue(repo.root)).map((t) => t.agent)).toEqual(['b']);
   });
 });

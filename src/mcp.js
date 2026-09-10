@@ -1,8 +1,19 @@
 import readline from 'node:readline';
 import { listAgents } from './clone.js';
-import { getQueueDashboard, mergeAgentCommit, runTask } from './orchestrator.js';
-import { closeConflictTicket, listConflictTickets } from './conflicts.js';
+import {
+  applyTicketResolution,
+  getQueueDashboard,
+  mergeAgentCommit,
+  runTask,
+} from './orchestrator.js';
+import {
+  closeConflictTicket,
+  listConflictTickets,
+  prepareResolutionScaffold,
+} from './conflicts.js';
 import { readState } from './state.js';
+import { readMainSession } from './main-session.js';
+import { isProcessAlive } from './process-tree.js';
 import { watchDaemonStatus } from './daemon.js';
 import { StriartError } from './errors.js';
 import { logger } from './logger.js';
@@ -48,14 +59,22 @@ const TOOLS = {
     mutating: false,
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     handler: async (root) => {
-      const [agents, queue, tickets, state, daemon] = await Promise.all([
+      const [agents, queue, tickets, state, daemon, mainSessionRaw] = await Promise.all([
         listAgents(root),
         getQueueDashboard({ root }),
         listConflictTickets(root),
         readState(root),
         watchDaemonStatus({ root }),
+        readMainSession(root),
       ]);
-      return { agents, queue, tickets, state, daemon };
+      // `alive` calculé ici plutôt que laissé au consommateur : dashboard,
+      // doctor et le CLI le font déjà chacun de leur côté — un client MCP ne
+      // doit pas avoir à refaire ce calcul (ni risquer de l'oublier et
+      // traiter tout mainSession non nul comme "occupé").
+      const mainSession = mainSessionRaw
+        ? { ...mainSessionRaw, alive: isProcessAlive(mainSessionRaw.pid) }
+        : null;
+      return { agents, queue, tickets, state, daemon, mainSession };
     },
   },
   striart_run: {
@@ -106,6 +125,30 @@ const TOOLS = {
       additionalProperties: false,
     },
     handler: (root, { ticketId }) => closeConflictTicket(root, ticketId),
+  },
+  striart_resolve_prepare: {
+    description:
+      "Amorce un fichier '<chemin>.resolved' par fichier en conflit du ticket, à partir de la version de l'agent (repli ours/base) — un point de départ à éditer avant striart_resolve_apply. N'écrase jamais une résolution déjà préparée.",
+    mutating: true,
+    inputSchema: {
+      type: 'object',
+      properties: { ticketId: { type: 'string', description: 'Id du ticket à préparer.' } },
+      required: ['ticketId'],
+      additionalProperties: false,
+    },
+    handler: (root, { ticketId }) => prepareResolutionScaffold(root, ticketId),
+  },
+  striart_resolve_apply: {
+    description:
+      "Rejoue le merge exact d'un ticket de conflit avec les résolutions préparées (fichiers '.resolved'/'.delete' dans le dossier du ticket), sous le Test Gate bloquant — commit et ferme le ticket (et ses doublons) si vert, sinon laisse le ticket ouvert sans toucher au mode manuel.",
+    mutating: true,
+    inputSchema: {
+      type: 'object',
+      properties: { ticketId: { type: 'string', description: 'Id du ticket à résoudre.' } },
+      required: ['ticketId'],
+      additionalProperties: false,
+    },
+    handler: (root, { ticketId }) => applyTicketResolution({ root, ticketId }),
   },
 };
 

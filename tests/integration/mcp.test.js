@@ -68,7 +68,7 @@ describe('striart mcp (intégration stdio)', () => {
     expect(responses).toHaveLength(4); // la notification ne répond pas
 
     expect(byId.get(1).result.serverInfo.name).toBe('striart');
-    expect(byId.get(2).result.tools).toHaveLength(5);
+    expect(byId.get(2).result.tools).toHaveLength(7);
 
     const status = JSON.parse(byId.get(3).result.content[0].text);
     expect(status.agents.map((a) => a.name)).toContain('agent-mcp');

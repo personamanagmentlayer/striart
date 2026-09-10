@@ -11,18 +11,20 @@ Cursor et tout hôte MCP peuvent piloter l'orchestrateur — l'agent devient un
 claude mcp add striart -- striart mcp
 ```
 
-## Les cinq outils
+## Les sept outils
 
 Mappés directement sur l'orchestrateur — mêmes verrous, mêmes garde-fous que
 le CLI et le dashboard :
 
 | Outil | Nature | Rôle |
 |---|---|---|
-| `striart_status` | lecture | État des agents (statut, mode, branche, commits en attente). |
+| `striart_status` | lecture | État des agents (statut, mode, branche, commits en attente) + `mainSession` (session déclarée sur le repo principal, `alive` calculé). |
 | `striart_queue` | lecture | La file du scheduler et ses blocages. |
 | `striart_run` | mutation | Lancer une tâche via le Router (ou la mettre en file). |
 | `striart_merge` | mutation | Merger le dernier commit d'un agent (pipeline complet : rebase, fusion sémantique, Test Gate). |
-| `striart_resolve` | mutation | Gérer les tickets de conflit. |
+| `striart_resolve` | mutation | Marquer un ticket comme résolu (sans repasser par le Test Gate — après correction manuelle du conflit). |
+| `striart_resolve_prepare` | mutation | Amorcer `<fichier>.resolved` pour chaque fichier en conflit du ticket, depuis la version de l'agent (repli ours/base) — jamais écrasé si déjà préparé. |
+| `striart_resolve_apply` | mutation | Rejouer le merge exact du ticket avec les résolutions préparées (`.resolved`/`.delete`), sous le Test Gate bloquant — commit et clôture si vert, ticket laissé ouvert sinon (sans toucher au mode manuel). |
 
 ## La borne de profondeur d'orchestration
 

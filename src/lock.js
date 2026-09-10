@@ -5,6 +5,8 @@ import { simpleGit } from 'simple-git';
 import { striartDir } from './paths.js';
 import { StriartError } from './errors.js';
 import { logger } from './logger.js';
+import { readMainSession } from './main-session.js';
+import { isProcessAlive } from './process-tree.js';
 
 const POLL_MS = 300;
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -96,9 +98,46 @@ async function acquire(root, label, timeoutMs) {
 }
 
 /**
+ * Refuse toute opération tant qu'une session déclarée sur le REPO PRINCIPAL
+ * lui-même est vivante (`main-session.js` : un agent lancé directement dans
+ * son worktree via `runMainSession`, ou un humain via `striart lock start`).
+ *
+ * Généralise au principal la garde SESSION_LIVE déjà éprouvée par agent
+ * (décision architecturale n°6.4) : sans elle, `recoverOrphanMerge`
+ * ci-dessous traiterait un `MERGE_HEAD` posé par une résolution manuelle en
+ * cours comme un débris de crash et l'annulerait — l'incident exact qui a
+ * motivé cette garde. Un PID mort ne bloque rien (relu à chaque appel, pas de
+ * nettoyage actif requis) ; `striart lock stop` reste la sortie de secours
+ * si le nettoyage automatique n'a pas eu lieu.
+ *
+ * Aucun TTL ici (contrairement à STALE_TTL_MS pour main.lock ci-dessus) :
+ * un agent lancé directement sur le principal peut légitimement tourner des
+ * heures, et un disjoncteur automatique risquerait de désarmer une session
+ * encore réelle — choix délibéré, fail-closed, symétrique de l'absence de
+ * TTL sur `sessionPid` par agent. "striart lock stop" est la seule sortie
+ * si le PID a été recyclé par l'OS avant qu'un nettoyage n'ait eu lieu.
+ *
+ * Exportée : c'est la SEULE implémentation de « lire la session, vérifier
+ * isProcessAlive, refuser » — `runMainSession` (orchestrator.js) et
+ * `striart lock --start` (cli.js) la réutilisent au lieu de la recopier.
+ */
+export async function assertNoLiveMainSession(root) {
+  const session = await readMainSession(root);
+  if (!session || !isProcessAlive(session.pid)) return;
+  const ageMin = Math.round((Date.now() - Date.parse(session.startedAt)) / 60_000);
+  throw new StriartError(
+    `Repo principal occupé : "${session.reason}" (pid ${session.pid}, depuis ${ageMin} min). ` +
+      'Attends la fin de cette session, ou "striart lock stop" si elle est terminée sans avoir nettoyé.',
+    { code: 'MAIN_SESSION_LIVE', details: { reason: session.reason, pid: session.pid } },
+  );
+}
+
+/**
  * Un merge --no-commit interrompu par un crash laisse le repo principal en
  * état de merge (MERGE_HEAD présent). Comme on vient d'obtenir le verrou,
- * aucune opération légitime n'est en cours : c'est un débris → abort.
+ * aucune opération légitime n'est en cours (sauf session déclarée sur le
+ * principal, écartée juste avant par assertNoLiveMainSession) : c'est un
+ * débris → abort.
  */
 async function recoverOrphanMerge(root) {
   const mergeHead = path.join(root, '.git', 'MERGE_HEAD');
@@ -142,6 +181,7 @@ export async function withMainLock(root, label, fn, { timeoutMs = DEFAULT_TIMEOU
 
   depth = 1;
   try {
+    await assertNoLiveMainSession(root);
     await recoverOrphanMerge(root);
     return await fn();
   } finally {

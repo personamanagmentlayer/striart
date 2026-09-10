@@ -25,11 +25,13 @@ CLI à côté du message humain). Les plus fréquents :
 | `TARGET_BRANCH_MISMATCH` | Le repo principal n'est pas sur `targetBranch`. | `git checkout <targetBranch>`, ou ajuster la config — voir [Branches](branches.md#la-contrainte--le-repo-principal-doit-être-sur-targetbranch). |
 | `MAIN_DIRTY` | Le repo principal a des modifications non commitées. | Commit ou stash, puis relancer. |
 | `ROUTER_FAILED` | Le LLM du Router n'a pas répondu ou a rendu une sortie inexploitable. | `striart doctor` (LLM joignable ? clé présente ?) ; relancer — le Router est un filtre, pas une garantie. |
-| `MERGE_CONFLICT` | Conflit non résolu (fusion sémantique échouée ou désactivée). | Ticket dans `.striart/conflicts/` — résoudre puis `striart resolve --close <id>`. |
+| `MERGE_CONFLICT` | Conflit non résolu (fusion sémantique échouée ou désactivée). | Ticket dans `.striart/conflicts/` — `striart resolve --prepare <id>` puis `--apply <id>` (sous verrou + Test Gate). |
 | `GATE_FAILED` | La suite de tests a rejeté le merge (statut de `mergeAgentCommit`, pas une `StriartError` levée). | Lire `test-output.log` du ticket ; corriger côté agent ou main. |
 | `SESSION_LIVE` | Le clone héberge une session autonome vivante (PID vérifié). | Attendre la fin de session — ni `stop`, ni `clean`, ni `--force` ne passeront. |
+| `MAIN_SESSION_LIVE` | Le **repo principal** (pas un clone) est réservé — agent lancé via `--on-main` ou édition manuelle via `striart lock --start`. | Attendre la fin de la session (`striart lock` sans option pour voir raison/PID/durée), ou `striart lock --stop` si elle est terminée sans avoir nettoyé. |
 | `IN_USE` | Le disque du clone a bougé il y a moins de `presenceMinutes` min. | Attendre, ou `--force` en connaissance de cause (heuristique). |
 | `REUSE_DIRTY` / `REUSE_UNMERGED` / `REUSE_IN_USE` | L'archive à réutiliser a du travail non commité / non mergé / une activité récente. | Inspecter le clone ; `--force` assume la perte. |
+| `HISTORICAL_SECRETS_FOUND` | Un chemin correspondant à `secretPatterns` a un jour existé dans l'historique du repo (lisible via `git show <sha>:<fichier>` même absent aujourd'hui). | Vérifier/révoquer le secret, puis `--force` (`start`, `run`, `run --autonomous`) pour cloner quand même, ou `secretPatterns: []` pour désactiver le contrôle. |
 
 ## Tickets de conflit et mode manuel
 
@@ -39,9 +41,17 @@ LLM (`llm-attempt`), log du Test Gate (`test-output.log`).
 
 ```bash
 striart resolve                 # liste les tickets ouverts
-striart resolve --close <id>    # marque un ticket résolu
+striart resolve --prepare <id>  # amorce <fichier>.resolved depuis la version de l'agent
+striart resolve --apply <id>    # rejoue le merge exact du ticket, sous verrou + Test Gate
+striart resolve --close <id>    # marque un ticket résolu SANS repasser par le Test Gate
 striart resolve --all           # clôt tout
 ```
+
+`--prepare`/`--apply` sont le chemin **testé** : la résolution passe par le
+même verrou inter-processus et le même Test Gate bloquant que la fusion
+automatique, au lieu d'un `git merge` fait à la main hors du cadre de
+Striart (source d'un incident réel : collision avec un `striart watch`
+actif). `--close` reste utile si le conflit a déjà été réglé autrement.
 
 **Mode manuel** : après 3 fusions sémantiques échouées d'affilée, Striart
 désactive la fusion LLM (règle de sécurité — un LLM qui échoue en boucle ne
@@ -73,6 +83,17 @@ Le verrou `.striart/main.lock` casse automatiquement les verrous orphelins
 (processus détenteur mort, ou TTL de 30 min dépassé). Une attente de verrou
 expire après 2 min avec un message explicite. Si un verrou semble coincé :
 `striart reconcile`, puis `striart doctor`.
+
+## Repo principal réservé (`MAIN_SESSION_LIVE`)
+
+`striart run --on-main` ou `striart lock --start` déclarent une session sur
+le repo principal lui-même (pas un clone) : tant que le PID surveillé vit,
+toute opération mutante (merge, sync, promote, `resolve --apply`,
+l'auto-merge de `watch`) est refusée. **Aucun TTL** : contrairement à
+`main.lock`, rien ne casse automatiquement une session déclarée trop
+longtemps — `striart lock` (sans option) affiche la raison, le PID et la
+durée ; `striart lock --stop` libère dans tous les cas (sortie de secours,
+même si le PID vit encore).
 
 ## Sessions autonomes
 

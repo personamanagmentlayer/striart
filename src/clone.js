@@ -183,6 +183,39 @@ async function excludeTrackedSecrets(agentGit, patterns) {
   return excluded;
 }
 
+/**
+ * Recherche dans TOUT l'historique du repo principal (toutes refs, y compris
+ * les commits qui ont depuis supprimé le fichier) des chemins qui ont un
+ * jour existé et matchent `secretPatterns`.
+ *
+ * Angle mort de `excludeTrackedSecrets` : le sparse-checkout ne masque que le
+ * WORKTREE courant d'un clone. Les objets `.git/`, eux, sont hardlinkés en
+ * entier (décision d'architecture n°1) — un agent peut trivialement lire un
+ * secret historique via `git show <sha>:<fichier>` ou `git log -p`, même
+ * absent du disque aujourd'hui. Ce scan est la seule façon de savoir AVANT
+ * de cloner si ce risque existe pour ce repo.
+ * @param {string} root @param {string[]} patterns
+ * @returns {Promise<string[]>} chemins historiques matchant, triés
+ */
+export async function scanHistoricalSecrets(root, patterns) {
+  if (!patterns || patterns.length === 0) return [];
+  const raw = await simpleGit(root).raw([
+    'log',
+    '--all',
+    '--pretty=format:',
+    '--name-only',
+    '--diff-filter=A',
+  ]);
+  const paths = new Set(
+    raw
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean),
+  );
+  const matchers = patterns.map(gitignorePatternToRegExp);
+  return [...paths].filter((file) => matchers.some((re) => re.test(file))).sort();
+}
+
 /** Motif gitignore simplifié → RegExp (sans `/` : matche le nom de base à toute profondeur). */
 function gitignorePatternToRegExp(pattern) {
   const glob = pattern
@@ -194,12 +227,12 @@ function gitignorePatternToRegExp(pattern) {
     : new RegExp(`(^|/)${glob}$`);
 }
 
-/** @param {{root: string, name: string, prompt?: string|null, predictedFiles?: string[], command?: string|null, cloneFilter?: string|null, secretPatterns?: string[]|null, mode?: 'attended'|'autonomous', profile?: string|null}} params @returns {Promise<import('./types.js').AgentMeta & {name: string}>} */
+/** @param {{root: string, name: string, prompt?: string|null, predictedFiles?: string[], command?: string|null, cloneFilter?: string|null, secretPatterns?: string[]|null, mode?: 'attended'|'autonomous', profile?: string|null, force?: boolean}} params @returns {Promise<import('./types.js').AgentMeta & {name: string}>} */
 export async function createAgent(params) {
   return withMainLock(params.root, `start:${params.name}`, () => createAgentImpl(params));
 }
 
-/** @param {{root: string, name: string, prompt?: string|null, predictedFiles?: string[], command?: string|null, cloneFilter?: string|null, secretPatterns?: string[]|null, mode?: 'attended'|'autonomous', profile?: string|null}} params */
+/** @param {{root: string, name: string, prompt?: string|null, predictedFiles?: string[], command?: string|null, cloneFilter?: string|null, secretPatterns?: string[]|null, mode?: 'attended'|'autonomous', profile?: string|null, force?: boolean}} params */
 async function createAgentImpl({
   root,
   name,
@@ -210,6 +243,7 @@ async function createAgentImpl({
   secretPatterns = null,
   mode = 'attended',
   profile = null,
+  force = false,
 }) {
   validateAgentName(name);
   await assertInitialized(root);
@@ -233,6 +267,27 @@ async function createAgentImpl({
       'Le repo principal ne contient aucun commit. Crée au moins un commit avant de démarrer un agent.',
       { code: 'EMPTY_REPO', details: { root } },
     );
+  }
+
+  // Scanné AVANT de cloner (mêmes objets, hardlinkés — inutile de créer le
+  // clone pour découvrir qu'on doit le jeter). Fail closed : un secret qui a
+  // existé un jour dans l'historique reste lisible par l'agent via `git show
+  // <sha>:<fichier>` même si sparse-checkout le masque du worktree courant —
+  // ce n'est pas une dégradation qu'on laisse passer en silence.
+  if (secretPatterns && secretPatterns.length > 0 && !force) {
+    const historical = await scanHistoricalSecrets(root, secretPatterns);
+    if (historical.length > 0) {
+      throw new StriartError(
+        `Secrets historiques détectés dans ce repo (${historical.join(', ')}) — un agent pourrait ` +
+          "les lire via l'historique git de son clone même si sparse-checkout les masque du " +
+          'worktree. Vérifie/révoque ces secrets, puis relance avec --force pour cloner quand même ' +
+          '(décision consciente), ou secretPatterns: [] pour désactiver ce contrôle.',
+        {
+          code: 'HISTORICAL_SECRETS_FOUND',
+          details: { name, patterns: secretPatterns, historical },
+        },
+      );
+    }
   }
 
   await mkdir(agentsDir(root), { recursive: true });
@@ -350,6 +405,25 @@ async function reuseAgentImpl({
       `Aucun clone à réutiliser pour "${name}" (${dest}). Utilise striart start sans --reuse.`,
       { code: 'REUSE_NO_CLONE', details: { name, dest } },
     );
+  }
+
+  // Les exclusions suivent la config COURANTE (voir plus bas) : un motif
+  // ajouté depuis le premier clonage doit être vérifié ici aussi, pas
+  // seulement au prochain "start" à froid.
+  if (secretPatterns && secretPatterns.length > 0 && !force) {
+    const historical = await scanHistoricalSecrets(root, secretPatterns);
+    if (historical.length > 0) {
+      throw new StriartError(
+        `Secrets historiques détectés dans ce repo (${historical.join(', ')}) — un agent pourrait ` +
+          "les lire via l'historique git de son clone même si sparse-checkout les masque du " +
+          'worktree. Vérifie/révoque ces secrets, puis relance avec --force pour réutiliser quand ' +
+          'même (décision consciente), ou secretPatterns: [] pour désactiver ce contrôle.',
+        {
+          code: 'HISTORICAL_SECRETS_FOUND',
+          details: { name, patterns: secretPatterns, historical },
+        },
+      );
+    }
   }
 
   // Présence : une archive qui vient d'écrire sur disque héberge peut-être

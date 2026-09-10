@@ -113,6 +113,31 @@ describe('Réutilisation de clone (start --reuse)', () => {
     expect((await simpleGit(info.path).status()).isClean()).toBe(true);
   });
 
+  it("refuse HISTORICAL_SECRETS_FOUND si l'historique du repo principal contient un secret, --force passe outre", async () => {
+    const archive = await makeArchive();
+
+    // Le main gagne un secret historique APRÈS l'archivage, puis le retire —
+    // absent du tracked actuel, présent dans l'historique du principal.
+    await writeFile(path.join(repo.root, '.env'), 'API_KEY=super-secret\n');
+    await simpleGit(repo.root).raw(['add', '-f', '.env']);
+    await simpleGit(repo.root).commit('feat: .env par erreur');
+    await simpleGit(repo.root).rm(['.env']);
+    await simpleGit(repo.root).commit('fix: retire .env');
+    await backdateDir(archive.path);
+
+    await expect(
+      reuseAgent({ root: repo.root, name: 'agent-a', secretPatterns: ['.env'] }),
+    ).rejects.toMatchObject({ code: 'HISTORICAL_SECRETS_FOUND' });
+
+    const forced = await reuseAgent({
+      root: repo.root,
+      name: 'agent-a',
+      secretPatterns: ['.env'],
+      force: true,
+    });
+    expect(forced.reused).toBe(true);
+  });
+
   it('runTask --reuse : exige un nom d’agent explicite (REUSE_NEEDS_AGENT), et la file mémorise reuse', async () => {
     await expect(
       runTask({ root: repo.root, prompt: 'tâche sans nom', reuse: true }),
