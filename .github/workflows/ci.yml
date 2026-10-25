@@ -119,6 +119,10 @@ jobs:
         with:
           node-version: 24
 
+      # native-stage.ts importe src/native.ts (execa) : les dépendances sont
+      # nécessaires, sans scripts de cycle de vie (chaîne d'approvisionnement).
+      - run: npm ci --ignore-scripts
+
       - name: Toolchain épinglée
         working-directory: native
         run: rustup show active-toolchain || rustup toolchain install

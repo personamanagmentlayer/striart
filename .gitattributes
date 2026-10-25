@@ -1,0 +1,15 @@
+# Fins de ligne : LF dans le dépôt ET dans les copies de travail, sur tous les
+# systèmes. Sans cela, git sous Windows (core.autocrlf=true, défaut des runners)
+# extrait en CRLF et `prettier --check` (endOfLine: lf) échoue sur le lint ;
+# les signatures et empreintes de fixtures supposent aussi des octets stables.
+* text=auto eol=lf
+*.sh text eol=lf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.pdf binary
+*.woff binary
+*.woff2 binary

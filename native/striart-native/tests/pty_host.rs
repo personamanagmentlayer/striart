@@ -54,8 +54,19 @@ fn unique(tag: &str) -> String {
     )
 }
 
+/// Racine des dossiers de test. Un socket Unix est limité à ~103 octets (macOS) :
+/// `temp_dir()` y vaut `/var/folders/…/T` (≈ 50 octets) et fait déborder le chemin
+/// du socket — d'où `/tmp`, court et présent sur tout Unix.
+fn test_root() -> PathBuf {
+    if cfg!(unix) {
+        PathBuf::from("/tmp")
+    } else {
+        std::env::temp_dir()
+    }
+}
+
 fn layout(tag: &str) -> (PathBuf, PathBuf, String) {
-    let dir = std::env::temp_dir().join(format!("striart-pty-it-{}", unique(tag)));
+    let dir = test_root().join(format!("striart-pty-it-{}", unique(tag)));
     let state = dir.join(".striart").join("pty").join("agent-t");
     std::fs::create_dir_all(&dir).expect("temp dir");
     let endpoint = if cfg!(windows) {
@@ -372,7 +383,7 @@ fn un_seul_hote_par_agent() {
     } else {
         first.endpoint.clone()
     };
-    let second_dir = std::env::temp_dir().join(format!("striart-pty-it-{}", unique("single2")));
+    let second_dir = test_root().join(format!("striart-pty-it-{}", unique("single2")));
     std::fs::create_dir_all(&second_dir).expect("dir");
     let mut second = spawn_host_at(second_dir, first.state.clone(), endpoint2, &[], &program);
     let status = wait_exit(&mut second, WAIT).expect("second host must exit");
@@ -622,7 +633,15 @@ fn dacl_du_named_pipe_limitee_a_l_utilisateur() {
     let sddl = conn.dacl_sddl().expect("read DACL");
     let sid = ipc::current_user_sid().expect("sid");
     // Un seul ACE, accès complet, pour l'utilisateur courant ; protégée.
-    assert_eq!(sddl, format!("D:P(A;;FA;;;{sid})"), "{sddl}");
+    // Le formateur SDDL de Windows abrège le SID du compte administrateur
+    // local (RID 500, ex. `runneradmin` en CI) en l'alias `LA` : même principal,
+    // autre écriture — l'ACE reste unique et limité à l'utilisateur courant.
+    let expected = format!("D:P(A;;FA;;;{sid})");
+    let admin_alias = "D:P(A;;FA;;;LA)";
+    assert!(
+        sddl == expected || (sid.ends_with("-500") && sddl == admin_alias),
+        "{sddl} (attendu {expected})"
+    );
 }
 
 #[cfg(unix)]

@@ -191,6 +191,8 @@ export class AcpConnection {
   private readonly humanWaits = new AbortController();
   private nextId = 1;
   private finished = false;
+  /** Le process de l'agent est mort (spawn échoué compris) : plus aucune réponse ne viendra. */
+  private processExited = false;
   private agentCapabilities: Record<string, unknown> = {};
   private authMethods: AuthMethod[] = [];
   readonly exited: Promise<Result>;
@@ -234,6 +236,7 @@ export class AcpConnection {
     // Une mort du process avant l'issue doit faire échouer les requêtes en
     // vol, sinon la session attendrait une réponse qui ne viendra jamais.
     void this.exited.then(() => {
+      this.processExited = true;
       if (!this.finished)
         this.failAllPending('Le process de l’agent ACP est sorti avant la fin de session.');
     });
@@ -313,6 +316,13 @@ export class AcpConnection {
 
   request(method: string, params: Record<string, unknown>): Promise<unknown> {
     return new Promise((resolve, reject) => {
+      // Spawn échoué (binaire introuvable) : le process est déjà mort quand
+      // la session ouvre sa première requête, donc failAllPending est passé
+      // avant elle et ne la verrait jamais — sans ce garde, l'attente est infinie.
+      if (this.processExited) {
+        reject(new Error('Le process de l’agent ACP est sorti avant la fin de session.'));
+        return;
+      }
       const id = this.nextId++;
       this.pending.set(id, { resolve, reject });
       this.send({ id, method, params });
