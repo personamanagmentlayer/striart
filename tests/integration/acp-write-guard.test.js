@@ -6,7 +6,7 @@
  * restent permises (outils d'analyse).
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { resolvePathInsideClone, resolveWritablePathInsideClone } from '../../src/acp/protocol.ts';
@@ -67,5 +67,36 @@ describe('ACP — écriture dans le clone, .git exclu (intégration)', () => {
       return; // droits insuffisants pour créer le lien : cas non testable ici
     }
     expect(await resolveWritablePathInsideClone(clone, 'raccourci/config')).toBeNull();
+  });
+
+  it('clone désigné par un lien (macOS /var → /private/var) : le chemin ABSOLU canonique de l’agent est accepté', async () => {
+    // Un agent dont le cwd est le clone voit son chemin canonique (process.cwd()),
+    // alors que Striart a pu désigner le clone par un chemin passant par un lien.
+    const link = path.join(os.tmpdir(), `striart-acp-link-${path.basename(clone)}`);
+    try {
+      await symlink(clone, link, 'junction');
+    } catch {
+      return; // droits insuffisants pour créer le lien : cas non testable ici
+    }
+    try {
+      const canonical = path.join(await realpath(clone), 'src', 'a.js');
+      expect(await resolvePathInsideClone(link, canonical)).toBe(canonical);
+      expect(await resolveWritablePathInsideClone(link, canonical)).toBe(canonical);
+      // …et la garde ne s'en trouve pas relâchée.
+      expect(
+        await resolveWritablePathInsideClone(
+          link,
+          path.join(await realpath(clone), '.git', 'config'),
+        ),
+      ).toBeNull();
+      expect(
+        await resolvePathInsideClone(
+          link,
+          path.join(path.dirname(await realpath(clone)), 'ailleurs.txt'),
+        ),
+      ).toBeNull();
+    } finally {
+      await rm(link, { force: true, recursive: true }).catch(() => {});
+    }
   });
 });

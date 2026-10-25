@@ -272,6 +272,12 @@ export async function restrictToCurrentUser(file: string): Promise<void> {
   if (process.platform === 'win32') {
     try {
       const sid = await currentUserSid();
+      // /reset d'abord : le DACL par défaut du jeton d'une session élevée donne au
+      // fichier des ACE EXPLICITES (SYSTEM, Administrateurs…) que ni
+      // `/inheritance:r` (héritage seulement) ni `/grant:r` (le compte visé
+      // seulement) ne retirent. /reset les efface ; l'héritage est ensuite coupé
+      // et le seul droit accordé est celui de l'utilisateur.
+      await execa(windowsTool('icacls.exe'), [file, '/reset'], { windowsHide: true });
       await execa(windowsTool('icacls.exe'), [file, '/inheritance:r', '/grant:r', `*${sid}:(F)`], {
         windowsHide: true,
       });

@@ -274,9 +274,16 @@ export async function resolvePathInsideClone(
   cloneRoot: string,
   candidate: string,
 ): Promise<string | null> {
-  if (!isPathInsideClone(cloneRoot, candidate)) return null;
-  const target = path.resolve(cloneRoot, candidate);
   const realRoot = await realpath(cloneRoot);
+  // Pré-contrôle lexical contre le clone TEL QUE DÉSIGNÉ et contre son chemin
+  // réel : un agent dont le cwd est le clone cite ses fichiers par le chemin
+  // canonique (process.cwd()), alors que Striart a pu désigner le clone par un
+  // chemin passant par un lien (macOS : /var → /private/var). Le contrôle réel
+  // ci-dessous reste, lui, la garde — liens et jonctions suivis.
+  if (!isPathInsideClone(cloneRoot, candidate) && !isPathInsideClone(realRoot, candidate)) {
+    return null;
+  }
+  const target = path.resolve(cloneRoot, candidate);
   let probe = target;
   const tail: string[] = [];
   for (;;) {

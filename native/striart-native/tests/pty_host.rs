@@ -540,6 +540,10 @@ fn client_lent_evince_puis_rejeu_sans_coupure_de_sequence() {
     // lire pendant que le programme écrit encore, sa file (1 Mio) déborderait
     // et il serait évincé à son tour (constaté en CI musl : « Broken pipe »).
     driver.until_output("FLOOD-DONE");
+    // Puis jusqu'au silence : le rejeu d'une reconnexion (les derniers octets du
+    // flux) peut dépasser le marqueur ; le driver doit avoir vu TOUT le flux pour
+    // que « le rejeu est un morceau du flux réel » soit vérifiable.
+    while driver.next(Duration::from_millis(300)).is_some() {}
     let deadline = Instant::now() + WAIT;
     let mut evicted = false;
     loop {
