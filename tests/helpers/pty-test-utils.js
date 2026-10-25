@@ -5,6 +5,12 @@ import { connectAttachClient } from '../../src/pty-attach.ts';
 import { defaultShell } from '../../src/pty-host.ts';
 
 /**
+ * Fin de ligne d'un écho dans un pty : le line discipline (ONLCR) convertit LF
+ * en CRLF sur TOUS les systèmes, pas seulement Windows.
+ */
+export const ECHO_EOL = '\r\n';
+
+/**
  * Shell des tests pty qui NE testent PAS le profil du shell : même programme
  * que le produit, mais PowerShell lancé sans profil (`-NoProfile -NoLogo`).
  * Windows PowerShell 5.1 charge sinon les profils utilisateur (en échec sur

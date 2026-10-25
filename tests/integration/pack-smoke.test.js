@@ -86,7 +86,10 @@ describe('paquet npm publié (pack → install → exécution)', () => {
     const host = nativePlatform();
     if (!host) throw new Error(`plateforme ${process.platform}-${process.arch} non publiée`);
     const nativeDir = path.join(work, 'native');
-    await stageNativeBinary({ platformKey: host.key, outDir: nativeDir, from: nativeBinaryPath() });
+    // Linux : la distribution exige un musl STATIQUE, que le build de dev (glibc)
+    // n'est pas ; la CI désigne alors le binaire déjà contrôlé du job build.
+    const from = process.env.STRIART_PACK_SMOKE_NATIVE || nativeBinaryPath();
+    await stageNativeBinary({ platformKey: host.key, outDir: nativeDir, from });
 
     // Clé de signature PROPRE À CE TEST : l'archive est signée comme une
     // release (clé privée en variable d'environnement, clé publique fournie par

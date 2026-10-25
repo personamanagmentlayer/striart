@@ -96,7 +96,10 @@ export async function generateSigningKeys(options: KeygenOptions): Promise<Keyge
   // même à travers un lien.
   const secretDir = await fs.realpath(path.dirname(secretOut)).catch(() => null);
   if (!secretDir) throw new KeygenError(`Dossier absent : ${path.dirname(secretOut)}`);
-  if (isInside(secretDir, realpathSync(repoRoot))) {
+  // Même résolution des deux côtés (fs.realpath, native) : realpathSync (JS) ne
+  // développe pas les noms courts 8.3 de Windows (RUNNER~1 vs runneradmin) et
+  // laissait passer un secret écrit DANS le dépôt.
+  if (isInside(secretDir, await fs.realpath(repoRoot))) {
     throw new KeygenError('La clé privée ne doit jamais être écrite dans le dépôt.', true);
   }
   const secretFile = path.join(secretDir, path.basename(secretOut));

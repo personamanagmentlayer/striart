@@ -10,6 +10,7 @@ import type { AcpOptions, McpServerSpec, TextContentBlock } from './acp/protocol
 import { PromptQueue, driveAcpSession } from './acp/session.ts';
 import { SessionLog } from './acp/session-log.ts';
 import {
+  acpHostLogTail,
   acpHostStatus,
   connectAcpHostOwner,
   launchAcpHost,
@@ -324,7 +325,11 @@ async function runHostedSession({
     });
   } catch (error) {
     await stopAcpHost(root, agent).catch(() => null);
-    return failed('ACP_HOST_LOST', `ACP session host unreachable: ${(error as Error).message}`);
+    const hostLog = await acpHostLogTail(root, agent);
+    return failed(
+      'ACP_HOST_LOST',
+      `ACP session host unreachable: ${(error as Error).message}${hostLog ? ` — host log: ${hostLog}` : ''}`,
+    );
   }
   const onAbort = () => owner.cancel();
   if (signal.aborted) onAbort();

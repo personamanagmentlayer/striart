@@ -46,7 +46,11 @@ async function commitIn(dir, fileName, content, message) {
 
 const HOOK = path.join('.git', 'hooks', 'pre-commit');
 const installFailingHook = (root) =>
-  writeFile(path.join(root, HOOK), '#!/bin/sh\necho "hook: refus de test" >&2\nexit 1\n');
+  // Mode exécutable : git IGNORE un hook sans le bit x sous POSIX (le test ne
+  // vérifiait « hook en échec » que sous Windows).
+  writeFile(path.join(root, HOOK), '#!/bin/sh\necho "hook: refus de test" >&2\nexit 1\n', {
+    mode: 0o755,
+  });
 const removeHook = (root) => rm(path.join(root, HOOK), { force: true });
 
 async function expectNotMerging(root) {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { readFile, readdir, writeFile } from 'node:fs/promises';
+import { chmod, readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { simpleGit } from 'simple-git';
 import { createTempRepo } from '../helpers/temp-repo.js';
@@ -335,13 +335,18 @@ describe('fusion sémantique (intégration)', () => {
   });
 
   it('bit exécutable identique des deux côtés → préservé après fusion sémantique', async () => {
+    // chmod RÉEL : sous POSIX (core.fileMode vrai) `git add` relit le mode du
+    // disque, et un fichier écrit en 0644 ramènerait l'index à 100644 — le test
+    // ne gardait le bit que là où git l'ignore (Windows).
     await writeFile(path.join(repo.root, 'run.sh'), '#!/bin/sh\necho base\n');
+    await chmod(path.join(repo.root, 'run.sh'), 0o755);
     await repo.git.add(['run.sh']);
     await repo.git.raw(['update-index', '--chmod=+x', '--', 'run.sh']);
     await repo.git.commit('feat: run.sh exécutable');
     const agentE = await createAgent({ root: repo.root, name: 'agent-e' });
 
     await writeFile(path.join(repo.root, 'run.sh'), '#!/bin/sh\necho main\n');
+    await chmod(path.join(repo.root, 'run.sh'), 0o755);
     await repo.git.add(['run.sh']);
     await repo.git.commit('feat: run.sh main');
 
@@ -349,6 +354,7 @@ describe('fusion sémantique (intégration)', () => {
     await agentGit.addConfig('user.name', 'Agent');
     await agentGit.addConfig('user.email', 'agent@example.com');
     await writeFile(path.join(agentE.path, 'run.sh'), '#!/bin/sh\necho agent\n');
+    await chmod(path.join(agentE.path, 'run.sh'), 0o755);
     await agentGit.add(['run.sh']);
     await agentGit.commit('feat: run.sh agent');
 

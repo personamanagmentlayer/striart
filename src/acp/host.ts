@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { openSync, closeSync } from 'node:fs';
-import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -272,6 +272,29 @@ export async function launchAcpHost(
   child.stdin?.end(`${JSON.stringify(runSpec)}\n`);
   child.unref();
   return { pid: child.pid, startedAt, ownerToken, logPath };
+}
+
+/**
+ * Fin du journal de l'hôte (une ligne, bornée) : la cause d'un hôte mort avant
+ * d'avoir ouvert son canal n'est écrite que là. Vide si le journal est absent
+ * ou illisible — un diagnostic ne doit jamais masquer l'erreur qu'il explique.
+ */
+export async function acpHostLogTail(root: string, agent: string, maxBytes = 600): Promise<string> {
+  try {
+    const handle = await open(acpHostLogPath(root, agent), 'r');
+    try {
+      const { size } = await handle.stat();
+      const length = Math.min(size, maxBytes);
+      const buffer = Buffer.alloc(length);
+      await handle.read(buffer, 0, length, size - length);
+      return buffer.toString('utf8').replace(/s+/g, ' ').trim();
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    // Journal absent ou illisible : pas de diagnostic, pas d'erreur de plus.
+    return '';
+  }
 }
 
 /** Connexion au canal de l'hôte, réessayée tant qu'il démarre et vit. */

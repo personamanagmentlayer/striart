@@ -269,6 +269,10 @@ jobs:
 
       - name: Fumée du paquet installé
         run: npm run test:pack
+        env:
+          # Linux : le binaire musl statique contrôlé par le job build (le build de
+          # dev, en glibc, est refusé par native-stage).
+          STRIART_PACK_SMOKE_NATIVE: ${{ runner.os == 'Linux' && format('{0}/native-dist/linux-x64/striart-native', github.workspace) || '' }}
 
   # Archives signées de release (paquet principal + six paquets de
   # plateforme + SBOM), produites seulement sur un PUSH de branche protégée,

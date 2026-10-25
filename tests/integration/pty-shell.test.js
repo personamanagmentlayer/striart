@@ -178,20 +178,24 @@ describe('résolution du shell de l’hôte de pty', () => {
   });
 
   describe('windowsPowerShellProfiles', () => {
-    it('ne liste que les profils qui existent (Documents, OneDrive)', async () => {
-      const home = path.join(root, 'home');
-      await mkdir(path.join(home, 'Documents', 'WindowsPowerShell'), { recursive: true });
-      expect(await windowsPowerShellProfiles({}, home)).toEqual([]);
-      await writeFile(path.join(home, 'Documents', 'WindowsPowerShell', 'profile.ps1'), '');
-      const oneDrive = path.join(root, 'od');
-      await mkdir(path.join(oneDrive, 'Documents', 'WindowsPowerShell'), { recursive: true });
-      await writeFile(
-        path.join(oneDrive, 'Documents', 'WindowsPowerShell', 'Microsoft.PowerShell_profile.ps1'),
-        '',
-      );
-      const found = await windowsPowerShellProfiles({ OneDrive: oneDrive }, home);
-      expect(found).toHaveLength(2);
-    });
+    // Fonction propre à Windows (chemins path.win32) : sans objet sous POSIX.
+    it.skipIf(process.platform !== 'win32')(
+      'ne liste que les profils qui existent (Documents, OneDrive)',
+      async () => {
+        const home = path.join(root, 'home');
+        await mkdir(path.join(home, 'Documents', 'WindowsPowerShell'), { recursive: true });
+        expect(await windowsPowerShellProfiles({}, home)).toEqual([]);
+        await writeFile(path.join(home, 'Documents', 'WindowsPowerShell', 'profile.ps1'), '');
+        const oneDrive = path.join(root, 'od');
+        await mkdir(path.join(oneDrive, 'Documents', 'WindowsPowerShell'), { recursive: true });
+        await writeFile(
+          path.join(oneDrive, 'Documents', 'WindowsPowerShell', 'Microsoft.PowerShell_profile.ps1'),
+          '',
+        );
+        const found = await windowsPowerShellProfiles({ OneDrive: oneDrive }, home);
+        expect(found).toHaveLength(2);
+      },
+    );
   });
 
   describe('quietShell (helper des tests pty)', () => {

@@ -11,13 +11,13 @@ import {
   waitFor,
   withRealPtySlot,
   writeQuietPtyConfig,
+  ECHO_EOL,
 } from '../helpers/pty-test-utils.js';
 
 // Rangé en intégration (et non avec le reste de watch-ui) : ce bloc démarre un
 // VRAI hôte de pty et un shell — process, disque, temps réel. Dans la suite
 // unitaire, il dépassait le budget de la boucle courte et y échouait par
 // intermittence sous charge.
-const ECHO_EOL = process.platform === 'win32' ? '\r\n' : '\n';
 
 describe('routeAgentMessage', () => {
   let root;

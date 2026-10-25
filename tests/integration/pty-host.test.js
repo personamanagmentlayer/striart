@@ -12,13 +12,13 @@ import {
   seedAgentRegistry,
   waitFor,
   withRealPtySlot,
+  ECHO_EOL,
 } from '../helpers/pty-test-utils.js';
 
 // Shell SANS profil : ces tests portent sur l'hôte, pas sur le démarrage du
 // profil PowerShell (cf. quietShell). Le démarrage du shell par défaut du
 // produit, profil compris, a son propre test plus bas.
 const { shell: SHELL, args: SHELL_ARGS } = quietShell();
-const ECHO_EOL = process.platform === 'win32' ? '\r\n' : '\n';
 
 describe('pty-host', () => {
   let root;

@@ -194,8 +194,15 @@ export class TerminalManager {
     subprocess.all?.on('data', (chunk: string) => this.append(terminal, chunk));
     terminal.exit = subprocess.then((result) => {
       clearTimeout(terminal.timer);
-      if (result.failed && result.exitCode === undefined && result.shortMessage) {
+      if (
+        result.failed &&
+        result.exitCode === undefined &&
+        result.signal === undefined &&
+        result.shortMessage
+      ) {
         // Spawn impossible (binaire introuvable) : la cause devient la sortie.
+        // Un process tué par un signal (délai du terminal) n'est PAS un échec de
+        // spawn : son statut dit déjà `signal`, la sortie reste celle du programme.
         this.append(terminal, `${result.shortMessage}\n`);
       }
       const status: ExitStatus = {

@@ -16,6 +16,7 @@ import {
   quietShell,
   waitFor as waitForHelper,
   withRealPtySlot,
+  ECHO_EOL,
 } from '../helpers/pty-test-utils.js';
 
 // Un vrai shell interactif — pas `node -e` : node-pty (ConPTY) plante
@@ -25,7 +26,6 @@ import {
 // le plus représentatif à tester.
 // Sans profil (cf. quietShell) : ce fichier teste le pty possédé, pas le profil.
 const { shell: SHELL, args: SHELL_ARGS } = quietShell();
-const ECHO_EOL = process.platform === 'win32' ? '\r\n' : '\n';
 
 const waitFor = (predicate) => waitForHelper(predicate, REAL_PTY_WAIT_MS);
 

@@ -612,7 +612,7 @@ handle du Job Object (`KILL_ON_JOB_CLOSE`) et tue *toute* la descendance.
 **Linux** : seul le programme direct reçoit `PR_SET_PDEATHSIG` ; ses
 descendants qui ont quitté le groupe (`setsid`, démon) ou ignorent SIGHUP
 survivent — il n'existe pas d'équivalent POSIX de `KILL_ON_JOB_CLOSE`.
-**macOS** : SIGHUP du noyau seulement. À l'arrêt **propre**, l'hôte tue le
+**macOS** : SIGHUP du noyau seulement — le programme direct meurt, mais un petit-fils du même groupe peut survivre (constaté en CI). À l'arrêt **propre**, l'hôte tue le
 groupe puis les descendants suivis (liste rafraîchie toutes les 2 s) qui l'ont
 quitté. Sous Windows, la fermeture de la console (`CTRL_CLOSE_EVENT`) laisse
 au plus ~5 s : `job run` attend, dans un budget de 4,5 s, que le job soit tué

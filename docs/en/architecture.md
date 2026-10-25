@@ -575,7 +575,7 @@ access to `.striart/`.
 Object handle (`KILL_ON_JOB_CLOSE`) and kills the *whole* descendance.
 **Linux**: only the direct program gets `PR_SET_PDEATHSIG`; descendants that
 left the group (`setsid`, a daemon) or ignore SIGHUP survive — POSIX has no
-equivalent of `KILL_ON_JOB_CLOSE`. **macOS**: the kernel's SIGHUP only. On a
+equivalent of `KILL_ON_JOB_CLOSE`. **macOS**: the kernel's SIGHUP only — the direct program dies, but a grandchild in the same group can survive (observed in CI). On a
 **clean** stop, the host kills the group then the tracked descendants
 (refreshed every 2 s) that left it. On Windows, closing the console
 (`CTRL_CLOSE_EVENT`) leaves ~5 s at most: `job run` waits, within a 4.5 s
