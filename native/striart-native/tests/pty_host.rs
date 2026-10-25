@@ -531,6 +531,10 @@ fn client_lent_evince_puis_rejeu_sans_coupure_de_sequence() {
         );
         let _ = driver.next(Duration::from_millis(100));
     }
+    // Le driver finit de lire le flot AVANT toute autre étape : s'il cessait de
+    // lire pendant que le programme écrit encore, sa file (256 Kio) déborderait
+    // et il serait évincé à son tour (constaté en CI musl : « Broken pipe »).
+    driver.until_output("FLOOD-DONE");
     // Le client lent reprend sa lecture : frames déjà dans les tampons, puis
     // `evicted`, puis fermeture.
     let frames = start_reader(Arc::clone(&slow));

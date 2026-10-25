@@ -250,7 +250,21 @@ export function sddlRestrictedTo(sddl: string, sid: string): boolean {
   if (!match || !match[1].includes('P')) return false;
   const aces = [...(match[2] ?? '').matchAll(/\(([^)]*)\)/g)].map((m) => m[1].split(';'));
   if (aces.length === 0) return false;
-  return aces.every((ace) => ace.length >= 6 && (ace[0] !== 'A' || ace[5] === sid));
+  const principals = sddlPrincipals(sid);
+  return aces.every((ace) => ace.length >= 6 && (ace[0] !== 'A' || principals.includes(ace[5])));
+}
+
+/**
+ * Écritures SDDL d'un même compte : son SID, et l'alias que le formateur de
+ * Windows lui substitue — administrateur local (RID 500, ex. `runneradmin`) →
+ * `LA`, SYSTEM → `SY`. Sans cela, l'Administrateur intégré voyait sa propre
+ * DACL, pourtant restreinte à lui seul, refusée comme « accordée à d'autres ».
+ * L'alias ne vaut que pour SON SID : jamais un blanc-seing.
+ */
+function sddlPrincipals(sid: string): string[] {
+  if (sid === 'S-1-5-18') return [sid, 'SY'];
+  if (/^S-1-5-21-\d+-\d+-\d+-500$/.test(sid)) return [sid, 'LA'];
+  return [sid];
 }
 
 /** Restreint `file` à l'utilisateur courant, puis le VÉRIFIE (fail closed). */

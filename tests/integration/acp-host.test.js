@@ -5,7 +5,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runAcpSession, resolveAcpOptions } from '../../src/acp.ts';
-import { acpHostStatus, launchAcpHost, sendHumanPrompt, stopAcpHost } from '../../src/acp/host.ts';
+import {
+  acpHostStatus,
+  connectAcpHostOwner,
+  launchAcpHost,
+  sendHumanPrompt,
+  stopAcpHost,
+} from '../../src/acp/host.ts';
 import { routeAgentMessage } from '../../src/watch-ui.ts';
 import { isProcessAlive } from '../../src/process-tree.js';
 
@@ -198,6 +204,43 @@ describe('hôte de session ACP persistant + Phase E', () => {
     await waitFor(async () => (await acpHostStatus(root, AGENT, { fresh: true })).running);
     await expect(run()).rejects.toMatchObject({ code: 'ACP_HOST_BUSY' });
     expect((await session).status).toBe('COMPLETED');
+  });
+
+  it('session finie AVANT la connexion du propriétaire : le résultat n’est pas perdu', async () => {
+    // Binaire introuvable : la session échoue en quelques ms. Si l'hôte démontait
+    // son socket aussitôt, le propriétaire arrivant plus tard n'aurait plus que
+    // « hôte injoignable » (course constatée en CI sous charge).
+    const launched = await launchAcpHost(root, {
+      agent: AGENT,
+      taskId: 'task-late-owner',
+      cwd: clone,
+      profile: { command: 'striart-acp-absent-xyz', args: [], acp: true },
+      profileKey: 'fake-acp',
+      options: resolveAcpOptions({ command: 'x', args: [], acp: true }),
+      initialPrompt: [{ type: 'text', text: 'x' }],
+      timeoutMs: 20_000,
+      closeWhenIdle: true,
+      ownerPid: process.pid,
+      mcpServers: [],
+      env: process.env,
+    });
+    // On ne se connecte qu'APRÈS la fin de la session (le journal en porte la
+    // trace) : c'est précisément la fenêtre où l'hôte perdait le résultat.
+    await waitFor(async () =>
+      (await readFile(launched.logPath, 'utf8').catch(() => '')).includes('[acp] erreur'),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const owner = await connectAcpHostOwner(root, AGENT, {
+      pid: launched.pid,
+      ownerToken: launched.ownerToken,
+    });
+    try {
+      const result = await owner.result;
+      expect(result.status).toBe('FAILED');
+      expect(result.error).toContain('striart-acp-absent-xyz');
+    } finally {
+      owner.close();
+    }
   });
 
   it('persistentHost: false → session en process, même contrat, non adressable', async () => {

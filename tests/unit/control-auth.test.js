@@ -92,4 +92,20 @@ describe('jeton, liens à usage unique et sessions du dashboard', () => {
     expect(sddlRestrictedTo('D:P', me)).toBe(false);
     expect(sddlRestrictedTo('garbage', me)).toBe(false);
   });
+
+  it('SDDL : le formateur Windows abrège le SID de certains comptes — même principal, autre écriture', () => {
+    // Administrateur local (RID 500, ex. runneradmin) : « LA ».
+    const admin = 'S-1-5-21-3776380004-1005456608-3524014338-500';
+    expect(sddlRestrictedTo('D:P(A;;FA;;;LA)', admin)).toBe(true);
+    expect(sddlRestrictedTo('D:PAI(A;;FA;;;LA)', admin)).toBe(true);
+    // SYSTEM : « SY ».
+    expect(sddlRestrictedTo('D:P(A;;FA;;;SY)', 'S-1-5-18')).toBe(true);
+    // L'alias ne vaut QUE pour son propre SID : un utilisateur ordinaire ne
+    // reçoit pas la bénédiction de « LA », et un alias ne masque pas un
+    // deuxième ACE.
+    const me = 'S-1-5-21-1-2-3-1001';
+    expect(sddlRestrictedTo('D:P(A;;FA;;;LA)', me)).toBe(false);
+    expect(sddlRestrictedTo('D:P(A;;FA;;;LA)(A;;FA;;;BA)', admin)).toBe(false);
+    expect(sddlRestrictedTo('D:P(A;;FA;;;SY)', admin)).toBe(false);
+  });
 });

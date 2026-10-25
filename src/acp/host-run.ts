@@ -45,6 +45,8 @@ const OWNER_HELLO_GRACE_MS = 30_000;
 /** Délai laissé à un client pour envoyer sa frame `hello`. */
 const HELLO_TIMEOUT_MS = 5_000;
 const OWNER_POLL_MS = 1_000;
+/** Pas d'attente d'un propriétaire qui arrive après la fin de session. */
+const OWNER_LATE_POLL_MS = 50;
 /** Étiquette d'un prompt du bus (opaque, rendue avec son tour au propriétaire). */
 const PROMPT_TAG_RE = /^[A-Za-z0-9_-]{1,64}$/;
 /**
@@ -76,6 +78,8 @@ export async function runAcpHost(spec: AcpHostRunSpec): Promise<void> {
   let owner: net.Socket | null = null;
   let ownerSeen = false;
   let result: SessionResult | null = null;
+  /** Le résultat est déjà parti (propriétaire arrivé APRÈS la fin de session). */
+  let resultDelivered = false;
   let control: { cancelTurn: () => boolean } | null = null;
   let inTurn = false;
   let pendingTurnCancel = false;
@@ -166,7 +170,10 @@ export async function runAcpHost(spec: AcpHostRunSpec): Promise<void> {
             ownerSeen = true;
             writeFrame(socket, { type: 'welcome', role, agent });
             flushBacklog(socket);
-            if (result) writeFrame(socket, { type: 'result', result });
+            if (result) {
+              writeFrame(socket, { type: 'result', result });
+              resultDelivered = true;
+            }
             continue;
           }
           if (frame.role === 'bus' && tokensMatch(spec.busToken, frame.token)) {
@@ -343,11 +350,24 @@ export async function runAcpHost(spec: AcpHostRunSpec): Promise<void> {
     process.off('SIGINT', onSignal);
   }
 
+  // Une session qui finit VITE (binaire introuvable, refus au handshake) peut
+  // se terminer avant que le propriétaire ait ouvert son canal : démonter le
+  // socket maintenant lui rendrait « hôte injoignable » et perdrait le
+  // résultat. L'hôte l'attend donc — borné, tant que son PID vit, et seulement
+  // si la session s'est terminée D'ELLE-MÊME : un arrêt demandé (stopAcpHost,
+  // signal, propriétaire disparu) démonte aussitôt, comme avant.
+  if (!owner && !ownerSeen && !abort.signal.aborted) {
+    const deadline = Date.now() + OWNER_HELLO_GRACE_MS;
+    while (!owner && !ownerSeen && Date.now() < deadline && isProcessAlive(spec.ownerPid)) {
+      await new Promise((resolve) => setTimeout(resolve, OWNER_LATE_POLL_MS));
+    }
+  }
+
   // Le résultat part au propriétaire AVANT le démontage : c'est lui qui
   // dépubliera la session (SESSION_LIVE) puis mergera.
   const ownerSocket = owner as net.Socket | null;
   if (ownerSocket) {
-    writeFrame(ownerSocket, { type: 'result', result });
+    if (!resultDelivered) writeFrame(ownerSocket, { type: 'result', result });
     await new Promise<void>((resolve) => {
       ownerSocket.end(() => resolve());
       setTimeout(resolve, 2_000).unref();

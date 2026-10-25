@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, readdir, rm, utimes, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readdir, realpath, rm, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { simpleGit } from 'simple-git';
@@ -32,7 +32,9 @@ export async function backdateDir(dir, ageMs = 60 * 60_000) {
 }
 
 export async function createTempRepo() {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'striart-test-'));
+  // realpath NATIF : sous Windows, os.tmpdir() renvoie le nom court 8.3 (RUNNER~1)
+  // que le produit résout en nom long — les chemins attendus doivent être canoniques.
+  const root = await mkdtemp(path.join(await realpath(os.tmpdir()), 'striart-test-'));
   const git = simpleGit(root);
   await git.init(['-b', 'main']);
   await git.addConfig('user.name', 'Striart Test');
