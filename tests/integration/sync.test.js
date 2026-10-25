@@ -61,6 +61,22 @@ describe('striart sync — rebase automatique (intégration)', () => {
     expect(agents[0].pendingCommits).toBe(1);
   });
 
+  // Régression (audit CLI 2026-10-18) : une targetBranch absente remontait en
+  // « Erreur inattendue : fatal: couldn't find remote ref … » depuis le fetch.
+  it('targetBranch absente → UNKNOWN_BRANCH explicite (sync unitaire, global, fetch périodique)', async () => {
+    await setConfig(repo.root, { testCommand: GATE_OK, targetBranch: 'nope' });
+    const expected = {
+      code: 'UNKNOWN_BRANCH',
+      details: { branch: 'nope', setting: 'targetBranch' },
+      hint: expect.stringContaining('targetBranch'),
+    };
+    await expect(syncAgentWithMain({ root: repo.root, agent: 'agent-a' })).rejects.toMatchObject(
+      expected,
+    );
+    await expect(syncAllAgents({ root: repo.root })).rejects.toMatchObject(expected);
+    await expect(checkAgentsBehind({ root: repo.root })).rejects.toMatchObject(expected);
+  });
+
   it('agent déjà à jour → UP_TO_DATE', async () => {
     const result = await syncAgentWithMain({ root: repo.root, agent: 'agent-a' });
     expect(result.status).toBe('UP_TO_DATE');
@@ -203,12 +219,23 @@ describe('striart sync — rebase automatique (intégration)', () => {
     expect(results).toHaveLength(1);
     expect(results[0]).toMatchObject({ agent: 'agent-a', status: 'REBASED' });
 
-    // agent-b n'a pas été touché.
+    // agent-b n'a pas été touché : ni sa ref privée de rebase, ni FETCH_HEAD
+    // (que Striart n'écrit plus — fetchs vers des refs privées).
     const agentBGit = simpleGit(agentB.path);
+    const target = await agentBGit
+      .raw(['rev-parse', '--verify', 'refs/striart/target'])
+      .catch(() => 'no-fetch');
+    expect(target).toBe('no-fetch'); // jamais fetché
     const behind = await agentBGit
       .raw(['rev-list', '--count', 'HEAD..FETCH_HEAD'])
       .catch(() => 'no-fetch');
-    expect(behind).toBe('no-fetch'); // jamais fetché
+    expect(behind).toBe('no-fetch');
+    // agent-a, lui, a sa ref privée sur la tête de main.
+    const mainHead = (await repo.git.revparse(['HEAD'])).trim();
+    expect(results[0].mainHead).toBe(mainHead);
+    expect((await simpleGit(agent.path).raw(['rev-parse', 'refs/striart/target'])).trim()).toBe(
+      mainHead,
+    );
   });
 
   it('mergeAgentCommit rebase d’abord : main avancé + commit agent → MERGED sans conflit', async () => {

@@ -10,10 +10,27 @@ import {
 import { enqueueTask } from '../../src/queue.js';
 import { collectDashboardState, startDashboard } from '../../src/dashboard.js';
 import {
+  awaitElicitationAnswer,
   awaitPermissionAnswer,
+  createElicitationRequest,
   createPermissionRequest,
+  listPendingElicitations,
   listPendingPermissions,
 } from '../../src/permissions.ts';
+import { SCHEMA_ROOT, methodSpec, resultSchema } from '../../src/control/schema.ts';
+import { createValidator } from '../../src/control/validate.ts';
+import {
+  baseUrl,
+  call,
+  rawRequest,
+  rpc,
+  signIn,
+  sseReader,
+  useLoopbackDashboard,
+} from '../helpers/control-client.js';
+
+/** Document d'erreur du contrat (`error.data.error`) d'une réponse JSON-RPC. */
+const errorOf = (response) => response.body.error?.data?.error;
 
 describe('striart dashboard (intégration)', () => {
   let repo;
@@ -22,6 +39,7 @@ describe('striart dashboard (intégration)', () => {
   beforeEach(async () => {
     repo = await createTempRepo();
     await initStriart(repo.root);
+    await useLoopbackDashboard(repo.root);
     await createAgent({ root: repo.root, name: 'agent-a', command: 'claude' });
     await enqueueTask(repo.root, {
       agent: 'agent-b',
@@ -61,18 +79,14 @@ describe('striart dashboard (intégration)', () => {
     expect(state.tasks.some((t) => t.status === 'WAITING' && t.agent === 'agent-b')).toBe(true);
     expect(state.tickets).toHaveLength(1);
     // Le log du Test Gate n'est PAS dans l'état de liste (poids mort relu et
-    // poussé en SSE à chaque changement) : /api/ticket le sert à la demande.
+    // poussé à chaque changement) : ticket.get le sert à la demande.
     expect(state.tickets[0]).not.toHaveProperty('gateLog');
     expect(state.state).toMatchObject({ manualMode: false });
     expect(state.config.targetBranch).toBe('main');
-    // Profils du mode autonome : exposés pour le sélecteur du formulaire.
     expect(Array.isArray(state.profiles)).toBe(true);
   });
 
   it('heatmap : croise verrous actifs, prédictions en file et historique des tickets', async () => {
-    // agent-c verrouille src/db.ts (predictedFiles → locks.json) ;
-    // agent-b (file d'attente) le prédit aussi ; le ticket du beforeEach
-    // porte un conflit dessus → score = 1 (verrou) + 1 (file) + 2 (conflit).
     await createAgent({
       root: repo.root,
       name: 'agent-c',
@@ -82,10 +96,8 @@ describe('striart dashboard (intégration)', () => {
     const state = await collectDashboardState(repo.root);
     const hot = state.heatmap.find((h) => h.file === 'src/db.ts');
     expect(hot).toMatchObject({ agents: ['agent-c'], queued: ['agent-b'], conflicts: 1, score: 4 });
-    // Le fichier verrouillé mais jamais disputé est là aussi, score plus bas.
     const cold = state.heatmap.find((h) => h.file === 'src/schema.ts');
     expect(cold).toMatchObject({ agents: ['agent-c'], conflicts: 0, score: 1 });
-    // Trié du plus chaud au plus froid.
     expect(state.heatmap[0].file).toBe('src/db.ts');
   });
 
@@ -93,46 +105,79 @@ describe('striart dashboard (intégration)', () => {
     const [ticket] = await listConflictTickets(repo.root);
     const closed = await closeConflictTicket(repo.root, ticket.id);
     expect(closed.resolved).toBe(true);
-
-    // Plus listé par défaut (CLI, dashboard)...
     expect(await listConflictTickets(repo.root)).toHaveLength(0);
-    // ...mais conservé pour l'audit, marqué résolu.
     const all = await listConflictTickets(repo.root, { includeResolved: true });
     expect(all).toHaveLength(1);
     expect(all[0].resolved).toBe(true);
     const { readFile: rf } = await import('node:fs/promises');
     await expect(rf(`${ticket.dir}/RESOLVED`, 'utf8')).resolves.toMatch(/\d{4}-\d{2}-\d{2}T/);
-
-    // Ticket inconnu → erreur claire.
     await expect(closeConflictTicket(repo.root, 'ticket-fantome')).rejects.toMatchObject({
       code: 'TICKET_UNKNOWN',
     });
   });
 
-  it('sert la page HTML et l’API JSON sur 127.0.0.1', async () => {
-    server = await startDashboard({ root: repo.root, port: 0 }); // port éphémère
-    const { port } = server.address();
+  it('sert la page et le protocole (state.get) sur la boucle locale, une fois connecté', async () => {
+    server = await startDashboard({ root: repo.root, port: 0 });
+    const { cookie } = await signIn(server);
 
-    const html = await (await fetch(`http://127.0.0.1:${port}/`)).text();
+    const html = await (await fetch(`${baseUrl(server)}/`, { headers: { Cookie: cookie } })).text();
     expect(html).toContain('Striart');
-    expect(html).toContain('/api/state');
+    expect(html).toContain('/rpc');
 
-    const res = await fetch(`http://127.0.0.1:${port}/api/state`);
-    expect(res.headers.get('content-type')).toContain('application/json');
-    const state = await res.json();
-    expect(state.agents[0].name).toBe('agent-a');
-    expect(state.tickets[0].reason).toBe('GATE_FAILED');
+    const doc = await call(server, cookie, 'state.get');
+    expect(doc).toMatchObject({ schemaVersion: 1, command: 'state.get', ok: true, outcome: 'ok' });
+    expect(doc.data.agents[0].name).toBe('agent-a');
+    expect(doc.data.tickets[0].reason).toBe('GATE_FAILED');
+    expect(doc.data.instanceId).toMatch(/^[0-9a-f-]{36}$/);
 
-    const notFound = await fetch(`http://127.0.0.1:${port}/inconnu`);
+    const notFound = await fetch(`${baseUrl(server)}/inconnu`, { headers: { Cookie: cookie } });
     expect(notFound.status).toBe(404);
+    // /rpc n'accepte que POST.
+    expect((await fetch(`${baseUrl(server)}/rpc`, { headers: { Cookie: cookie } })).status).toBe(
+      405,
+    );
   });
 
-  it("sert le détail complet d'un ticket (3 versions + tentative LLM + log)", async () => {
+  it.each([[-1], [70_000], [1.5], [Number.NaN]])(
+    'port invalide (%s) → INVALID_ARGUMENT, avant toute mise en place',
+    async (port) => {
+      await expect(startDashboard({ root: repo.root, port })).rejects.toMatchObject({
+        code: 'INVALID_ARGUMENT',
+        kind: 'usage',
+      });
+    },
+  );
+
+  it('port déjà occupé → PORT_IN_USE avec un port alternatif proposé', async () => {
     server = await startDashboard({ root: repo.root, port: 0 });
     const { port } = server.address();
+    await expect(startDashboard({ root: repo.root, port })).rejects.toMatchObject({
+      code: 'PORT_IN_USE',
+      details: { port },
+      hint: `striart dashboard --port ${port + 1}`,
+    });
+  });
+
+  it('sans port explicite : celui de la config (dashboardPort)', async () => {
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(
+      `${repo.root}/.striartrc.json`,
+      JSON.stringify({
+        testCommand: 'node -e "process.exit(0)"',
+        dashboardPort: 0,
+        dashboardHostname: 'localhost',
+      }),
+    );
+    server = await startDashboard({ root: repo.root });
+    expect(server.address().port).toBeGreaterThan(0);
+  });
+
+  it('ticket.get : vue 3-way complète (3 versions + tentative LLM + log), id validé', async () => {
+    server = await startDashboard({ root: repo.root, port: 0 });
+    const { cookie } = await signIn(server);
     const [ticket] = await listConflictTickets(repo.root);
 
-    const detail = await (await fetch(`http://127.0.0.1:${port}/api/ticket/${ticket.id}`)).json();
+    const { data: detail } = await call(server, cookie, 'ticket.get', { id: ticket.id });
     expect(detail.id).toBe(ticket.id);
     expect(detail.reason).toBe('GATE_FAILED');
     expect(detail.log).toContain('3 tests rouges');
@@ -145,102 +190,105 @@ describe('striart dashboard (intégration)', () => {
         llmAttempt: 'const v = 3;\n',
       },
     ]);
+    expect(detail.resolutionInputs).toEqual([{ path: 'src/db.ts', kind: 'missing' }]);
 
-    // Ticket inconnu → 404 ; id malveillant (traversée) → jamais résolu en chemin.
-    expect((await fetch(`http://127.0.0.1:${port}/api/ticket/fantome`)).status).toBe(404);
-    expect((await fetch(`http://127.0.0.1:${port}/api/ticket/..%2F..%2Fsecret`)).status).toBe(404);
+    expect(errorOf(await rpc(server, cookie, 'ticket.get', { id: 'fantome' }))).toMatchObject({
+      code: 'TICKET_UNKNOWN',
+    });
+    // Id malveillant : refusé par le schéma, jamais résolu en chemin.
+    const evil = await rpc(server, cookie, 'ticket.get', { id: '../../secret' });
+    expect(evil.body.error.code).toBe(-32602);
+    expect(errorOf(evil)).toMatchObject({ code: 'INVALID_ARGUMENT', kind: 'usage' });
   });
 
-  it('actions de pilotage : CSRF refusé sans en-tête, ticket-close effectif, erreurs propagées', async () => {
+  it('actions : anti-CSRF, ticket.close effectif, erreurs métier dans l’enveloppe du contrat', async () => {
     server = await startDashboard({ root: repo.root, port: 0 });
-    const { port } = server.address();
+    const { cookie } = await signIn(server);
     const [ticket] = await listConflictTickets(repo.root);
-    const url = (a) => `http://127.0.0.1:${port}/api/action/${a}`;
-    const HEADERS = { 'Content-Type': 'application/json', 'X-Striart': '1' };
 
-    // Sans l'en-tête custom : refus 403 (un site malveillant ne peut pas
-    // le poser sans préflight CORS, que le serveur ne valide jamais).
-    const csrf = await fetch(url('ticket-close'), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: ticket.id }),
-    });
+    const csrf = await rpc(
+      server,
+      cookie,
+      'ticket.close',
+      { id: ticket.id },
+      { headers: { 'X-Striart': '' } },
+    );
     expect(csrf.status).toBe(403);
-    expect((await listConflictTickets(repo.root)).length).toBe(1); // rien n'a bougé
+    expect((await listConflictTickets(repo.root)).length).toBe(1);
 
-    // Avec l'en-tête : le ticket est clos pour de vrai.
-    const ok = await fetch(url('ticket-close'), {
-      method: 'POST',
-      headers: HEADERS,
-      body: JSON.stringify({ id: ticket.id }),
+    const ok = await call(server, cookie, 'ticket.close', { id: ticket.id });
+    expect(ok).toMatchObject({
+      ok: true,
+      data: { action: 'close', ticket: { id: ticket.id, resolved: true } },
     });
-    expect(ok.status).toBe(200);
-    expect((await ok.json()).ok).toBe(true);
     expect(await listConflictTickets(repo.root)).toHaveLength(0);
 
-    // Erreur métier (rollback sans merge Striart en tête) → 409 + code.
-    const ko = await fetch(url('rollback'), { method: 'POST', headers: HEADERS, body: '{}' });
-    expect(ko.status).toBe(409);
-    expect(await ko.json()).toMatchObject({ ok: false, code: 'NOT_A_STRIART_MERGE' });
+    // Erreur métier (rollback sans merge Striart en tête) : refus typé.
+    const ko = await rpc(server, cookie, 'merge.rollback');
+    expect(ko.status).toBe(200);
+    expect(ko.body.error.code).toBe(-32001);
+    expect(ko.body.error.data).toMatchObject({
+      schemaVersion: 1,
+      command: 'merge.rollback',
+      ok: false,
+      error: { code: 'NOT_A_STRIART_MERGE', kind: 'refusal' },
+    });
 
-    // Action inconnue → 404, GET sur une action → 404.
-    expect(
-      (await fetch(url('detruire-tout'), { method: 'POST', headers: HEADERS, body: '{}' })).status,
-    ).toBe(404);
-    expect((await fetch(url('rollback'))).status).toBe(404);
+    // Méthode inconnue → -32601.
+    const unknown = await rpc(server, cookie, 'detruire.tout');
+    expect(unknown.body.error.code).toBe(-32601);
+    expect(errorOf(unknown).code).toBe('CONTROL_METHOD_UNKNOWN');
+    // Abonnement par RPC : réservé au transport à flux (stdio).
+    expect(errorOf(await rpc(server, cookie, 'state.subscribe')).code).toBe(
+      'CONTROL_METHOD_UNAVAILABLE',
+    );
   });
 
-  it('DNS rebinding : un Host non local est refusé sur TOUTES les routes (403), lectures comprises', async () => {
-    const http = await import('node:http');
+  it('JSON-RPC : lot ordonné, notification sans réponse, JSON illisible', async () => {
     server = await startDashboard({ root: repo.root, port: 0 });
-    const { port } = server.address();
-
-    // fetch (undici) interdit de forger l'en-tête Host : on descend au HTTP
-    // brut pour simuler ce que le navigateur envoie sous DNS rebinding —
-    // requête vers 127.0.0.1, mais Host: evil.example.
-    const request = (routePath, { method = 'GET', headers = {} } = {}) =>
-      new Promise((resolve, reject) => {
-        const req = http.request(
-          {
-            host: '127.0.0.1',
-            port,
-            path: routePath,
-            method,
-            headers: { Host: 'evil.example', ...headers },
-          },
-          (res) => {
-            res.resume();
-            resolve(res.statusCode);
-          },
-        );
-        req.on('error', reject);
-        req.end();
+    const { cookie } = await signIn(server);
+    const post = (body) =>
+      fetch(`${baseUrl(server)}/rpc`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Striart': '1',
+          Origin: baseUrl(server),
+          Cookie: cookie,
+        },
+        body,
       });
+    const batch = await post(
+      JSON.stringify([
+        { jsonrpc: '2.0', id: 'a', method: 'control.initialize', params: { protocolVersion: 1 } },
+        { jsonrpc: '2.0', method: 'state.get' },
+        { jsonrpc: '2.0', id: 'b', method: 'state.get' },
+      ]),
+    );
+    const responses = await batch.json();
+    expect(responses.map((r) => r.id)).toEqual(['a', 'b']);
+    expect(responses[0].result.data).toMatchObject({
+      protocolVersion: 1,
+      schemaVersion: 1,
+      transport: 'http',
+    });
 
-    // Les LECTURES exposent l'état du repo, le code des tickets, les logs de
-    // session : elles DOIVENT refuser un Host tiers, pas seulement les actions.
-    for (const route of ['/', '/api/state', '/api/events', '/api/ticket/x', '/api/session-log/a']) {
-      expect(await request(route), `${route} doit refuser un Host tiers`).toBe(403);
-    }
-    // Action mutante : le contrôle d'hôte prime (sous rebinding l'origine
-    // devient same-origin, X-Striart seul ne suffirait pas).
-    expect(
-      await request('/api/action/rollback', { method: 'POST', headers: { 'X-Striart': '1' } }),
-    ).toBe(403);
+    const notification = await post(JSON.stringify({ jsonrpc: '2.0', method: 'state.get' }));
+    expect(notification.status).toBe(204);
 
-    // Contrôle négatif : Host local → la route répond (200).
-    expect((await fetch(`http://127.0.0.1:${port}/api/state`)).status).toBe(200);
+    const garbage = await (await post('{not json')).json();
+    expect(garbage.error.code).toBe(-32700);
+    expect(garbage.error.data.error.code).toBe('CONTROL_PARSE_ERROR');
   });
 
-  it('action run : lance une tâche via le Router (LLM mocké), prompt vide refusé', async () => {
+  it('task.run : lance une tâche via le Router (LLM mocké), prompt vide refusé par le schéma', async () => {
     const { vi } = await import('vitest');
     const realFetch = globalThis.fetch;
-    // Le LLM du Router est mocké ; les requêtes du test vers le dashboard
-    // (127.0.0.1) passent par le vrai fetch.
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url, options) => {
-        if (String(url).includes('127.0.0.1')) return realFetch(url, options);
+        // Seul le LLM (Ollama, port 11434) est simulé ; le dashboard passe par le vrai fetch.
+        if (!String(url).includes(':11434')) return realFetch(url, options);
         return {
           ok: true,
           json: async () => ({ response: JSON.stringify({ files: ['src/db.ts'] }) }),
@@ -249,27 +297,18 @@ describe('striart dashboard (intégration)', () => {
     );
     try {
       server = await startDashboard({ root: repo.root, port: 0 });
-      const { port } = server.address();
-      const HEADERS = { 'Content-Type': 'application/json', 'X-Striart': '1' };
-      const url = `http://127.0.0.1:${port}/api/action/run`;
+      const { cookie } = await signIn(server);
 
-      const empty = await realFetch(url, {
-        method: 'POST',
-        headers: HEADERS,
-        body: JSON.stringify({ prompt: '  ' }),
-      });
-      expect(empty.status).toBe(409);
-      expect((await empty.json()).code).toBe('EMPTY_PROMPT');
+      const empty = await rpc(server, cookie, 'task.run', { prompt: '  ' });
+      expect(errorOf(empty)).toMatchObject({ code: 'EMPTY_PROMPT', kind: 'usage' });
 
-      const ok = await realFetch(url, {
-        method: 'POST',
-        headers: HEADERS,
-        body: JSON.stringify({ prompt: 'Ajoute un index sur la table users' }),
+      const ok = await call(server, cookie, 'task.run', {
+        prompt: 'Ajoute un index sur la table users',
       });
-      expect(ok.status).toBe(200);
-      const data = await ok.json();
-      expect(data.result.status).toBe('STARTED');
-      expect(data.result.predictedFiles).toEqual(['src/db.ts']);
+      expect(ok.data.mode).toBe('attended');
+      expect(ok.data.session).toBeNull();
+      expect(ok.data.run.status).toBe('STARTED');
+      expect(ok.data.run.predictedFiles).toEqual(['src/db.ts']);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -280,108 +319,99 @@ describe('striart dashboard (intégration)', () => {
     expect(Array.isArray(state.history)).toBe(true);
   });
 
-  it('action unlock : réactive la fusion sémantique et remet le compteur à zéro', async () => {
+  it('semantic.unlock : réactive la fusion sémantique et remet le compteur à zéro', async () => {
     const { readState, recordSemanticFailure } = await import('../../src/state.js');
     for (let i = 0; i < 3; i += 1) await recordSemanticFailure(repo.root);
     expect((await readState(repo.root)).manualMode).toBe(true);
 
     server = await startDashboard({ root: repo.root, port: 0 });
-    const { port } = server.address();
-    const res = await fetch(`http://127.0.0.1:${port}/api/action/unlock`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Striart': '1' },
-      body: '{}',
-    });
-    expect(res.status).toBe(200);
+    const { cookie } = await signIn(server);
+    expect((await call(server, cookie, 'semantic.unlock')).data).toEqual({ action: 'unlock' });
     expect(await readState(repo.root)).toMatchObject({
       manualMode: false,
       semanticFailureStreak: 0,
     });
   });
 
-  it('action run autonome : profil inconnu refusé DANS la requête, rien lancé en tâche de fond', async () => {
+  it('task.run autonome : profil inconnu refusé DANS la requête, rien lancé en tâche de fond', async () => {
     server = await startDashboard({ root: repo.root, port: 0 });
-    const { port } = server.address();
-    const res = await fetch(`http://127.0.0.1:${port}/api/action/run`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Striart': '1' },
-      body: JSON.stringify({ prompt: 'x', mode: 'autonomous', profile: 'profil-fantome' }),
+    const { cookie } = await signIn(server);
+    const res = await rpc(server, cookie, 'task.run', {
+      prompt: 'x',
+      mode: 'autonomous',
+      profile: 'profil-fantome',
     });
-    expect(res.status).toBe(409);
-    expect((await res.json()).code).toBe('PROFILE_UNKNOWN');
-    // Aucun clone créé : la validation précède toute création.
+    expect(errorOf(res).code).toBe('PROFILE_UNKNOWN');
     expect((await collectDashboardState(repo.root)).agents).toHaveLength(1);
   });
 
-  it('champ agent malformé : refusé en 4xx, jamais d’escalade silencieuse vers la portée globale', async () => {
+  it('champ agent malformé : refusé, jamais d’escalade silencieuse vers la portée globale', async () => {
     server = await startDashboard({ root: repo.root, port: 0 });
-    const { port } = server.address();
-    const HEADERS = { 'Content-Type': 'application/json', 'X-Striart': '1' };
-
-    // {agent: 0} ou {agent: [...]} sur sync/clean visait UN agent : le
-    // requalifier en « tous les agents » serait une escalade de portée.
-    for (const [action, agent] of [
-      ['sync', 0],
-      ['sync', ['agent-a']],
-      ['clean', 0],
+    const { cookie } = await signIn(server);
+    for (const [method, agent] of [
+      ['agent.sync', 0],
+      ['agent.sync', ['agent-a']],
+      ['clones.clean', 0],
+      ['agent.merge', '../x'],
     ]) {
-      const res = await fetch(`http://127.0.0.1:${port}/api/action/${action}`, {
-        method: 'POST',
-        headers: HEADERS,
-        body: JSON.stringify({ agent }),
-      });
-      expect(res.status, `${action} avec agent ${JSON.stringify(agent)}`).toBe(409);
-      expect((await res.json()).code).toBe('INVALID_AGENT_NAME');
+      const res = await rpc(server, cookie, method, { agent });
+      expect(errorOf(res)?.code, `${method} ${JSON.stringify(agent)}`).toBe('INVALID_AGENT_NAME');
     }
+    // Paramètre inconnu : refusé (objet fermé), jamais ignoré.
+    expect(errorOf(await rpc(server, cookie, 'agent.sync', { agnet: 'agent-a' }))).toMatchObject({
+      code: 'INVALID_ARGUMENT',
+      details: { param: 'params.agnet', keyword: 'additionalProperties' },
+    });
   });
 
-  it('action run autonome : nom d’agent invalide refusé DANS la requête, pas en tâche de fond', async () => {
+  it('task.run autonome : nom d’agent invalide refusé DANS la requête', async () => {
     server = await startDashboard({ root: repo.root, port: 0 });
-    const { port } = server.address();
-    const res = await fetch(`http://127.0.0.1:${port}/api/action/run`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Striart': '1' },
-      body: JSON.stringify({ prompt: 'x', mode: 'autonomous', agent: 'mon agent' }), // espace interdit
+    const { cookie } = await signIn(server);
+    const res = await rpc(server, cookie, 'task.run', {
+      prompt: 'x',
+      mode: 'autonomous',
+      agent: 'mon agent',
     });
-    expect(res.status).toBe(409);
-    expect((await res.json()).code).toBe('INVALID_AGENT_NAME');
-    // Rien lancé en arrière-plan : la validation précède le 200.
+    expect(errorOf(res).code).toBe('INVALID_AGENT_NAME');
     expect((await collectDashboardState(repo.root)).agents).toHaveLength(1);
   });
 
-  it('action sync sans agent : rebase en lot avec synthèse lisible', async () => {
+  it('agent.sync sans agent : rebase en lot, mêmes données que `striart sync --json`', async () => {
     server = await startDashboard({ root: repo.root, port: 0 });
-    const { port } = server.address();
-    const res = await fetch(`http://127.0.0.1:${port}/api/action/sync`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Striart': '1' },
-      body: '{}',
-    });
-    expect(res.status).toBe(200);
-    const { result } = await res.json();
-    expect(result.results).toHaveLength(1); // agent-a du beforeEach
-    expect(result.status).toContain('à jour');
+    const { cookie } = await signIn(server);
+    const doc = await call(server, cookie, 'agent.sync');
+    expect(doc.data.results).toHaveLength(1);
+    expect(doc.data.results[0]).toMatchObject({ agent: 'agent-a', status: 'UP_TO_DATE' });
   });
 
-  it('/api/doctor : diagnostic servi en JSON (lecture, protégée par le contrôle Host global)', async () => {
+  it('doctor.run : diagnostic servi dans le document', async () => {
+    server = await startDashboard({ root: repo.root, port: 0 });
+    const { cookie } = await signIn(server);
+    const { data: report } = await call(server, cookie, 'doctor.run');
+    expect(Array.isArray(report.checks)).toBe(true);
+    expect(report.checks.length).toBeGreaterThan(3);
+    expect(typeof report.healthy).toBe('boolean');
+    expect(JSON.stringify(report.checks)).toMatch(/git/i);
+  });
+
+  it('Host non local refusé sur toutes les routes, lectures comprises (DNS rebinding)', async () => {
     server = await startDashboard({ root: repo.root, port: 0 });
     const { port } = server.address();
-    const res = await fetch(`http://127.0.0.1:${port}/api/doctor`);
-    expect(res.status).toBe(200);
-    const report = await res.json();
-    expect(Array.isArray(report.checks)).toBe(true);
-    expect(report.checks.length).toBeGreaterThan(0);
-    expect(typeof report.healthy).toBe('boolean');
+    for (const route of ['/', '/rpc', '/events', '/auth']) {
+      const res = await rawRequest(port, route, { headers: { Host: 'evil.example' } });
+      expect(res.status, `${route} doit refuser un Host tiers`).toBe(403);
+    }
   });
 });
 
-describe('dashboard — visibilité du mode autonome (intégration)', () => {
+describe('dashboard — mode autonome et logs de session (intégration)', () => {
   let repo;
   let server;
 
   beforeEach(async () => {
     repo = await createTempRepo();
     await initStriart(repo.root);
+    await useLoopbackDashboard(repo.root);
   });
 
   afterEach(async () => {
@@ -393,47 +423,41 @@ describe('dashboard — visibilité du mode autonome (intégration)', () => {
   it('distingue un agent autonome d’un agent supervisé, profil compris', async () => {
     await createAgent({ root: repo.root, name: 'humain', command: 'claude' });
     await createAgent({ root: repo.root, name: 'robot', mode: 'autonomous', profile: 'codex' });
-
     const state = await collectDashboardState(repo.root);
     const byName = Object.fromEntries(state.agents.map((a) => [a.name, a]));
-
     expect(byName.humain.mode).toBe('attended');
     expect(byName.robot.mode).toBe('autonomous');
     expect(byName.robot.profile).toBe('codex');
+    // Hôte de session ACP : exposé pour les autonomes seulement.
+    expect(byName.robot.acpHost).toMatchObject({ running: false, listening: false, pid: null });
+    expect(byName.humain).not.toHaveProperty('acpHost');
   });
 
   it('un registre antérieur au mode (sans champ) est affiché comme supervisé', async () => {
-    // Rétrocompatibilité : les agents créés avant l'introduction du mode ne
-    // doivent pas apparaître comme "autonome" par accident.
     const { readRegistry } = await import('../../src/clone.js');
     const { writeJsonAtomic } = await import('../../src/json-file.js');
     const path = await import('node:path');
-
     await createAgent({ root: repo.root, name: 'ancien' });
     const registry = await readRegistry(repo.root);
     delete registry.ancien.mode;
     delete registry.ancien.profile;
     await writeJsonAtomic(path.join(repo.root, '.striart', 'agents.json'), registry);
-
     const state = await collectDashboardState(repo.root);
     expect(state.agents[0].mode).toBe('attended');
     expect(state.agents[0].profile).toBeNull();
   });
 
   it('expose l’état du watcher : rien ne le lance automatiquement', async () => {
-    // Sans watcher, les commits des agents supervisés ne sont jamais mergés.
-    // Le dashboard doit le dire, sinon l'utilisateur attend en vain.
     const state = await collectDashboardState(repo.root);
     expect(state.daemon.running).toBe(false);
     expect(state.daemon.stale).toBe(false);
     expect(state.daemon.logPath).toContain('watch.log');
   });
 
-  it('sert le log de session d’un agent autonome, et 404 sinon', async () => {
+  it('session.log : sert le log d’un agent autonome ; agent inconnu ou nom malveillant refusés', async () => {
     const { mkdir, writeFile } = await import('node:fs/promises');
     const path = await import('node:path');
     const { sessionLogPath } = await import('../../src/session.js');
-
     const info = await createAgent({
       root: repo.root,
       name: 'robot',
@@ -443,25 +467,24 @@ describe('dashboard — visibilité du mode autonome (intégration)', () => {
     const logPath = sessionLogPath(repo.root, 'robot', info.taskId);
     await mkdir(path.dirname(logPath), { recursive: true });
     await writeFile(logPath, 'trace de la session autonome', 'utf8');
+    await createAgent({ root: repo.root, name: 'sans-log', mode: 'autonomous', profile: 'claude' });
 
     server = await startDashboard({ root: repo.root, port: 0 });
-    const { port } = server.address();
-
-    const ok = await fetch(`http://127.0.0.1:${port}/api/session-log/robot`);
-    expect(ok.status).toBe(200);
-    expect((await ok.json()).log).toContain('trace de la session autonome');
-
-    // Agent inexistant → 404, sans fuite d'information.
-    const missing = await fetch(`http://127.0.0.1:${port}/api/session-log/fantome`);
-    expect(missing.status).toBe(404);
-  });
-
-  it('refuse toute traversée de chemin sur la route des logs', async () => {
-    server = await startDashboard({ root: repo.root, port: 0 });
-    const { port } = server.address();
-    for (const evil of ['..%2F..%2Fetc%2Fpasswd', 'a%2F..%2F..%2Fsecret', '.%2E%2Fx']) {
-      const res = await fetch(`http://127.0.0.1:${port}/api/session-log/${evil}`);
-      expect(res.status).toBe(404);
+    const { cookie } = await signIn(server);
+    expect((await call(server, cookie, 'session.log', { agent: 'robot' })).data.log).toContain(
+      'trace de la session autonome',
+    );
+    expect(errorOf(await rpc(server, cookie, 'session.log', { agent: 'fantome' })).code).toBe(
+      'AGENT_UNKNOWN',
+    );
+    expect(errorOf(await rpc(server, cookie, 'session.log', { agent: 'sans-log' }))).toMatchObject({
+      code: 'SESSION_LOG_UNAVAILABLE',
+      details: { agent: 'sans-log' },
+    });
+    for (const evil of ['../../etc/passwd', 'a/../../secret', '.%2E/x']) {
+      expect(errorOf(await rpc(server, cookie, 'session.log', { agent: evil })).code).toBe(
+        'INVALID_AGENT_NAME',
+      );
     }
   });
 });
@@ -473,6 +496,7 @@ describe('dashboard — temps réel (SSE)', () => {
   beforeEach(async () => {
     repo = await createTempRepo();
     await initStriart(repo.root);
+    await useLoopbackDashboard(repo.root);
   });
 
   afterEach(async () => {
@@ -481,71 +505,28 @@ describe('dashboard — temps réel (SSE)', () => {
     await repo.cleanup();
   });
 
-  /**
-   * Lit le flux SSE jusqu'au prochain événement du type demandé.
-   * Ignore les commentaires (battements :ping) et les autres événements.
-   */
-  function sseReader(body) {
-    const reader = body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    return async function nextEvent(wanted, timeoutMs = 30_000) {
-      const deadline = Date.now() + timeoutMs;
-      for (;;) {
-        const frameEnd = buffer.indexOf('\n\n');
-        if (frameEnd !== -1) {
-          const frame = buffer.slice(0, frameEnd);
-          buffer = buffer.slice(frameEnd + 2);
-          const event = frame.match(/^event: (.+)$/m)?.[1];
-          const data = frame.match(/^data: (.+)$/m)?.[1];
-          if (event === wanted && data) return JSON.parse(data);
-          continue; // commentaire, retry:, ou autre événement — on passe
-        }
-        if (Date.now() > deadline) throw new Error(`événement SSE "${wanted}" jamais reçu`);
-        const { value, done } = await reader.read();
-        if (done) throw new Error('flux SSE terminé prématurément');
-        buffer += decoder.decode(value, { stream: true });
-      }
-    };
-  }
-
-  it("pousse l'état initial à la connexion, puis à chaque changement disque", async () => {
+  it("pousse l'état initial à la connexion, puis à chaque changement disque (autre process simulé)", async () => {
     server = await startDashboard({ root: repo.root, port: 0 });
-    const { port } = server.address();
+    const { cookie } = await signIn(server);
+    const res = await fetch(`${baseUrl(server)}/events`, { headers: { Cookie: cookie } });
+    const next = sseReader(res.body);
+    const initial = await next('state.changed');
+    expect(initial.message.params.state.agents).toEqual([]);
+    expect(initial.message.params.state.config.targetBranch).toBe('main');
 
-    const res = await fetch(`http://127.0.0.1:${port}/api/events`);
-    expect(res.status).toBe(200);
-    expect(res.headers.get('content-type')).toContain('text/event-stream');
-    const nextEvent = sseReader(res.body);
-
-    // État initial : dans le flux lui-même, sans requête séparée.
-    const initial = await nextEvent('state');
-    expect(initial.agents).toEqual([]);
-    expect(initial.config.targetBranch).toBe('main');
-
-    // Changement d'état SANS passer par le dashboard (autre process simulé) :
-    // la création d'un agent écrit agents.json → le watcher disque doit
-    // pousser un nouvel état. C'est le cœur du temps réel inter-process.
     await createAgent({ root: repo.root, name: 'agent-sse' });
-    const deadline = Date.now() + 30_000;
     let updated;
-    // Les écritures intermédiaires (locks) peuvent produire des pushes où
-    // l'agent n'est pas encore visible : on attend CELUI qui le porte.
     do {
-      updated = await nextEvent('state', Math.max(1000, deadline - Date.now()));
-    } while (!updated.agents.some((a) => a.name === 'agent-sse') && Date.now() < deadline);
-    expect(updated.agents.map((a) => a.name)).toContain('agent-sse');
+      updated = await next('state.changed');
+    } while (!updated.message.params.state.agents.some((a) => a.name === 'agent-sse'));
+    await next.cancel();
   });
 
   it('server.close ferme le flux SSE sans attendre (pas de socket fantôme)', async () => {
     server = await startDashboard({ root: repo.root, port: 0 });
-    const { port } = server.address();
-    const res = await fetch(`http://127.0.0.1:${port}/api/events`);
-    const nextEvent = sseReader(res.body);
-    await nextEvent('state'); // connexion établie et servie
-
-    // close() doit aboutir alors qu'un client SSE est encore connecté :
-    // c'est le démontage (teardown) qui coupe les flux, pas le client.
+    const { cookie } = await signIn(server);
+    const res = await fetch(`${baseUrl(server)}/events`, { headers: { Cookie: cookie } });
+    await sseReader(res.body)('state.changed');
     const closed = await Promise.race([
       new Promise((resolve) => server.close(() => resolve('closed'))),
       new Promise((resolve) => setTimeout(() => resolve('timeout'), 15_000)),
@@ -555,14 +536,17 @@ describe('dashboard — temps réel (SSE)', () => {
   });
 });
 
-describe('dashboard — permissions semi-autonomes et doctor', () => {
+describe('dashboard — permissions semi-autonomes', () => {
   let repo;
   let server;
+  let cookie;
 
   beforeEach(async () => {
     repo = await createTempRepo();
     await initStriart(repo.root);
+    await useLoopbackDashboard(repo.root);
     server = await startDashboard({ root: repo.root, port: 0 });
+    ({ cookie } = await signIn(server));
   });
 
   afterEach(async () => {
@@ -570,10 +554,7 @@ describe('dashboard — permissions semi-autonomes et doctor', () => {
     await repo.cleanup();
   });
 
-  const HEADERS = { 'Content-Type': 'application/json', 'X-Striart': '1' };
-  const url = (p) => `http://127.0.0.1:${server.address().port}${p}`;
-
-  it("une demande en attente apparaît dans l'état, l'action permission la tranche, la session la lit", async () => {
+  it("une demande en attente apparaît dans l'état, permission.answer la tranche, la session la lit", async () => {
     const request = await createPermissionRequest(repo.root, {
       agent: 'agent-ask',
       taskId: 't1',
@@ -585,40 +566,25 @@ describe('dashboard — permissions semi-autonomes et doctor', () => {
       timeoutMs: 60_000,
     });
 
-    const state = await (await fetch(url('/api/state'))).json();
+    const { data: state } = await call(server, cookie, 'state.get');
     expect(state.permissions).toHaveLength(1);
     expect(state.permissions[0]).toMatchObject({ agent: 'agent-ask', title: 'Lancer npm test' });
 
-    const res = await fetch(url('/api/action/permission'), {
-      method: 'POST',
-      headers: HEADERS,
-      body: JSON.stringify({ id: request.id, option: 'ok' }),
-    });
-    const data = await res.json();
-    expect(data.ok).toBe(true);
-    // Côté session : la réponse est lisible et le fichier nettoyé.
+    const doc = await call(server, cookie, 'permission.answer', { id: request.id, option: 'ok' });
+    expect(doc.data).toMatchObject({ id: request.id, status: 'ANSWERED', answer: 'ok' });
     await expect(awaitPermissionAnswer(repo.root, request.id, 5_000)).resolves.toBe('ok');
     expect(await listPendingPermissions(repo.root)).toEqual([]);
   });
 
   it("refus typés : id invalide, demande inconnue, option non proposée — jamais d'accord par défaut", async () => {
-    const post = (body) =>
-      fetch(url('/api/action/permission'), {
-        method: 'POST',
-        headers: HEADERS,
-        body: JSON.stringify(body),
-      });
-
-    for (const body of [
-      {},
-      { id: '../evasion', option: 'ok' },
-      { id: 'perm-00000000-0000-0000-0000-000000000000', option: 'ok' },
+    for (const [params, code] of [
+      [{}, 'PERMISSION_ID_INVALID'],
+      [{ id: '../evasion', option: 'ok' }, 'PERMISSION_ID_INVALID'],
+      [{ id: 'perm-00000000-0000-0000-0000-000000000000', option: 'ok' }, 'PERMISSION_NOT_PENDING'],
     ]) {
-      const res = await post(body);
-      expect(res.ok).toBe(false);
-      expect((await res.json()).ok).toBe(false);
+      const res = await rpc(server, cookie, 'permission.answer', params);
+      expect(errorOf(res)?.code, JSON.stringify(params)).toBe(code);
     }
-
     const request = await createPermissionRequest(repo.root, {
       agent: 'a',
       taskId: 't',
@@ -626,19 +592,73 @@ describe('dashboard — permissions semi-autonomes et doctor', () => {
       options: [{ optionId: 'ok', kind: 'allow_once' }],
       timeoutMs: 60_000,
     });
-    const res = await post({ id: request.id, option: 'inventée' });
-    expect((await res.json()).error).toMatch(/option inconnue/i);
-    // La demande reste PENDING : un refus de forme ne consomme pas l'arbitrage.
+    const res = await rpc(server, cookie, 'permission.answer', {
+      id: request.id,
+      option: 'inventée',
+    });
+    expect(errorOf(res).code).toBe('PERMISSION_OPTION_UNKNOWN');
     expect(await listPendingPermissions(repo.root)).toHaveLength(1);
   });
 
-  it('GET /api/doctor sert le diagnostic complet (repo initialisé, checks présents)', async () => {
-    const res = await fetch(url('/api/doctor'));
-    expect(res.status).toBe(200);
-    const report = await res.json();
-    expect(Array.isArray(report.checks)).toBe(true);
-    expect(report.checks.length).toBeGreaterThan(3);
-    const names = JSON.stringify(report.checks);
-    expect(names).toMatch(/git/i);
+  it('elicitation : visible dans l’état (schéma publié), réponse validée contre requestedSchema, demande gardée ouverte si invalide', async () => {
+    const validate = createValidator(SCHEMA_ROOT);
+    const request = await createElicitationRequest(repo.root, {
+      agent: 'agent-ask',
+      taskId: 't1',
+      mode: 'form',
+      message: '<img src=x onerror=alert(1)> Quel environnement ?',
+      requestedSchema: {
+        type: 'object',
+        properties: {
+          env: { type: 'string', enum: ['staging', 'prod'] },
+          replicas: { type: 'integer', minimum: 1, maximum: 5 },
+        },
+        required: ['env'],
+      },
+      timeoutMs: 60_000,
+    });
+    const state = await call(server, cookie, 'state.get');
+    expect(validate(resultSchema(methodSpec('state.get')), state)).toBeNull();
+    expect(state.data.elicitations).toHaveLength(1);
+    expect(state.data.permissions).toHaveLength(0);
+
+    const bad = await rpc(server, cookie, 'elicitation.answer', {
+      id: request.id,
+      action: 'accept',
+      content: { env: 'dev' },
+    });
+    expect(errorOf(bad)).toMatchObject({ code: 'ELICITATION_CONTENT_INVALID', kind: 'usage' });
+    expect(await listPendingElicitations(repo.root)).toHaveLength(1);
+
+    const ok = await call(server, cookie, 'elicitation.answer', {
+      id: request.id,
+      action: 'accept',
+      content: { env: 'prod', replicas: 2 },
+    });
+    expect(ok.data).toMatchObject({ status: 'ANSWERED', answer: { action: 'accept' } });
+    await expect(awaitElicitationAnswer(repo.root, request.id, 5_000)).resolves.toMatchObject({
+      action: 'accept',
+      content: { env: 'prod', replicas: 2 },
+    });
+    // Rejouée : plus en attente.
+    const again = await rpc(server, cookie, 'elicitation.answer', {
+      id: request.id,
+      action: 'decline',
+    });
+    expect(errorOf(again).code).toBe('ELICITATION_NOT_PENDING');
+    // Id hors motif : refusé par le schéma.
+    const evil = await rpc(server, cookie, 'elicitation.answer', { id: '../x', action: 'cancel' });
+    expect(errorOf(evil).code).toBe('INVALID_ARGUMENT');
+  });
+
+  it('mainSession.release : libère la session principale déclarée (lock --stop), plan humain seulement', async () => {
+    const { startMainSession } = await import('../../src/main-session.js');
+    await startMainSession(repo.root, { pid: process.pid, reason: 'édition manuelle' });
+    const doc = await call(server, cookie, 'mainSession.release');
+    expect(doc.data).toMatchObject({
+      action: 'stop',
+      released: { reason: 'édition manuelle', alive: true },
+    });
+    expect((await call(server, cookie, 'state.get')).data.mainSession).toBeNull();
   });
 });

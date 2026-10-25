@@ -208,7 +208,16 @@ describe('Memory Layer (intégration)', () => {
       llm: null,
       memoryMaxEntries: 2,
     };
-    mockLLM('- API n');
+    // Un symbole DIFFÉRENT par merge : les puces sur le même symbole se
+    // remplacent (lot T), seules des puces distinctes s'accumulent.
+    let n = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async () => {
+        n += 1;
+        return { ok: true, json: async () => ({ response: '- `api' + n + '()` ajoutée' }) };
+      }),
+    );
 
     for (let i = 1; i <= 3; i += 1) {
       const result = await updateMemoryAfterMerge({
@@ -216,7 +225,7 @@ describe('Memory Layer (intégration)', () => {
         config,
         agent: `agent-${i}`,
         sha: String(i).repeat(40),
-        diff: 'diff',
+        diff: `diff ${i}`, // diffs distincts : le cache de résultats ne doit pas répondre à leur place
       });
       expect(result.updated).toBe(true);
     }

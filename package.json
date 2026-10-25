@@ -1,6 +1,7 @@
 {
   "name": "@jumsay/striart",
   "version": "0.10.0",
+  "private": true,
   "description": "Orchestrateur Git multi-agents pour Claude Code et autres IA coding agents — isolation physique, routing préventif, fusion sémantique, Test Gate bloquant",
   "type": "module",
   "license": "MIT",
@@ -21,11 +22,13 @@
   "files": [
     "src/",
     "examples/",
+    "schemas/",
     "README.md",
     "README.fr.md",
     "CHANGELOG.md",
     "LICENSE",
-    ".env.example"
+    ".env.example",
+    "native/keys/"
   ],
   "repository": {
     "type": "git",
@@ -36,45 +39,51 @@
     "node": ">=22.18"
   },
   "scripts": {
-    "dev": "nodemon src/cli.js",
-    "test": "vitest run",
+    "dev": "node --watch-path=src src/cli.js",
+    "test": "vitest run --project unit --project integration",
     "test:unit": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
+    "test:pack": "vitest run --project pack",
     "test:watch": "vitest",
-    "test:ci": "tsc && vitest run --coverage",
+    "test:ci": "tsc && vitest run --coverage --project unit --project integration && vitest run --project pack",
     "typecheck": "tsc",
     "lint": "eslint . && prettier --check .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "pack:release": "node scripts/pack.ts",
+    "bench:startup": "node scripts/bench-startup.ts",
+    "bench:tokens": "node scripts/bench-tokens.ts",
+    "native:build": "cd native && cargo build --release --locked --bins --examples",
+    "native:test": "cd native && cargo test --locked",
+    "native:lint": "cd native && cargo fmt --all --check && cargo clippy --locked --all-targets -- -D warnings",
+    "native:deny": "cd native && cargo deny check",
+    "native:stage": "node scripts/native-stage.ts",
+    "native:keygen": "node scripts/native-keygen.ts",
+    "prepublishOnly": "node scripts/pack.ts --refuse-raw-publish"
   },
   "dependencies": {
     "@xterm/headless": "^6.0.0",
     "chokidar": "^4.0.0",
-    "commander": "^12.0.0",
+    "commander": "^15.0.0",
     "cosmiconfig": "^9.0.0",
     "execa": "^9.0.0",
     "ink": "^7.1.1",
-    "node-pty": "^1.1.0",
     "pino": "^9.0.0",
     "pino-pretty": "^11.0.0",
     "react": "^19.2.8",
-    "simple-git": "^3.25.0",
+    "simple-git": "^4.0.2",
     "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^26.1.2",
     "@typescript/native": "npm:typescript@^7.0.2",
-    "@vitest/coverage-v8": "^4.1.10",
+    "@vitest/coverage-v8": "^4.1.11",
     "eslint": "^10.8.1",
     "eslint-config-prettier": "^10.1.8",
     "globals": "^17.9.0",
-    "nodemon": "^3.0.0",
     "prettier": "^3.9.6",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
     "typescript-eslint": "^8.67.0",
-    "vitest": "^4.1.10"
-  },
-  "allowScripts": {
-    "node-pty@1.1.0": true
+    "vitest": "^4.1.11"
   }
 }

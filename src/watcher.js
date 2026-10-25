@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import chokidar from 'chokidar';
-import { agentsDir } from './clone.js';
+import { agentsDir } from './paths.js';
 import { logger } from './logger.js';
 
 /**

@@ -31,9 +31,34 @@ describe('stripCodeFences', () => {
     expect(stripCodeFences('```\nconst x = 1;\n```')).toBe('const x = 1;');
   });
 
+  it("conserve l'indentation de la 1re ligne (Python/YAML)", () => {
+    expect(stripCodeFences('    return x\n    y = 2\n')).toBe('    return x\n    y = 2');
+    expect(stripCodeFences('\n\n  - a: 1\n    b: 2\n\n')).toBe('  - a: 1\n    b: 2');
+  });
+
+  it("conserve l'indentation dans une fence", () => {
+    expect(stripCodeFences('```python\n    return x\n```')).toBe('    return x');
+    expect(stripCodeFences('```python\r\n    return x\r\n```')).toBe('    return x');
+  });
+
+  it('un texte blanc donne une chaîne vide', () => {
+    expect(stripCodeFences('  \n \n')).toBe('');
+  });
+
   it('ne touche pas aux fences internes au code', () => {
     const code = 'const doc = `\\`\\`\\`js`;\nconst y = 2;';
     expect(stripCodeFences(code)).toBe(code);
+  });
+});
+
+describe('classifyConflict : encodage', () => {
+  it("U+FFFD dans l'une des trois versions : décision humaine (kind encoding)", () => {
+    for (const v of ['base', 'ours', 'theirs']) {
+      const versions = { base: 'a\n', ours: 'b\n', theirs: 'c\n', [v]: 'caf�\n' };
+      expect(classifyConflict({ filePath: 'src/a.txt', ...versions })).toEqual({
+        kind: 'encoding',
+      });
+    }
   });
 });
 

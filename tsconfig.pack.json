@@ -1,0 +1,48 @@
+{
+  // Émission du JavaScript PUBLIÉ — utilisé uniquement par scripts/pack.ts.
+  //
+  // Pourquoi une émission alors que le dépôt est « zéro build » : Node refuse
+  // délibérément le type stripping des fichiers situés sous node_modules
+  // (ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING, aucun flag ne lève ce
+  // refus). En développement, Node exécute les .ts de src/ directement ; le
+  // paquet installé, lui, doit contenir du JS. tsconfig.json reste noEmit et
+  // garde seul le rôle de typecheck.
+  //
+  // Compilateur : le tsc du paquet `typescript` (alias TS 6.0.x — émetteur
+  // mature). Émission fichier par fichier, PUR EFFACEMENT : aucune
+  // transformation au-delà du retrait des types et de la réécriture des
+  // extensions d'import relatives (`./acp.ts` → `./acp.js`, y compris dans les
+  // .js et les import() dynamiques à littéral).
+  //
+  // scripts/pack.ts génère, dans son dossier de staging, un tsconfig qui
+  // ÉTEND celui-ci en fixant rootDir/outDir/files sur la copie des fichiers
+  // suivis par git : ce fichier ne porte que les options d'émission.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    // Le typecheck est le rôle de `npm run typecheck` (TS 7) — l'émission ne
+    // le refait pas (et le staging n'a pas de node_modules à résoudre).
+    // Une erreur de SYNTAXE reste bloquante (noEmitOnError).
+    "noCheck": true,
+    "noEmitOnError": true,
+    "target": "ESNext",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rewriteRelativeImportExtensions": true,
+    // Les imports sont émis tels qu'écrits, `import type` retiré — exactement
+    // ce que fait le type stripping de Node en développement.
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+    "removeComments": false,
+    "declaration": false,
+    // Source maps autonomes : sources embarquées (inlineSources), chemins
+    // relatifs au fichier émis — le paquet ne publie pas les .ts.
+    "sourceMap": true,
+    "inlineSources": true,
+    "sourceRoot": "./",
+    // LF partout : un shebang en CRLF (checkout Windows autocrlf) casserait
+    // `#!/usr/bin/env node` sous POSIX.
+    "newLine": "lf",
+    "types": []
+  }
+}

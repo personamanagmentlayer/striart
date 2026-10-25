@@ -7,6 +7,7 @@ import { initStriart } from '../../src/init.js';
 import { createAgent, readRegistry, updateAgentMeta } from '../../src/clone.js';
 import { applyTicketResolution, mergeAgentCommit, stopAgent } from '../../src/orchestrator.js';
 import { readState, recordSemanticFailure } from '../../src/state.js';
+import { listMergeHistory } from '../../src/history.js';
 import {
   createConflictTicket,
   listConflictTickets,
@@ -59,6 +60,39 @@ describe('conflicts.js — readResolutionInputs / prepareResolutionScaffold (int
 
   afterEach(async () => {
     await repo.cleanup();
+  });
+
+  it('l’id d’un ticket est le nom de son dossier : un ticket.json falsifié ne redirige aucune écriture', async () => {
+    await initStriart(repo.root);
+    const first = await createConflictTicket(repo.root, {
+      agent: 'agent-a',
+      branch: 'striart/agent-a/task-1',
+      sha: 'abc1234',
+      reason: 'MERGE_CONFLICT',
+      conflictedFiles: ['app.js'],
+      resolutions: [{ path: 'app.js', base: 'b', ours: 'o', theirs: 't' }],
+    });
+    const ticketFile = path.join(repo.root, '.striart', 'conflicts', first.id, 'ticket.json');
+    const forged = { ...JSON.parse(await readFile(ticketFile, 'utf8')), id: '../../escaped' };
+    await writeFile(ticketFile, JSON.stringify(forged));
+
+    const [listed] = await listConflictTickets(repo.root);
+    expect(listed.id).toBe(first.id);
+
+    // Même commit re-tenté : le ticket existant est mis à jour EN PLACE.
+    const again = await createConflictTicket(repo.root, {
+      agent: 'agent-a',
+      branch: 'striart/agent-a/task-1',
+      sha: 'abc1234',
+      reason: 'MERGE_CONFLICT',
+      conflictedFiles: ['app.js'],
+      resolutions: [{ path: 'app.js', base: 'b', ours: 'o2', theirs: 't' }],
+    });
+    expect(again.id).toBe(first.id);
+    await expect(stat(path.join(repo.root, 'escaped'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(path.join(repo.root, '.striart', 'escaped'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
   });
 
   it('distingue content / delete / missing pour un ticket à 3 fichiers', async () => {
@@ -189,6 +223,21 @@ describe('applyTicketResolution (intégration)', () => {
       const log = await repo.git.log({ maxCount: 1 });
       expect(log.latest.message).toContain('résolution manuelle');
       expect(log.latest.message).toContain(ticketId);
+      // `sha` reste le commit de l'agent ; `mergeSha` est le commit créé sur la cible.
+      expect(applied.mergeSha).toBe(log.latest.hash);
+      expect(applied.mergeSha).not.toBe(applied.sha);
+
+      // Le merge manuel apparaît dans l'historique (il en disparaissait : la
+      // regex de history.js ne reconnaissait que la note de fusion sémantique).
+      const [entry] = await listMergeHistory({ root: repo.root });
+      expect(entry).toMatchObject({
+        type: 'merge',
+        sha: log.latest.hash,
+        agent: 'agent-a',
+        resolution: 'manual',
+        ticketId,
+        semantic: false,
+      });
 
       const registry = await readRegistry(repo.root);
       expect(registry['agent-a'].lastMergedCommit).toBe(result.sha);

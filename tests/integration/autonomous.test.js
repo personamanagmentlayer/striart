@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { createTempRepo } from '../helpers/temp-repo.js';
 import { initStriart } from '../../src/init.js';
 import { readRegistry } from '../../src/clone.js';
-import { runAutonomousTask } from '../../src/orchestrator.js';
+import { applyPlan, runAutonomousTask } from '../../src/orchestrator.js';
 
 const FAKE_AGENT = fileURLToPath(new URL('../helpers/fake-agent.cjs', import.meta.url));
 const GATE_OK = 'node -e "process.exit(0)"';
@@ -145,6 +145,58 @@ describe('mode autonome — cycle complet (intégration)', () => {
     expect(result.session.status).toBe('TIMEOUT');
     expect(result.session.timedOut).toBe(true);
     expect(await exists(result.clonePath)).toBe(true);
+  });
+
+  it('arrêt demandé (Ctrl+C) → session CANCELLED, PID dépublié, clone conservé, aucun merge', async () => {
+    await setConfig(repo.root, { testCommand: GATE_OK });
+    process.env.FAKE_AGENT_MODE = 'hang';
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 1500);
+
+    const result = await run({ signal: controller.signal });
+
+    expect(result.status).toBe('SESSION_FAILED');
+    expect(result.session.status).toBe('CANCELLED');
+    expect(result.keptReason).toContain('CANCELLED');
+    expect(await exists(result.clonePath)).toBe(true);
+    const registry = await readRegistry(repo.root);
+    expect(registry['agent-a']?.sessionPid ?? null).toBeNull();
+  });
+
+  // `striart plan` lance des tâches autonomes : Ctrl+C doit arrêter la
+  // session en cours comme `run --autonomous` (agent tué, PID dépublié), et
+  // ne plus démarrer les tâches suivantes. Avant : applyPlan ne recevait
+  // aucun signal — la CLI sortait en laissant l'agent écrire sans
+  // surveillance, sa fin de cycle (merge, gate, nettoyage) ne venait jamais.
+  it('plan interrompu : session en cours CANCELLED, tâches suivantes non appliquées', async () => {
+    await setConfig(repo.root, { testCommand: GATE_OK });
+    process.env.FAKE_AGENT_MODE = 'hang';
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 1500);
+    const planText = `
+version: 1
+tasks:
+  - id: first
+    agent: agent-a
+    prompt: ajoute une feature
+    autonomous: true
+    profile: fake
+  - id: second
+    agent: agent-b
+    prompt: ajoute une autre feature
+    autonomous: true
+    profile: fake
+`;
+    const result = await applyPlan({ root: repo.root, planText, signal: controller.signal });
+
+    expect(result.interrupted).toBe(true);
+    expect(result.results).toEqual([
+      expect.objectContaining({ id: 'first', agent: 'agent-a', status: 'SESSION_FAILED' }),
+    ]);
+    expect(result.notApplied).toEqual([{ id: 'second', agent: 'agent-b' }]);
+    const registry = await readRegistry(repo.root);
+    expect(registry['agent-a']?.sessionPid ?? null).toBeNull();
+    expect(registry['agent-b']).toBeUndefined();
   });
 
   it('profil inconnu : échec AVANT tout clonage, aucun orphelin', async () => {

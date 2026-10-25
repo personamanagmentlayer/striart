@@ -40,7 +40,9 @@ tasks:
   });
 
   it('rejette une version non supportée', () => {
-    expect(() => validatePlan({ version: 2, tasks: [{ prompt: 'x' }] })).toThrowError(/version/);
+    // La version 2 existe (lot O, tests/unit/plan-v2.test.js) : une version
+    // future reste refusée, fail closed.
+    expect(() => validatePlan({ version: 3, tasks: [{ prompt: 'x' }] })).toThrowError(/version/);
   });
 
   it('rejette des tasks absentes ou vides', () => {
@@ -111,5 +113,36 @@ tasks:
       tasks: [{ prompt: 'x', after: 'un-agent-deja-actif' }],
     });
     expect(tasks[0].after).toBe('un-agent-deja-actif');
+  });
+});
+
+describe('plan — command (M9)', () => {
+  it('n’accepte qu’un nom d’exécutable — jamais une ligne de shell tapée dans le pty', () => {
+    for (const ok of ['claude', 'aider', 'my-tool_2.exe']) {
+      const { tasks } = validatePlan({ version: 1, tasks: [{ prompt: 'x', command: ok }] });
+      expect(tasks[0].command).toBe(ok);
+    }
+    const bad = [
+      'claude --dangerously-skip-permissions',
+      'curl http://x | sh',
+      'a; rm -rf ~',
+      'a && b',
+      '$(id)',
+      '`id`',
+      './local',
+      '../x',
+      '/bin/sh',
+      'C:\\x.exe',
+      '-rf',
+      'a\nb',
+    ];
+    for (const command of bad) {
+      expect(() => validatePlan({ version: 1, tasks: [{ prompt: 'x', command }] })).toThrowError(
+        expect.objectContaining({
+          code: 'PLAN_INVALID',
+          details: expect.objectContaining({ reason: 'COMMAND_NOT_AN_EXECUTABLE_NAME' }),
+        }),
+      );
+    }
   });
 });

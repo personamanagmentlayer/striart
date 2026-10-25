@@ -77,5 +77,5 @@ describe('striart history (intégration)', () => {
     const limited = await listMergeHistory({ root: repo.root, limit: 2 });
     expect(limited).toHaveLength(2);
     expect(limited.map((e) => e.agent)).toEqual(['agent-c', 'agent-b']);
-  });
+  }, 300_000); // 3 créations + 3 merges séquentiels : voir vitest.config.js (budget propre > défaut)
 });

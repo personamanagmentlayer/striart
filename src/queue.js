@@ -1,10 +1,20 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { striartDir } from './clone.js';
-import { readJson, writeJsonAtomic } from './json-file.js';
+import { striartDir } from './paths.js';
+import { UNCHANGED, readJson, updateJsonLocked } from './json-file.js';
 
 function queuePath(root) {
   return path.join(striartDir(root), 'queue.json');
+}
+
+/**
+ * Lecture-modification-écriture de la file sous le verrou d'état : deux
+ * process qui enfilent ou retirent en même temps ne perdent aucune tâche.
+ * @param {string} root
+ * @param {(queue: import('./types.js').QueueTask[]) => import('./types.js').QueueTask[] | typeof UNCHANGED} mutator
+ */
+function updateQueue(root, mutator) {
+  return updateJsonLocked(queuePath(root), { fallback: [], code: 'QUEUE_CORRUPT' }, mutator);
 }
 
 /** @param {string} root @returns {Promise<import('./types.js').QueueTask[]>} */
@@ -12,7 +22,7 @@ export async function readQueue(root) {
   return readJson(queuePath(root), { fallback: [], code: 'QUEUE_CORRUPT' });
 }
 
-/** @param {string} root @param {{agent: string, prompt: string, predictedFiles: string[], collisions: import('./types.js').Collision[], command?: string|null, after?: string|null, reuse?: boolean, force?: boolean}} task @returns {Promise<import('./types.js').QueueTask>} */
+/** @param {string} root @param {{agent: string, prompt: string, predictedFiles: string[], collisions: import('./types.js').Collision[], command?: string|null, after?: string|null, reuse?: boolean, allowHistoricalSecrets?: boolean}} task @returns {Promise<import('./types.js').QueueTask>} */
 export async function enqueueTask(
   root,
   {
@@ -23,10 +33,9 @@ export async function enqueueTask(
     command = null,
     after = null,
     reuse = false,
-    force = false,
+    allowHistoricalSecrets = false,
   },
 ) {
-  const queue = await readQueue(root);
   const task = /** @type {import('./types.js').QueueTask} */ ({
     id: `task-${randomUUID().slice(0, 8)}`,
     status: 'WAITING',
@@ -40,18 +49,21 @@ export async function enqueueTask(
     after,
     reuse,
     // Décision consciente prise à l'enfilage (bypass HISTORICAL_SECRETS_FOUND) :
-    // doit survivre au dégagement, comme `reuse`.
-    force,
+    // doit survivre au dégagement, comme `reuse`. Jamais de consentement à
+    // perdre du travail ici : il ne vaut que pour l'état constaté à l'instant.
+    allowHistoricalSecrets,
     createdAt: new Date().toISOString(),
   });
-  queue.push(task);
-  await writeJsonAtomic(queuePath(root), queue);
+  await updateQueue(root, (queue) => [...queue, task]);
   return task;
 }
 
 export async function removeTask(root, taskId) {
-  const queue = await readQueue(root);
-  const remaining = queue.filter((t) => t.id !== taskId);
-  await writeJsonAtomic(queuePath(root), remaining);
-  return queue.length !== remaining.length;
+  let removed = false;
+  await updateQueue(root, (queue) => {
+    const remaining = queue.filter((t) => t.id !== taskId);
+    removed = remaining.length !== queue.length;
+    return removed ? remaining : UNCHANGED;
+  });
+  return removed;
 }

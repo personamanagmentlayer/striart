@@ -1,5 +1,8 @@
 import { parse } from 'yaml';
 import { StriartError } from './errors.js';
+import { isExecutableName } from './plan-command.ts';
+import { MAX_TIMER_MS } from './timer-limits.ts';
+import { validatePlanV2 } from './orchestration/plan-schema.ts';
 import type { PlanTask, StriartPlan } from './types.js';
 
 /**
@@ -53,6 +56,8 @@ export function parsePlan(text: string): StriartPlan {
   } catch (error) {
     throw new StriartError(`Plan illisible (YAML invalide) : ${(error as Error).message}`, {
       code: 'PLAN_INVALID',
+      hint: 'striart plan <fichier> --dry-run',
+      details: { reason: 'YAML', cause: (error as Error).message },
     });
   }
   return validatePlan(doc);
@@ -64,14 +69,26 @@ export function parsePlan(text: string): StriartPlan {
  */
 export function validatePlan(doc: unknown): StriartPlan {
   if (typeof doc !== 'object' || doc === null || Array.isArray(doc)) {
-    throw invalid('le plan doit être un objet YAML (version + tasks).');
+    throw invalid('le plan doit être un objet YAML (version + tasks).', {
+      reason: 'NOT_AN_OBJECT',
+    });
   }
   const plan = doc as Record<string, unknown>;
+  // Plan v2 (lot O) : modes d'orchestration explicites, validation positive
+  // stricte (src/orchestration/plan-schema.ts). Le v1 garde exactement sa
+  // sémantique : aucune clé v2 n'y est lue.
+  if (plan.version === 2) return validatePlanV2(plan);
   if (plan.version !== 1) {
-    throw invalid(`version de plan non supportée : ${JSON.stringify(plan.version)} (attendu : 1).`);
+    throw invalid(
+      `version de plan non supportée : ${JSON.stringify(plan.version)} (attendu : 1 ou 2).`,
+      {
+        reason: 'UNSUPPORTED_VERSION',
+        version: String(JSON.stringify(plan.version) ?? 'undefined').slice(0, 40),
+      },
+    );
   }
   if (!Array.isArray(plan.tasks) || plan.tasks.length === 0) {
-    throw invalid('"tasks" doit être une liste non vide.');
+    throw invalid('"tasks" doit être une liste non vide.', { reason: 'TASKS_EMPTY' });
   }
 
   const ids = new Set<string>();
@@ -85,31 +102,62 @@ export function validatePlan(doc: unknown): StriartPlan {
   (plan.tasks as unknown[]).forEach((item, i) => {
     const label = asString((item as Record<string, unknown> | null)?.id);
     const where = `tâche #${i + 1}${label ? ` (${label})` : ''}`;
+    // Identifie la tâche dans `details` : position et id, jamais son contenu.
+    const task = { task: i + 1, taskId: label };
     if (typeof item !== 'object' || item === null || Array.isArray(item)) {
-      throw invalid(`${where} : chaque entrée de "tasks" doit être un objet.`);
+      throw invalid(`${where} : chaque entrée de "tasks" doit être un objet.`, {
+        reason: 'TASK_NOT_AN_OBJECT',
+        ...task,
+      });
     }
     const raw = item as Record<string, unknown>;
     if (typeof raw.prompt !== 'string' || raw.prompt.trim().length === 0) {
-      throw invalid(`${where} : "prompt" est obligatoire et ne peut pas être vide.`);
+      throw invalid(`${where} : "prompt" est obligatoire et ne peut pas être vide.`, {
+        reason: 'PROMPT_MISSING',
+        ...task,
+      });
     }
     for (const key of OPTIONAL_STRINGS) {
       const val = raw[key];
       if (val != null && (typeof val !== 'string' || val.trim().length === 0)) {
-        throw invalid(`${where} : "${key}" doit être une chaîne non vide si présent.`);
+        throw invalid(`${where} : "${key}" doit être une chaîne non vide si présent.`, {
+          reason: 'FIELD_NOT_STRING',
+          field: key,
+          ...task,
+        });
       }
     }
+    if (typeof raw.command === 'string' && !isExecutableName(raw.command)) {
+      throw invalid(
+        `${where} : "command" doit être un nom d'exécutable (sans chemin, espace ni option) ; les options se posent dans agentCommand (config) ou un profil.`,
+        { reason: 'COMMAND_NOT_AN_EXECUTABLE_NAME', ...task },
+      );
+    }
     if (raw.autonomous != null && typeof raw.autonomous !== 'boolean') {
-      throw invalid(`${where} : "autonomous" doit être un booléen.`);
+      throw invalid(`${where} : "autonomous" doit être un booléen.`, {
+        reason: 'AUTONOMOUS_NOT_BOOLEAN',
+        ...task,
+      });
     }
     if (
       raw.timeout != null &&
-      (typeof raw.timeout !== 'number' || !Number.isInteger(raw.timeout) || raw.timeout < 1000)
+      (typeof raw.timeout !== 'number' ||
+        !Number.isInteger(raw.timeout) ||
+        raw.timeout < 1000 ||
+        raw.timeout > MAX_TIMER_MS)
     ) {
-      throw invalid(`${where} : "timeout" doit être un entier de millisecondes ≥ 1000.`);
+      throw invalid(
+        `${where} : "timeout" doit être un entier de millisecondes compris entre 1000 et ${MAX_TIMER_MS}.`,
+        {
+          reason: 'TIMEOUT_INVALID',
+          ...task,
+        },
+      );
     }
     const id = asString(raw.id);
     if (id != null) {
-      if (ids.has(id)) throw invalid(`${where} : id en double "${id}".`);
+      if (ids.has(id))
+        throw invalid(`${where} : id en double "${id}".`, { reason: 'DUPLICATE_ID', id, ...task });
       ids.add(id);
     }
     tasks.push({
@@ -136,6 +184,7 @@ export function validatePlan(doc: unknown): StriartPlan {
       throw invalid(
         `tâche${task.id ? ` (${task.id})` : ''} : "after: ${task.after}" référence une tâche définie APRÈS. ` +
           'Une dépendance doit précéder la tâche qui en dépend (garantit un graphe acyclique).',
+        { reason: 'AFTER_FORWARD', taskId: task.id, after: task.after },
       );
     }
     if (task.id) seen.add(task.id);
@@ -144,6 +193,14 @@ export function validatePlan(doc: unknown): StriartPlan {
   return { version: 1, tasks };
 }
 
-function invalid(message: string): StriartError {
-  return new StriartError(`Plan invalide : ${message}`, { code: 'PLAN_INVALID' });
+/**
+ * `details.reason` est la raison stable (contrat `--json`, traductions) ;
+ * le texte français n'en est que le rendu par défaut.
+ */
+function invalid(message: string, details: Record<string, unknown>): StriartError {
+  return new StriartError(`Plan invalide : ${message}`, {
+    code: 'PLAN_INVALID',
+    hint: 'striart plan <fichier> --dry-run',
+    details,
+  });
 }

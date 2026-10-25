@@ -26,9 +26,15 @@ describe('runStriartCommand (intégration)', () => {
   it('exécute une vraie commande striart et renvoie sa sortie (status --json)', async () => {
     const result = await runStriartCommand(repo.root, ['status', '--json']);
     expect(result.ok).toBe(true);
+    // Contrat machine v1 : enveloppe stable, même vue que l'outil MCP striart_status.
     const parsed = JSON.parse(result.output);
-    expect(parsed).toEqual({ agents: [] });
-  }, 30000);
+    expect(parsed).toMatchObject({
+      schemaVersion: 1,
+      command: 'status',
+      ok: true,
+      data: { agents: [], queue: [], tickets: [], mainSession: null },
+    });
+  });
 
   it('refuse explicitement une commande au premier plan (watch)', async () => {
     const result = await runStriartCommand(repo.root, ['watch']);
@@ -56,21 +62,26 @@ describe('runStriartCommand (intégration)', () => {
     '"dashboard --daemon" est en revanche autorisé — il rend la main immédiatement ' +
       '(même mécanisme que watch --daemon)',
     async () => {
-      const result = await runStriartCommand(repo.root, ['dashboard', '--daemon', '--port', '0']);
-      expect(result.ok).toBe(true);
-      expect(result.output).toContain('Dashboard daemon lancé');
+      try {
+        const result = await runStriartCommand(repo.root, ['dashboard', '--daemon', '--port', '0']);
+        expect(result.ok).toBe(true);
+        expect(result.output).toContain('tableau de bord lancé en arrière-plan');
+      } finally {
+        // Le daemon est un vrai process détaché : sans arrêt, il survivrait au
+        // dépôt temporaire supprimé par afterEach.
+        await runStriartCommand(repo.root, ['dashboard', '--stop']);
+      }
     },
-    15000,
   );
 
   it('"dashboard --status"/"--stop" sont autorisés même sans --daemon (pas de serveur démarré)', async () => {
     const status = await runStriartCommand(repo.root, ['dashboard', '--status']);
     expect(status.ok).toBe(true);
-    expect(status.output).toContain('Aucun dashboard daemon');
+    expect(status.output).toContain('aucun tableau de bord en arrière-plan');
 
     const stop = await runStriartCommand(repo.root, ['dashboard', '--stop']);
     expect(stop.ok).toBe(true);
-    expect(stop.output).toContain('Aucun dashboard daemon');
+    expect(stop.output).toContain('aucun tableau de bord en arrière-plan');
   });
 
   it('remonte un exitCode non nul (commande invalide) sans planter', async () => {
@@ -103,7 +114,7 @@ describe('runShellCommand (intégration)', () => {
     const result = await runShellCommand(repo.root, 'echo MARQUEUR-SHELL-REEL');
     expect(result.ok).toBe(true);
     expect(result.output).toContain('MARQUEUR-SHELL-REEL');
-  }, 30000);
+  });
 
   it("s'exécute dans le repo (cwd) — vérifié avec un vrai git (exemple de l'utilisateur)", async () => {
     const result = await runShellCommand(repo.root, 'git stash list');

@@ -2,13 +2,49 @@ import { execa } from 'execa';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { runAcpSession } from './acp.ts';
+import {
+  buildAgentInstructions,
+  planArgvInstructions,
+  resolveInstructionsChannel,
+  writeSessionSettings,
+} from './agents/instructions.ts';
+import {
+  INSTRUCTIONS_FILE_PLACEHOLDER,
+  INSTRUCTIONS_PLACEHOLDER,
+  PROMPT_PLACEHOLDER,
+  TEST_COMMAND_PLACEHOLDER,
+} from './agents/profile-schema.ts';
+import { transcribeStructuredOutput } from './agents/transcript.ts';
+import { loadConfig } from './config.js';
 import { StriartError } from './errors.js';
 import { logger } from './logger.js';
 import { striartDir } from './paths.js';
 import { killProcessTree, normalizeExitCode } from './process-tree.js';
+import { SessionMeter } from './tokens/session-meter.ts';
+
+/**
+ * Message d'échec d'une session SANS la ligne de commande : le `shortMessage`
+ * d'execa la recopie en entier, prompt et consignes compris.
+ * @param {{exitCode?: number, signal?: string, originalMessage?: string}} result
+ * @param {string} command
+ */
+function describeFailure(result, command) {
+  const how =
+    result.exitCode != null
+      ? ` with exit code ${normalizeExitCode(result.exitCode)}`
+      : result.signal
+        ? ` with signal ${result.signal}`
+        : '';
+  // « spawn <binaire> ENOENT » : cite le binaire, jamais les arguments.
+  const detail =
+    typeof result.originalMessage === 'string' && result.originalMessage.trim()
+      ? `: ${result.originalMessage.split('\n')[0].slice(0, 300)}`
+      : '';
+  return `Command failed${how} (${command})${detail}`;
+}
 
 /** Marqueur substitué par le prompt de la tâche dans les args d'un profil. */
-export const PROMPT_PLACEHOLDER = '{{prompt}}';
+export { PROMPT_PLACEHOLDER };
 
 /**
  * Profil appliqué quand l'appelant n'en nomme aucun. Source unique : tout
@@ -27,6 +63,16 @@ export const DEFAULT_PROFILE = 'claude';
  */
 export function sessionLogPath(root, agent, taskId) {
   return path.join(striartDir(root), 'logs', `session-${agent}-${taskId}.log`);
+}
+
+/**
+ * Flux BRUT d'une session à sortie structurée (JSONL de l'outil), conservé à
+ * côté du log transcrit : la transcription tronque les sorties d'outils
+ * volumineuses, le flux brut garde tout pour le diagnostic.
+ * @param {string} root @param {string} agent @param {string} taskId
+ */
+export function sessionRawLogPath(root, agent, taskId) {
+  return path.join(striartDir(root), 'logs', `session-${agent}-${taskId}.raw.jsonl`);
 }
 
 /**
@@ -49,6 +95,7 @@ export function resolveAgentProfile(config, name) {
     const known = Object.keys(profiles).sort().join(', ') || '(aucun)';
     throw new StriartError(`Profil d'agent inconnu : "${name}". Profils configurés : ${known}.`, {
       code: 'PROFILE_UNKNOWN',
+      hint: 'striart profiles',
       details: { profile: name, known: Object.keys(profiles) },
     });
   }
@@ -62,7 +109,7 @@ export function resolveAgentProfile(config, name) {
  * sortie de commande.
  *
  * @param {import('./types.js').StriartConfig} config
- * @returns {Array<{name: string, command: string, invocation: string, envKeys: string[], timeout: number | null, acp: boolean}>}
+ * @returns {Array<{name: string, command: string, invocation: string, envKeys: string[], timeout: number | null, acp: boolean, preset: string | null, experimental: boolean, writeMode: string | null, commitPolicy: string | null, structuredOutput: string, instructions: string}>}
  */
 export function listProfiles(config) {
   const profiles = config.agentProfiles ?? {};
@@ -74,6 +121,14 @@ export function listProfiles(config) {
       envKeys: Object.keys(p.env ?? {}),
       timeout: p.timeout ?? null,
       acp: Boolean(p.acp),
+      preset: p.preset ?? null,
+      experimental: p.experimental === true,
+      writeMode: p.writeMode ?? null,
+      commitPolicy: p.commitPolicy ?? null,
+      structuredOutput: p.structuredOutput ?? 'none',
+      // Canal effectif (auto résolu) : ce que l'agent recevra vraiment.
+      instructions:
+        config.agentInstructions?.enabled === false ? 'none' : resolveInstructionsChannel(p),
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -87,31 +142,49 @@ export function listProfiles(config) {
  * de commande immédiate, avec du texte que l'utilisateur n'a pas écrit
  * lui-même (il peut venir d'un ticket, d'une issue, d'un fichier).
  *
+ * Les emplacements optionnels de consignes (`{{striartInstructions}}`,
+ * `{{striartInstructionsFile}}`) sont remplis dans la MÊME passe que le
+ * prompt : un texte inséré n'est jamais re-scanné, donc un prompt qui
+ * contiendrait littéralement un marqueur reste de la donnée. Un
+ * emplacement sans valeur est retiré, avec le drapeau qui le précède
+ * (`--flag {{slot}}`) : un drapeau orphelin avalerait l'argument suivant.
+ *
  * @param {import('./types.js').AgentProfile} profile
  * @param {string} prompt
+ * @param {{instructions?: string, instructionsFile?: string, testCommand?: string}} [slots]
+ *   `testCommand` remplit `{{striartTestCommand}}` (règles d'autorisation
+ *   d'un preset qui laissent l'agent lancer le Test Gate lui-même).
+ * @param {string[]} [appendArgs] Ajoutés en fin d'argv (canal system-prompt-file).
  * @returns {{command: string, args: string[]}}
  */
-export function buildAgentArgv(profile, prompt) {
+export function buildAgentArgv(profile, prompt, slots = {}, appendArgs = []) {
   // Un profil ACP ne construit pas d'argv-avec-prompt : le prompt passe par
   // le protocole (voir acp.ts). Arriver ici avec un tel profil est une erreur
   // d'aiguillage, pas un cas à rattraper en silence.
   if (profile?.acp) {
     throw new StriartError(
       'Profil ACP : le prompt passe par le protocole, pas par l’argv (utiliser runAgentSession).',
-      { code: 'PROFILE_INVALID', details: { profile } },
+      {
+        code: 'PROFILE_INVALID',
+        hint: 'striart profiles',
+        details: { reason: 'ACP_TRANSPORT', field: 'acp' },
+      },
     );
   }
   if (typeof profile?.command !== 'string' || profile.command.trim().length === 0) {
     throw new StriartError('Profil invalide : "command" doit être une chaîne non vide.', {
       code: 'PROFILE_INVALID',
-      details: { profile },
+      hint: 'striart profiles',
+      // Jamais le profil lui-même : son env porte des clés d'API.
+      details: { reason: 'COMMAND_EMPTY', field: 'command' },
     });
   }
   const args = profile.args ?? [];
   if (!Array.isArray(args) || args.some((a) => typeof a !== 'string')) {
     throw new StriartError('Profil invalide : "args" doit être un tableau de chaînes.', {
       code: 'PROFILE_INVALID',
-      details: { profile },
+      hint: 'striart profiles',
+      details: { reason: 'ARGS_NOT_STRINGS', field: 'args' },
     });
   }
   // Sans marqueur, le prompt ne serait jamais transmis : l'agent démarrerait
@@ -120,13 +193,44 @@ export function buildAgentArgv(profile, prompt) {
   if (!args.some((a) => a.includes(PROMPT_PLACEHOLDER))) {
     throw new StriartError(
       `Profil invalide : aucun argument ne contient ${PROMPT_PLACEHOLDER}, le prompt ne serait pas transmis à l'agent.`,
-      { code: 'PROFILE_INVALID', details: { profile, placeholder: PROMPT_PLACEHOLDER } },
+      {
+        code: 'PROFILE_INVALID',
+        hint: 'striart profiles',
+        details: { reason: 'PLACEHOLDER_MISSING', field: 'args', placeholder: PROMPT_PLACEHOLDER },
+      },
     );
   }
-  return {
-    command: profile.command,
-    args: args.map((a) => a.split(PROMPT_PLACEHOLDER).join(prompt)),
+  /** @type {Record<string, string>} */
+  const values = {
+    [PROMPT_PLACEHOLDER]: prompt,
+    [INSTRUCTIONS_PLACEHOLDER]: slots.instructions ?? '',
+    [INSTRUCTIONS_FILE_PLACEHOLDER]: slots.instructionsFile ?? '',
+    [TEST_COMMAND_PLACEHOLDER]: slots.testCommand ?? '',
   };
+  const slotRe =
+    /\{\{(?:prompt|striartInstructions|striartInstructionsFile|striartTestCommand)\}\}/g;
+  /** @type {string[]} */
+  const out = [];
+  for (const arg of args) {
+    const isOptionalSlot =
+      arg === INSTRUCTIONS_PLACEHOLDER || arg === INSTRUCTIONS_FILE_PLACEHOLDER;
+    if (isOptionalSlot && values[arg] === '') {
+      if (out.length > 0 && out[out.length - 1].startsWith('-')) out.pop();
+      continue;
+    }
+    // Argument qui EST le marqueur (position libre : `exec {{prompt}}`, ou
+    // valeur d'un drapeau) : une valeur commençant par `-` serait lue comme une
+    // option par l'outil (`--dangerously-skip-permissions…`). Une espace de tête
+    // la rend positionnelle pour tout analyseur d'options, sans rien changer
+    // pour le modèle. Intégré à un texte (`--message={{prompt}}`), l'argument
+    // commence déjà par son drapeau : rien à faire.
+    if (Object.hasOwn(values, arg) && values[arg].startsWith('-')) {
+      out.push(` ${values[arg]}`);
+      continue;
+    }
+    out.push(arg.replace(slotRe, (match) => values[match]));
+  }
+  return { command: profile.command, args: [...out, ...appendArgs] };
 }
 
 /**
@@ -142,7 +246,18 @@ export function buildAgentArgv(profile, prompt) {
  *   profile: import('./types.js').AgentProfile, prompt: string,
  *   timeoutMs?: number, env?: NodeJS.ProcessEnv,
  *   onSpawn?: (pid: number|undefined) => Promise<void>|void,
+ *   signal?: AbortSignal|null,
+ *   config?: import('./types.js').StriartConfig|null,
+ *   profileKey?: string|null,
+ *   onMain?: boolean,
  * }} params
+ *   `onMain` : session sur le repo PRINCIPAL (`run --on-main`) — aucune
+ *   consigne de clone n'est injectée ; absent, déduit de `cwd === root`.
+ *   `config` / `profileKey` : config déjà chargée et clé du profil, pour les
+ *   consignes Striart (src/agents/instructions.ts) ; relue / déduite sinon.
+ *   `signal` : arrêt demandé par l'appelant (Ctrl+C de la CLI). L'arbre de
+ *   process est tué et la session rend 'CANCELLED' — sans lui, l'agent
+ *   (groupe de process propre sous POSIX) survivrait à l'orchestrateur.
  * @returns {Promise<import('./types.js').SessionResult>}
  */
 export async function runAgentSession({
@@ -155,16 +270,109 @@ export async function runAgentSession({
   timeoutMs = 1_800_000,
   env = process.env,
   onSpawn = null,
+  signal = null,
+  config = null,
+  profileKey = null,
+  onMain = undefined,
 }) {
   // Transport ACP : même contrat SessionResult, même supervision (PID publié,
   // timeout, log hors du clone) — seule la frontière avec l'outil change :
   // un protocole au lieu d'un argv. L'orchestrateur ne voit pas la différence.
   if (profile?.acp) {
-    return runAcpSession({ root, agent, taskId, cwd, profile, prompt, timeoutMs, env, onSpawn });
+    return runAcpSession({
+      root,
+      agent,
+      taskId,
+      cwd,
+      profile,
+      prompt,
+      timeoutMs,
+      env,
+      onSpawn,
+      signal,
+      config,
+      profileKey,
+      onMain,
+    });
   }
-  const { command, args } = buildAgentArgv(profile, prompt);
+  const cfg = config ?? (await loadConfig(root));
+  const key = profileKey ?? profile?.preset ?? 'custom';
+  // Session sur le repo PRINCIPAL (`run --on-main`, cwd = racine) : les
+  // consignes décrivent un clone isolé, elles y seraient fausses.
+  // `onMain` explicite (runMainSession) l'emporte ; sinon déduit du cwd.
+  const isMainSession = onMain ?? path.resolve(cwd) === path.resolve(root);
+  const instructions = isMainSession
+    ? null
+    : await buildAgentInstructions({
+        root,
+        agent,
+        profileKey: key,
+        profile,
+        config: cfg,
+        mode: 'autonomous',
+      });
+  // Lot T : relevé d'usage en direct (flux structuré) et arrêt sur budget. Sans
+  // flux structuré la session est « unmetered » : seul le délai la borne.
+  // `timedOut` / `cancelled` sont déclarés ICI : le relevé peut déclencher
+  // onBreach dès le premier chunk, avant la fin de la préparation.
+  let budgetStopped = false;
+  let timedOut = false;
+  let cancelled = false;
+  const meter = await SessionMeter.open({
+    root,
+    agent,
+    taskId,
+    config: cfg,
+    format: profile.structuredOutput ?? 'none',
+    onBreach: () => {
+      // Un délai ou un arrêt demandé déjà en cours gardent la priorité du statut.
+      if (timedOut || cancelled) return;
+      budgetStopped = true;
+      void killProcessTree(subprocess);
+    },
+  });
+  meter?.noteInstructions(instructions);
+  // Préparation (consignes, réglages, argv) : une erreur de CONFIGURATION (profil
+  // invalide, fichier de consignes non écrivable) est levée avant tout lancement
+  // — contrairement à un échec de l'agent, qui est rapporté dans le résultat.
+  // Le relevé d'usage déjà ouvert est refermé dans tous les cas.
+  let plan;
+  let command;
+  let args;
   const logPath = sessionLogPath(root, agent, taskId);
-  await mkdir(path.dirname(logPath), { recursive: true });
+  try {
+    plan = await planArgvInstructions({ root, agent, taskId, instructions, profile, prompt });
+    const settingsArgs = await writeSessionSettings({ root, agent, taskId, cwd, profile });
+    ({ command, args } = buildAgentArgv(
+      profile,
+      plan.prompt,
+      { ...plan.slots, testCommand: cfg.testCommand },
+      [...settingsArgs, ...plan.appendArgs],
+    ));
+    await mkdir(path.dirname(logPath), { recursive: true });
+  } catch (error) {
+    await meter?.close().catch(() => undefined);
+    throw error;
+  }
+  // Le prompt et les consignes sont de la donnée potentiellement sensible (issue,
+  // fichier) : jamais recopiés dans le résultat, le journal ou un ticket par le
+  // biais de la ligne de commande.
+  const secrets = [plan.prompt, plan.slots?.instructions].filter(
+    (s) => typeof s === 'string' && s.length > 0,
+  );
+  // Une valeur très courte (« fix ») ne se remplace que lorsqu'elle EST l'argument :
+  // une recherche de sous-chaîne défigurerait les drapeaux (« pr<prompt>ix »).
+  const redact = (arg) =>
+    secrets.reduce(
+      (acc, secret) =>
+        secret.length >= 8
+          ? acc.split(secret).join('<prompt>')
+          : acc.trim() === secret
+            ? '<prompt>'
+            : acc,
+      String(arg),
+    );
+  const describedArgs = args.map((a) => redact(a));
 
   const startedAt = Date.now();
   logger.info({ agent, command, cwd, timeoutMs }, 'Session autonome démarrée');
@@ -189,6 +397,8 @@ export async function runAgentSession({
     env: { ...env, ...(profile.env ?? {}), STRIART_SESSION: '1' },
   });
 
+  subprocess.all?.on('data', (chunk) => meter?.feedChunk(chunk));
+
   // Publication du PID au plus tôt : c'est lui qui rend la session visible au
   // reste de l'orchestrateur (qui doit alors s'abstenir de toucher au clone).
   // Best effort : un échec de publication ne doit pas tuer une session valide,
@@ -202,24 +412,46 @@ export async function runAgentSession({
     }
   }
 
-  let timedOut = false;
   const timer = setTimeout(() => {
+    if (cancelled) return;
     timedOut = true;
     void killProcessTree(subprocess);
   }, timeoutMs);
+  const onAbort = () => {
+    if (timedOut) return;
+    cancelled = true;
+    void killProcessTree(subprocess);
+  };
+  if (signal?.aborted) onAbort();
+  else signal?.addEventListener('abort', onAbort, { once: true });
 
   let result;
   try {
     result = await subprocess;
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', onAbort);
   }
 
   const durationMs = Date.now() - startedAt;
-  const output = result.all ?? '';
+  const usage = meter ? await meter.close() : undefined;
+  const raw = result.all ?? '';
+  const structured = profile.structuredOutput ?? 'none';
+  if (structured !== 'none') {
+    await writeFile(sessionRawLogPath(root, agent, taskId), raw, 'utf8').catch((error) => {
+      logger.warn({ err: error, agent }, 'Écriture du flux brut de session impossible');
+    });
+  }
+  // Transcription lisible du flux structuré (messages, outils, commandes,
+  // issue) ; sortie texte inchangée pour un profil sans format déclaré.
+  const output = transcribeStructuredOutput(structured, raw);
   const log = timedOut
     ? `${output}\n[Striart] Session interrompue : délai de ${timeoutMs}ms dépassé.`
-    : output;
+    : cancelled
+      ? `${output}\n[Striart] Session interrompue : arrêt demandé.`
+      : budgetStopped
+        ? `${output}\n[Striart] Session interrompue : budget de tokens dépassé (${meter?.breach?.scope}, ${meter?.breach?.metric}).`
+        : output;
 
   // Le log est écrit même en cas d'échec de spawn : c'est précisément là
   // qu'on en a besoin (binaire introuvable, profil mal configuré).
@@ -233,7 +465,15 @@ export async function runAgentSession({
   // POSIX l'expose. Un statut juste sur un OS et faux sur un autre vaut moins
   // que pas de statut — le détail reste dans `error` et dans le log.
   /** @type {import('./types.js').SessionResult['status']} */
-  const status = timedOut ? 'TIMEOUT' : result.exitCode === 0 ? 'COMPLETED' : 'FAILED';
+  const status = timedOut
+    ? 'TIMEOUT'
+    : cancelled
+      ? 'CANCELLED'
+      : budgetStopped
+        ? 'BUDGET_EXCEEDED'
+        : result.exitCode === 0
+          ? 'COMPLETED'
+          : 'FAILED';
 
   // Même normalisation que le Test Gate : Windows rend les codes en uint32,
   // et « code de sortie 4294963238 » ne renseigne personne.
@@ -247,9 +487,19 @@ export async function runAgentSession({
     durationMs,
     timedOut,
     logPath,
-    command: `${command} ${args.join(' ')}`,
-    // Porte notamment le cas « binaire introuvable » : le message d'execa cite
-    // la commande, ce qui suffit à diagnostiquer un profil mal configuré.
-    error: status === 'COMPLETED' ? null : (result.shortMessage ?? null),
+    command: `${command} ${describedArgs.join(' ')}`,
+    // Porte notamment le cas « binaire introuvable » : le message cite la
+    // commande (sans le prompt), ce qui suffit à diagnostiquer un profil mal
+    // configuré. `shortMessage` d'execa recopie la ligne de commande COMPLÈTE,
+    // prompt compris : redacté (et ses échappements ne sont pas fiables pour un
+    // remplacement exact, d'où la reconstruction à partir des champs).
+    error:
+      status === 'BUDGET_EXCEEDED'
+        ? `Token budget exceeded (${meter?.breach?.scope}, ${meter?.breach?.metric}): session stopped, clone kept. Raise tokens.budgets or review the work before merging.`
+        : status === 'COMPLETED'
+          ? null
+          : describeFailure(result, command),
+    ...(usage ? { usage } : {}),
+    ...(budgetStopped && meter?.breach ? { budget: meter.breach } : {}),
   };
 }

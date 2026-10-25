@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,6 +9,7 @@ import {
   resolveAcpOptions,
   runAcpSession,
   selectPermissionOption,
+  striartMcpServers,
 } from '../../src/acp.ts';
 import { runAgentSession } from '../../src/session.js';
 import {
@@ -22,14 +23,16 @@ const exists = async (p) => Boolean(await stat(p).catch(() => null));
 
 describe('acp — options de profil', () => {
   it('acp: true → politique allow (le niveau de confiance des profils headless)', () => {
-    expect(resolveAcpOptions({ command: 'x', args: [], acp: true })).toEqual({
+    expect(resolveAcpOptions({ command: 'x', args: [], acp: true })).toMatchObject({
       permissions: 'allow',
       askTimeoutMs: 120_000,
     });
   });
 
   it('acp: { permissions } est respecté', () => {
-    expect(resolveAcpOptions({ command: 'x', args: [], acp: { permissions: 'reject' } })).toEqual({
+    expect(
+      resolveAcpOptions({ command: 'x', args: [], acp: { permissions: 'reject' } }),
+    ).toMatchObject({
       permissions: 'reject',
       askTimeoutMs: 120_000,
     });
@@ -42,7 +45,7 @@ describe('acp — options de profil', () => {
         args: [],
         acp: { permissions: 'ask', askTimeoutMs: 30_000 },
       }),
-    ).toEqual({ permissions: 'ask', askTimeoutMs: 30_000 });
+    ).toMatchObject({ permissions: 'ask', askTimeoutMs: 30_000 });
   });
 });
 
@@ -146,7 +149,8 @@ describe('acp — session supervisée (faux agent ACP)', () => {
     const log = await readFile(result.logPath, 'utf8');
     expect(log).toContain('handshake ok');
     expect(log).toContain('[plan]');
-    expect(log).toContain('travail sur : fais le travail');
+    // Consignes Striart en tête du premier prompt, puis la tâche (lot I6).
+    expect(log).toMatch(/travail sur : [\s\S]*fais le travail/);
   });
 
   it('refusal → FAILED : un stopReason non vert ne devient jamais un succès', async () => {
@@ -170,6 +174,16 @@ describe('acp — session supervisée (faux agent ACP)', () => {
     expect(result.status).toBe('TIMEOUT');
     expect(result.timedOut).toBe(true);
     await expect(readFile(result.logPath, 'utf8')).resolves.toContain('délai');
+  });
+
+  it('arrêt demandé (signal) → session/cancel puis kill, statut CANCELLED (pas TIMEOUT)', async () => {
+    process.env.FAKE_ACP_MODE = 'hang';
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 800);
+    const result = await run(profile(), { signal: controller.signal });
+    expect(result.status).toBe('CANCELLED');
+    expect(result.timedOut).toBe(false);
+    await expect(readFile(result.logPath, 'utf8')).resolves.toContain('arrêt demandé');
   });
 
   it('binaire introuvable → FAILED sans throw, la commande citée dans error', async () => {
@@ -196,6 +210,14 @@ describe('acp — session supervisée (faux agent ACP)', () => {
     expect(result.status).toBe('COMPLETED');
     expect(await exists(path.join(root, '..', 'evasion.txt'))).toBe(false);
     await expect(readFile(result.logPath, 'utf8')).resolves.toContain('REFUSÉE');
+  });
+
+  it('fs/read_text_file au-delà de acp.fsReadMaxBytes → refus, jamais tronqué', async () => {
+    process.env.FAKE_ACP_MODE = 'fs-read-cap';
+    await writeFile(path.join(clone, 'gros.txt'), 'x'.repeat(5_000));
+    const result = await run(profile({ acp: { fsReadMaxBytes: 1_024 } }));
+    expect(result.status).toBe('COMPLETED');
+    await expect(readFile(result.logPath, 'utf8')).resolves.toContain('lecture REFUSÉE');
   });
 
   it('permission accordée par la politique allow, tracée au log', async () => {
@@ -356,5 +378,32 @@ describe('acp — semi-autonome (politique ask, Phase F)', () => {
     await expect(answerPermissionRequest(root, created.id, 'inventée')).rejects.toMatchObject({
       code: 'PERMISSION_OPTION_UNKNOWN',
     });
+  });
+});
+
+describe("acp — serveur MCP transmis à l'agent", () => {
+  it('borné au clone, lecture seule ET canal de collaboration (post seul) ; profondeur 1', () => {
+    const [server] = striartMcpServers('/r', 'agent-a', { mcp: 'striart' });
+    expect(server.args.slice(1)).toEqual([
+      'mcp',
+      '--root',
+      '/r',
+      '--agent',
+      'agent-a',
+      '--read-only',
+      '--collab',
+    ]);
+    expect(server.env).toEqual([{ name: 'STRIART_SESSION', value: '1' }]);
+  });
+
+  it('session sur le principal : ni --agent ni --collab (aucun agent appelant), lecture seule gardée', () => {
+    const [server] = striartMcpServers('/r', 'main', { mcp: 'striart' }, true);
+    expect(server.args).not.toContain('--agent');
+    expect(server.args).not.toContain('--collab');
+    expect(server.args).toContain('--read-only');
+  });
+
+  it("acp.mcp: 'none' → aucun serveur", () => {
+    expect(striartMcpServers('/r', 'agent-a', { mcp: 'none' })).toEqual([]);
   });
 });

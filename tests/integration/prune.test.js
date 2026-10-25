@@ -104,4 +104,21 @@ describe('striart prune — rétention (intégration)', () => {
     expect(result.clones.removed.map((c) => c.name)).toEqual(['stopped']);
     await expect(stat(stopped.path)).rejects.toThrow();
   });
+
+  // Régression (audit CLI 2026-10-18) : `--days abc` donnait NaN, `cutoff`
+  // devenait NaN, `mtime > NaN` est toujours faux → TOUS les clones arrêtés,
+  // même actifs il y a une minute, étaient supprimés sans un mot.
+  it.each([[Number.NaN], [-1], [1.5], [Number.POSITIVE_INFINITY], ['14']])(
+    'rétention invalide (%s) → refus INVALID_RETENTION_DAYS, rien supprimé',
+    async (days) => {
+      const recent = await createAgent({ root: repo.root, name: 'recent' });
+      await removeAgentFromRegistry(repo.root, 'recent');
+
+      await expect(pruneWorkspace({ root: repo.root, days })).rejects.toMatchObject({
+        code: 'INVALID_RETENTION_DAYS',
+        kind: 'usage',
+      });
+      await expect(stat(recent.path)).resolves.toBeTruthy();
+    },
+  );
 });

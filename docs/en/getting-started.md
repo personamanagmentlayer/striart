@@ -33,15 +33,24 @@ From source:
 
 ```bash
 git clone https://github.com/personamanagmentlayer/striart.git
-cd striart && npm install && npm link   # exposes the `striart` command
+cd striart && npm install && npm run native:build && npm link   # exposes the `striart` command
 ```
+
+A package built by `npm run pack:release` ships a small **native binary** (`striart-native`,
+Rust) for its platform — Windows, macOS or Linux, on x64 or arm64 — installed
+as an optional dependency and verified against a signed manifest before every
+run: nothing to compile. From source, `npm run native:build` builds it (Rust
+toolchain required, see CONTRIBUTING.md). `striart doctor` shows the selected
+source and the verification state.
 
 Without `npm link`, everything can also be called directly:
 `node /path/to/striart/src/cli.js init`.
 
-There is **nothing to compile**: `bin` points at the source (ESM). TypeScript
+There is **nothing to compile on the JavaScript side**: `bin` points at the source (ESM). TypeScript
 modules run as-is through Node's native type stripping, JSDoc-annotated `.js`
-files coexist, and everything is checked by `tsc` — with no build step.
+files coexist, and everything is checked by `tsc` — with no build step. The
+published npm package, on the other hand, contains JS emitted at publication
+time: Node refuses type stripping for files under `node_modules`.
 
 ## `striart init`
 
@@ -55,13 +64,17 @@ striart init
 `init` is idempotent and never touches an existing file. It:
 
 1. creates `.striart/` (gitignored): `agents/`, `conflicts/`, `logs/`,
-   `queue.json`, `locks.json`, `agents.json`;
+   `queue.json`, `locks.json`, `agents.json` (the other folders — `usage/`,
+   `reviews/`, `acp/`, `control/`… — are born on use);
 2. adds `.striart/` to the repo's `.gitignore` if it isn't there yet;
 3. generates `striart.config.mjs` **if no config exists** (cosmiconfig also
-   accepts `striart.config.js`, `.striartrc.json`, etc.);
-4. diagnoses the configured LLM — pings Ollama, or checks the API key for a
-   cloud provider. **Warning only, never blocking**: you can initialize first
-   and configure the LLM later.
+   accepts `striart.config.js`, `.striartrc.json`, etc.), then validates the
+   config — an invalid config makes `init` fail;
+4. chains the `striart doctor` diagnosis and shows only what needs an
+   action: repository without a commit, missing target branch, unreachable
+   LLM or missing API key… with the command to run. **Reported, never
+   blocking**: initialization succeeds (exit 0), you can configure the LLM
+   later.
 
 Two settings to check before the first agent:
 
@@ -76,14 +89,14 @@ Two settings to check before the first agent:
 Then check everything:
 
 ```bash
-striart doctor    # git, repo, config, LLM reachability, locks, tickets
+striart doctor    # git, repo, config, target branch, LLM, secrets, locks, agents, tickets
 ```
 
 ## Guide: 3 agents in parallel without conflicts
 
 ```bash
 cd my-project
-striart init                          # creates .striart/, the config, checks the LLM
+striart init                          # creates .striart/, the config, then diagnoses
 
 # Tab 1 — the orchestrator
 striart watch                         # automatic merge + Test Gate + rebase
@@ -98,9 +111,12 @@ striart run "New login component" --command "claude" --open
 striart run "Add unit tests to src/parser.js" --autonomous --profile claude
 ```
 
-`--open` opens a terminal tab directly in the agent's clone (Windows
-Terminal, Terminal.app, gnome-terminal) and launches the tool there. Each
-session is independent: it stays open until **you** close it.
+`--open` starts a detached **pty host** that launches the tool in the clone,
+then opens a tab (Windows Terminal, PowerShell console, Terminal.app,
+gnome-terminal) that attaches to it through `striart attach <agent>`. The
+session lives independently of the tab: closing it doesn't kill the agent,
+and `striart attach <agent>` (from the clone) rejoins it. Without `--open`,
+the exact command to run in the clone is printed.
 
 From there, everything is automatic:
 
@@ -138,11 +154,20 @@ From there, everything is automatic:
 ## Real-time monitoring
 
 ```bash
-striart status          # agents, mode (auto/supervised), branches, tools, pending commits
+striart status          # agents, sessions, mode, branches, pending commits, what needs a human
 striart queue           # scheduler: RUNNING / WAITING + blockers
-striart dashboard       # http://localhost:3456 — real-time web view
+striart dashboard       # http://localhost:3456 — real-time web view (one-time sign-in link printed)
 striart resolve         # conflict tickets awaiting human resolution
 ```
+
+## Shell completion
+
+```bash
+striart completion bash >> ~/.bashrc          # zsh, fish, powershell too
+```
+
+Commands, options, agent names, ticket ids and profiles complete on Tab —
+see [Commands](commands.md#striart-completion-shell).
 
 ## Going further
 

@@ -1,0 +1,30 @@
+# Workspace des composants natifs de Striart (roadmap : « Composants natifs
+# (Rust) »). Un seul binaire publié, `striart-native`, qui sert le paquet npm
+# par un protocole argv → JSON (voir striart-native/src/lib.rs).
+[workspace]
+resolver = "3"
+members = ["striart-native"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/personamanagmentlayer/striart"
+rust-version = "1.99"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+# Le niveau `-D warnings` est imposé par la CI (cargo clippy -- -D warnings).
+undocumented_unsafe_blocks = "warn"
+
+[profile.release]
+# Binaire distribué : taille et reproductibilité plutôt que temps de build.
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+debug = false
+incremental = false

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createTempRepo } from '../helpers/temp-repo.js';
 import { initStriart } from '../../src/init.js';
@@ -137,7 +137,7 @@ describe('striart run --after (dépendances de tâches)', () => {
   });
 });
 
-describe('striart run --force (secrets historiques) à travers la file', () => {
+describe('striart run --allow-historical-secrets à travers la file', () => {
   let repo;
 
   beforeEach(async () => {
@@ -162,17 +162,22 @@ describe('striart run --force (secrets historiques) à travers la file', () => {
     await repo.git.commit('fix: retire .env de l’historique courant');
   }
 
-  it('force posé à l’enfilage survit au dégagement de la file (HISTORICAL_SECRETS_FOUND contourné)', async () => {
+  it('allowHistoricalSecrets posé à l’enfilage survit au dégagement de la file (HISTORICAL_SECRETS_FOUND contourné)', async () => {
     // 'a' démarre AVANT que le secret n'entre dans l'historique : seul le
     // dégagement (différé) de 'b' doit affronter le garde-fou.
     const a = await runTask({ root: repo.root, agent: 'a', prompt: 'fondation' });
     expect(a.status).toBe('STARTED');
     await commitThenRemoveEnv();
 
-    const b = await runTask({ root: repo.root, agent: 'b', prompt: 'facade', force: true });
+    const b = await runTask({
+      root: repo.root,
+      agent: 'b',
+      prompt: 'facade',
+      allowHistoricalSecrets: true,
+    });
     expect(b.status).toBe('QUEUED');
-    expect(b.task.force).toBe(true);
-    expect((await readQueue(repo.root))[0].force).toBe(true);
+    expect(b.task.allowHistoricalSecrets).toBe(true);
+    expect((await readQueue(repo.root))[0].allowHistoricalSecrets).toBe(true);
 
     // Fin de 'a' → déblocage automatique de 'b', malgré le secret historique.
     const stopped = await stopAgent({ root: repo.root, agent: 'a' });
@@ -187,7 +192,7 @@ describe('striart run --force (secrets historiques) à travers la file', () => {
 
     const b = await runTask({ root: repo.root, agent: 'b', prompt: 'facade' });
     expect(b.status).toBe('QUEUED');
-    expect(b.task.force).toBe(false);
+    expect(b.task.allowHistoricalSecrets).toBe(false);
 
     const stopped = await stopAgent({ root: repo.root, agent: 'a' });
     expect(stopped.started).toEqual([]);
@@ -196,7 +201,39 @@ describe('striart run --force (secrets historiques) à travers la file', () => {
     expect((await readRegistry(repo.root)).b).toBeUndefined();
 
     // La tâche reste en file (pas perdue) pour un futur `queue --retry`
-    // une fois le secret révoqué ou --force ajouté manuellement.
+    // une fois le secret révoqué.
     expect((await readQueue(repo.root)).map((t) => t.agent)).toEqual(['b']);
+  });
+
+  // Régression (audit CLI 2026-10-18) : `force` était persisté et rejoué au
+  // dégagement, où il levait AUSSI les gardes de perte de travail de
+  // reuseAgent — un consentement donné sur un état qui a changé depuis.
+  it('le consentement à perdre du travail (force) n’est jamais persisté dans la file', async () => {
+    const a = await runTask({ root: repo.root, agent: 'a', prompt: 'fondation' });
+    expect(a.status).toBe('STARTED');
+
+    const b = await runTask({ root: repo.root, agent: 'b', prompt: 'facade', force: true });
+    expect(b.status).toBe('QUEUED');
+    const [persisted] = await readQueue(repo.root);
+    expect(persisted).not.toHaveProperty('force');
+    expect(persisted.allowHistoricalSecrets).toBe(false);
+  });
+
+  it('une file écrite par une version <= 0.10 (champ force) reste lue comme consentement aux secrets', async () => {
+    const a = await runTask({ root: repo.root, agent: 'a', prompt: 'fondation' });
+    expect(a.status).toBe('STARTED');
+    await commitThenRemoveEnv();
+    const b = await runTask({ root: repo.root, agent: 'b', prompt: 'facade' });
+    expect(b.status).toBe('QUEUED');
+
+    // Réécrit la tâche au format de la 0.10 : `force: true`, pas de nouveau champ.
+    const queueFile = path.join(repo.root, '.striart', 'queue.json');
+    const legacy = JSON.parse(await readFile(queueFile, 'utf8')).map(
+      ({ allowHistoricalSecrets: _ignored, ...task }) => ({ ...task, force: true }),
+    );
+    await writeFile(queueFile, JSON.stringify(legacy));
+
+    const stopped = await stopAgent({ root: repo.root, agent: 'a' });
+    expect(stopped.started.map((s) => s.task.agent)).toEqual(['b']);
   });
 });

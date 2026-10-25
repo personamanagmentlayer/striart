@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { isProcessAlive, normalizeExitCode } from '../../src/process-tree.js';
+import { describe, expect, it, vi } from 'vitest';
+import { isProcessAlive, killProcessTree, normalizeExitCode } from '../../src/process-tree.js';
 
 describe('normalizeExitCode', () => {
   it('replie le wrap non signé de Windows en entier signé', () => {
@@ -30,5 +30,67 @@ describe('isProcessAlive', () => {
     expect(isProcessAlive(null)).toBe(false);
     expect(isProcessAlive(0)).toBe(false);
     expect(isProcessAlive(-1)).toBe(false);
+  });
+
+  // EPERM = le process existe mais appartient à un autre utilisateur : il est
+  // VIVANT. Le traiter comme mort désarmait sessionPid et la session
+  // principale pour toute session lancée sous un autre compte (sudo, service).
+  it('EPERM → vivant ; ESRCH → mort', () => {
+    const kill = vi.spyOn(process, 'kill');
+    try {
+      kill.mockImplementationOnce(() => {
+        throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' });
+      });
+      expect(isProcessAlive(4242)).toBe(true);
+      kill.mockImplementationOnce(() => {
+        throw Object.assign(new Error('no such process'), { code: 'ESRCH' });
+      });
+      expect(isProcessAlive(4242)).toBe(false);
+    } finally {
+      kill.mockRestore();
+    }
+  });
+});
+
+describe('killProcessTree (binaire natif injecté)', () => {
+  it('délègue l’arbre au binaire natif, sans tuer le process de tête à part', async () => {
+    const calls = [];
+    const subprocess = { pid: 4242, kill: vi.fn() };
+    await killProcessTree(subprocess, {
+      treeKill: async (pid) => {
+        calls.push(pid);
+        return { root: pid, rootState: 'alive', killed: [], failed: [] };
+      },
+    });
+    expect(calls).toEqual([4242]);
+    expect(subprocess.kill).not.toHaveBeenCalled();
+  });
+
+  // Chemin de nettoyage appelé en `void` : une exception y serait un rejet
+  // non géré. L'échec natif est journalisé (code NATIVE_*), puis le minimum
+  // qui libère l'appelant est fait : tuer la tête.
+  it('binaire indisponible : ne lève jamais, journalise, tue le process de tête', async () => {
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('no such process group'), { code: 'ESRCH' });
+    });
+    try {
+      const subprocess = { pid: 4242, kill: vi.fn() };
+      await expect(
+        killProcessTree(subprocess, {
+          treeKill: async () => {
+            throw Object.assign(new Error('absent'), { code: 'NATIVE_UNAVAILABLE' });
+          },
+        }),
+      ).resolves.toBeUndefined();
+      expect(subprocess.kill).toHaveBeenCalledWith('SIGKILL');
+    } finally {
+      kill.mockRestore();
+    }
+  });
+
+  it('process déjà sorti (pas de PID) : rien n’est appelé', async () => {
+    const treeKill = vi.fn();
+    await killProcessTree({ pid: undefined, kill: vi.fn() }, { treeKill });
+    expect(treeKill).not.toHaveBeenCalled();
   });
 });

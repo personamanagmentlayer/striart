@@ -3,7 +3,10 @@
 # "files" contrôle déjà ce qui est inclus au niveau racine (src/, examples/,
 # README*, CHANGELOG.md, LICENSE, .env.example) — ce fichier ne sert donc
 # qu'à exclure ce qui pourrait un jour atterrir PAR MÉGARDE à l'intérieur de
-# ces dossiers (aucun cas actuel : "npm pack --dry-run" est déjà propre).
+# ces dossiers. L'archive se construit par "npm run pack:release"
+# (scripts/pack.ts) : ce fichier y est recopié dans le staging et npm
+# l'applique là — un "npm pack" brut du dépôt publierait les .ts de src/,
+# inexécutables sous node_modules.
 # Sans lui, npm retomberait sur .gitignore comme filtre par défaut — moins
 # sûr, puisque .gitignore évolue pour des raisons qui n'ont rien à voir avec
 # ce qui doit être publié.
@@ -21,9 +24,8 @@ coverage/
 .env.*
 !.env.example
 
-# Tests et outillage de dev — sans objet pour un paquet qui s'exécute tel
-# quel (aucun build, TypeScript effacé nativement par Node) ; les tests
-# vivent dans le dépôt, pas dans le paquet installé.
+# Tests et outillage de dev — sans objet pour un paquet installé (JS émis
+# par scripts/pack.ts) ; les tests vivent dans le dépôt, pas dans le paquet.
 tests/
 *.test.js
 *.spec.js
@@ -38,8 +40,28 @@ eslint.config.js
 .gitea/
 .github/
 .claude/
-roadmap/
+
+# Documentation interne, conception et consignes d'agents — restent dans le
+# dépôt. Seuls README*, CHANGELOG et LICENSE sont publiés. Le contrôle
+# FORBIDDEN_PACKED_CONTENT de scripts/pack.ts refuse l'archive si l'un de ces
+# fichiers y figure malgré tout (ce fichier-ci n'est qu'une première barrière).
 docs/
+roadmap/
+registry/
+AGENTS.md
+**/AGENTS.md
+CLAUDE.md
+**/CLAUDE.md
+CONTRIBUTING.md
+SECURITY.md
+**/adr/
+*.instructions.md
+.cursorrules
+.cursor/
+.windsurfrules
+.github/copilot-instructions.md
+GEMINI.md
+**/GEMINI.md
 
 # Artefacts d'OS et d'éditeur.
 .DS_Store

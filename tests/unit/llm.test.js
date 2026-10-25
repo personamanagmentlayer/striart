@@ -130,6 +130,32 @@ describe('llmGenerate — provider azure', () => {
     expect(JSON.parse(options.body).response_format).toEqual({ type: 'json_object' });
   });
 
+  it('M8 : le nom de deployment et l’apiVersion sont encodés dans l’URL (aucune réécriture du chemin ni de la requête)', async () => {
+    vi.stubEnv('AZURE_OPENAI_API_KEY', 'azkey');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: 'ok' } }] }),
+      }),
+    );
+    await llmGenerate({
+      config: {
+        llm: {
+          ...config.llm,
+          model: '../../x?y=1#z',
+          apiVersion: '2024-10-21&api-key=evil',
+        },
+      },
+      prompt: 'p',
+    });
+    const [url] = fetch.mock.calls[0];
+    const parsed = new URL(url);
+    expect(parsed.pathname).toBe('/openai/deployments/..%2F..%2Fx%3Fy%3D1%23z/chat/completions');
+    expect([...parsed.searchParams.keys()]).toEqual(['api-version']);
+    expect(parsed.hash).toBe('');
+  });
+
   it('apiVersion surchargable', () => {
     vi.stubEnv('AZURE_OPENAI_API_KEY', 'azkey');
     const resolved = resolveLlmConfig({
@@ -189,5 +215,75 @@ describe('fillPromptTemplate', () => {
     expect(fillPromptTemplate('code: {{code}}', { code: 'a $& b $1 c {{code}}' })).toBe(
       'code: a $& b $1 c {{code}}',
     );
+  });
+});
+
+describe('llm — exfiltration de secrets par une config de dépôt (S-M5)', () => {
+  const base = { provider: 'openai', model: 'm' };
+
+  it.each([
+    'GITHUB_TOKEN',
+    'AWS_SECRET_ACCESS_KEY',
+    'NPM_TOKEN',
+    'SSH_AUTH_SOCK',
+    'path',
+    'AZURE_CLIENT_SECRET',
+    'HOME',
+  ])('refuse apiKeyEnv %s', (name) => {
+    expect(() => resolveLlmConfig({ llm: { ...base, apiKeyEnv: name } })).toThrow(
+      expect.objectContaining({ code: 'LLM_CONFIG_INVALID' }),
+    );
+  });
+
+  it('accepte une clé de fournisseur usuelle, et l option explicite lève la restriction', () => {
+    expect(() =>
+      resolveLlmConfig({ llm: { ...base, apiKeyEnv: 'MISTRAL_API_KEY' } }),
+    ).not.toThrow();
+    expect(() =>
+      resolveLlmConfig({ llm: { ...base, apiKeyEnv: 'GITHUB_TOKEN', allowAnyApiKeyEnv: true } }),
+    ).not.toThrow();
+  });
+
+  it('une clé ne part jamais en clair hors boucle locale (sauf option explicite)', () => {
+    vi.stubEnv('OPENAI_API_KEY', 'sk-test');
+    const insecure = { ...base, baseUrl: 'http://gateway.example/v1' };
+    expect(() => resolveLlmConfig({ llm: insecure })).toThrow(
+      expect.objectContaining({
+        details: expect.objectContaining({ reason: 'INSECURE_BASE_URL' }),
+      }),
+    );
+    expect(() =>
+      resolveLlmConfig({ llm: { ...insecure, allowInsecureTransport: true } }),
+    ).not.toThrow();
+    expect(() =>
+      resolveLlmConfig({ llm: { ...base, baseUrl: 'http://127.0.0.1:1234/v1' } }),
+    ).not.toThrow();
+  });
+
+  it('tous les appels authentifiés refusent les redirections (redirect: error)', async () => {
+    vi.stubEnv('OPENAI_API_KEY', 'sk-test');
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant');
+    vi.stubEnv('AZURE_OPENAI_API_KEY', 'az');
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        response: 'ok',
+        choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }],
+        content: [{ type: 'text', text: 'ok' }],
+        stop_reason: 'end_turn',
+      }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const configs = [
+      { llm: { provider: 'ollama', model: 'm', baseUrl: 'http://localhost:11434' } },
+      { llm: { provider: 'openai', model: 'm' } },
+      { llm: { provider: 'anthropic', model: 'm' } },
+      { llm: { provider: 'azure', model: 'm', baseUrl: 'https://r.openai.azure.com' } },
+    ];
+    for (const [i, config] of configs.entries()) {
+      await llmGenerate({ config, prompt: `x${i}` });
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    for (const [, init] of fetchMock.mock.calls) expect(init.redirect).toBe('error');
   });
 });

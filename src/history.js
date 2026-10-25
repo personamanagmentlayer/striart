@@ -1,21 +1,24 @@
 /**
  * Historique des opérations Striart, reconstruit depuis le graphe Git —
  * la source de vérité, pas un journal parallèle qui pourrait diverger.
- * Les commits `merge(striart): <agent> <branche> (<sha8>)[ note]` et leurs
- * éventuels reverts (striart rollback) sont parsés et enrichis.
+ * Les commits `merge(striart): …` (format : `merge-subject.ts`, source
+ * unique partagée avec les producteurs et `striart rollback`) et leurs
+ * éventuels reverts sont parsés et enrichis.
  */
 import { simpleGit } from 'simple-git';
+import { parseMergeSubject, parseRevertSubject } from './merge-subject.ts';
 
 const FIELD_SEP = String.fromCharCode(9);
-const MERGE_RE =
-  /^merge\(striart\): (\S+) (\S+) \(([0-9a-f]{8})\)(?: \[fusion sémantique: ([^\]]+)\])?$/;
-const REVERT_RE = /^Revert "merge\(striart\): (\S+) /;
 
 /**
+ * `resolution` dit comment un conflit éventuel a été tranché : 'auto' (git
+ * seul), 'semantic' (fusion LLM, fichiers dans `semanticFiles`) ou 'manual'
+ * (`striart resolve --apply`, ticket dans `ticketId`).
  * @typedef {{
  *   sha: string, date: string, type: 'merge'|'rollback',
  *   agent: string, branch?: string, agentSha?: string,
- *   semantic: boolean, semanticFiles: string[]
+ *   resolution: import('./merge-subject.ts').MergeResolution,
+ *   semantic: boolean, semanticFiles: string[], ticketId: string|null
  * }} HistoryEntry
  */
 
@@ -33,7 +36,7 @@ export async function listMergeHistory({ root, limit = 30 }) {
       'log',
       '--max-count',
       String(Math.max(limit * 5, 100)),
-      `--format=%H${FIELD_SEP}%aI${FIELD_SEP}%s`,
+      `--format=%H${FIELD_SEP}%P${FIELD_SEP}%aI${FIELD_SEP}%s`,
     ]);
   } catch {
     return []; // repo sans commit
@@ -42,34 +45,42 @@ export async function listMergeHistory({ root, limit = 30 }) {
   const entries = [];
   for (const line of raw.split('\n')) {
     if (entries.length >= limit) break;
-    const [sha, date, ...subjectParts] = line.split(FIELD_SEP);
+    const [sha, parents, date, ...subjectParts] = line.split(FIELD_SEP);
     if (!sha || subjectParts.length === 0) continue;
     const subject = subjectParts.join(FIELD_SEP);
 
-    const merge = subject.match(MERGE_RE);
+    // Le sujet est forgeable (n'importe quel commit d'agent peut le porter) :
+    // seul un vrai commit de merge — au moins deux parents — est un merge Striart.
+    const merge =
+      (parents ?? '').trim().split(/\s+/).filter(Boolean).length >= 2
+        ? parseMergeSubject(subject)
+        : null;
     if (merge) {
-      const [, agent, branch, agentSha, semanticFiles] = merge;
       entries.push({
         sha,
         date,
         type: 'merge',
-        agent,
-        branch,
-        agentSha,
-        semantic: Boolean(semanticFiles),
-        semanticFiles: semanticFiles ? semanticFiles.split(',').map((f) => f.trim()) : [],
+        agent: merge.agent,
+        branch: merge.branch,
+        agentSha: merge.agentSha,
+        resolution: merge.resolution,
+        semantic: merge.resolution === 'semantic',
+        semanticFiles: merge.semanticFiles,
+        ticketId: merge.ticketId,
       });
       continue;
     }
-    const revert = subject.match(REVERT_RE);
+    const revert = parseRevertSubject(subject);
     if (revert) {
       entries.push({
         sha,
         date,
         type: 'rollback',
-        agent: revert[1],
+        agent: revert.agent,
+        resolution: revert.resolution,
         semantic: false,
         semanticFiles: [],
+        ticketId: null,
       });
     }
   }

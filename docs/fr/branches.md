@@ -114,7 +114,16 @@ Les clones agents n'ont **pas de remote** : seul l'orchestrateur pousse
 (règle d'or n°1). Par défaut `autoPush: false` — l'humain valide le push.
 Avec `autoPush: true`, chaque merge vert est suivi d'un
 `git push origin <targetBranch>` ; un échec de push est journalisé mais ne
-défait pas le merge local.
+défait pas le merge local (`pushError` dans le résultat). Même règle pour le
+push de `mainBranch` après une promotion.
+
+**Authentification du push** : depuis la 0.11 (simple-git 4), aucune
+variable `GIT_*` héritée de l'environnement n'atteint les commandes git
+lancées par Striart — `GIT_SSH_COMMAND` et `GIT_ASKPASS` comprises. Le push
+s'authentifie donc par la configuration de git elle-même : un credential
+helper (`git config credential.helper …`) en HTTPS, ou `~/.ssh/config` et
+l'agent SSH en SSH. Un push qui fonctionnait grâce à une de ces variables
+échoue désormais (journalisé, merge local conservé).
 
 `striart rollback` tient compte du push : merge non poussé → reset local
 (récupérable via reflog) ; merge déjà poussé → revert (l'historique publié

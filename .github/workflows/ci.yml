@@ -5,7 +5,139 @@ on:
     branches: [main, master]
   pull_request:
 
+# Moindre privilège : le jeton du workflow ne lit que le dépôt. Les jobs qui
+# ont besoin de plus (attestation de provenance) le déclarent eux-mêmes.
+permissions:
+  contents: read
+
+# Actions épinglées par SHA de commit (le commentaire donne la version) : un
+# tag mobile (@v4) permettrait à un compte compromis en amont de pousser du
+# code dans notre CI. Mise à jour = changer le SHA ET le commentaire ensemble.
+#
+# Secrets : STRIART_NATIVE_SIGNING_KEY n'est lu QUE par le job
+# release-archives (push sur branche protégée, environment « release » à
+# relecteurs requis). Aucune pull request, fût-elle d'une branche du dépôt,
+# n'y a accès : elles signent, en --dry-run, avec une clé jetable.
+
 jobs:
+  # Composants natifs (native/, Rust) : format, lints, tests, supply chain,
+  # sur les trois familles d'OS. La toolchain est celle de
+  # native/rust-toolchain.toml, installée EXPLICITEMENT (rustup 1.28+ n'installe
+  # plus rien tout seul) : la CI construit avec exactement la version
+  # épinglée, comme les développeurs.
+  native-check:
+    name: native · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: native
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Toolchain épinglée
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Format
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo fmt --all --check
+
+      - name: Clippy (-D warnings)
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Tests Rust
+        run: cargo test --locked
+
+      # Licences et avis de sécurité RustSec (deny.toml) : une fois, l'audit
+      # ne dépend pas de l'OS (deny.toml couvre déjà les six cibles). Version
+      # de l'outil épinglée : un `cargo install` sans version prendrait la
+      # dernière publication, non revue.
+      - name: cargo-deny
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          cargo install cargo-deny --version 0.20.2 --locked
+          cargo deny check
+
+  # Les binaires publiés sous Linux sont des musl STATIQUES : la suite Rust est
+  # exécutée sur CETTE cible (openpty, fork, pidfd, subreaper, signaux), pour
+  # chaque famille de CPU, pas seulement en glibc.
+  native-musl:
+    name: native musl · ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest, target: x86_64-unknown-linux-musl }
+          - { runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl }
+    defaults:
+      run:
+        working-directory: native
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Toolchain épinglée
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Tests Rust (${{ matrix.target }})
+        run: cargo test --locked --target ${{ matrix.target }}
+
+  # Les six binaires publiés, chacun sur un runner natif de sa famille d'OS :
+  # - Windows x64 et arm64 sur windows-latest (MSVC ARM64 y est installé :
+  #   compilation croisée sans outil tiers) ;
+  # - macOS arm64 et x64 sur macos-latest (le SDK Xcode lie les deux) ;
+  # - Linux x64 et arm64 en musl STATIQUE, chacun sur son runner natif
+  #   (ubuntu-latest, ubuntu-24.04-arm) : pas d'éditeur de liens croisé, et
+  #   un binaire statique tourne aussi bien sur glibc que sur musl (Alpine).
+  # Chaque binaire est contrôlé (en-tête, lien statique) et déposé avec son
+  # empreinte par scripts/native-stage.ts — l'entrée exacte de pack.ts.
+  native-build:
+    name: build · ${{ matrix.key }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { key: win32-x64, runner: windows-latest, target: x86_64-pc-windows-msvc, exe: .exe }
+          - { key: win32-arm64, runner: windows-latest, target: aarch64-pc-windows-msvc, exe: .exe }
+          - { key: darwin-arm64, runner: macos-latest, target: aarch64-apple-darwin, exe: '' }
+          - { key: darwin-x64, runner: macos-latest, target: x86_64-apple-darwin, exe: '' }
+          - { key: linux-x64, runner: ubuntu-latest, target: x86_64-unknown-linux-musl, exe: '' }
+          - {
+              key: linux-arm64,
+              runner: ubuntu-24.04-arm,
+              target: aarch64-unknown-linux-musl,
+              exe: '',
+            }
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+
+      - name: Toolchain épinglée
+        working-directory: native
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Construction (${{ matrix.target }})
+        working-directory: native
+        run: cargo build --release --locked --bin striart-native --target ${{ matrix.target }}
+
+      - name: Dépôt contrôlé du binaire
+        run: >-
+          node scripts/native-stage.ts --platform ${{ matrix.key }} --out-dir native-dist
+          --from native/target/${{ matrix.target }}/release/striart-native${{ matrix.exe }}
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: native-${{ matrix.key }}
+          path: native-dist/${{ matrix.key }}
+          if-no-files-found: error
+
   test:
     name: ${{ matrix.os }} · Node ${{ matrix.node }}
     runs-on: ${{ matrix.os }}
@@ -17,9 +149,9 @@ jobs:
         # défaut — les modules .ts s'exécutent sans build) ; 24 = LTS courante.
         node: [22, 24]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ matrix.node }}
           cache: npm
@@ -31,7 +163,9 @@ jobs:
           git config --global user.email "ci@striart.invalid"
           git config --global init.defaultBranch main
 
-      - run: npm ci
+      # Pas de scripts de cycle de vie des dépendances (chaîne
+      # d'approvisionnement) : le projet n'en a pas besoin pour tester.
+      - run: npm ci --ignore-scripts
 
       # Régression de vulnérabilité = échec de CI. Une seule fois (Linux/Node
       # 22) plutôt que sur toute la matrice : l'audit ne dépend ni de l'OS ni
@@ -53,5 +187,146 @@ jobs:
       - name: Tests unitaires
         run: npm run test:unit
 
+      # Binaire natif de la plateforme du runner (build de dev, utilisé par
+      # src/native.ts dans un checkout) ; le globalSetup de vitest le
+      # reconstruirait de toute façon, l'étape séparée rend sa durée lisible.
+      - name: Toolchain Rust épinglée
+        working-directory: native
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Binaire natif (build de dev)
+        run: npm run native:build
+
       - name: Tests d'intégration
         run: npm run test:integration
+
+  # Le paquet PUBLIÉ, pas le dépôt : scripts/pack.ts émet le JS de src/,
+  # embarque les binaires natifs des six plateformes (manifeste d'empreintes
+  # signé, paquets de plateforme en dépendances optionnelles, SBOM), et
+  # l'archive est installée dans un projet consommateur vierge où le binaire
+  # installé est exécuté. Garde-fou de l'incident v0.10.0 — un `npm pack` brut
+  # publiait les .ts, que Node refuse d'exécuter sous node_modules. Sur les 3
+  # OS parce que le lancement du binaire (shim .cmd Windows, shebang POSIX) et
+  # la résolution du paquet natif en dépendent.
+  pack-smoke:
+    name: pack-smoke · ${{ matrix.os }} · Node ${{ matrix.node }}
+    needs: native-build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # Le test crée un dépôt git temporaire (init + premier commit).
+      - name: Configurer git
+        run: |
+          git config --global user.name "Striart CI"
+          git config --global user.email "ci@striart.invalid"
+          git config --global init.defaultBranch main
+
+      - run: npm ci --ignore-scripts
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: native-*
+          path: native-dist
+          merge-multiple: false
+
+      # Les artefacts arrivent dans native-dist/native-<clé>/ : pack.ts attend
+      # native-dist/<clé>/.
+      - name: Disposition des binaires
+        shell: bash
+        run: |
+          for dir in native-dist/native-*; do mv "$dir" "native-dist/${dir#native-dist/native-}"; done
+          ls -R native-dist
+
+      # Archive des six plateformes comme une release (refus d'un arbre
+      # modifié compris — le checkout CI est propre), en --dry-run et SANS
+      # secret : clé de signature JETABLE (manifeste marqué, refusé à
+      # l'exécution). La signature de release n'existe que dans le job
+      # release-archives.
+      - name: Archive publiable (dry-run, six plateformes, clé jetable)
+        run: npm run pack:release -- --dry-run --native-dir native-dist --ephemeral-signing-key
+
+      - name: Toolchain Rust épinglée
+        working-directory: native
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Binaire natif (build de dev, pour la fumée)
+        run: npm run native:build
+
+      - name: Fumée du paquet installé
+        run: npm run test:pack
+
+  # Archives signées de release (paquet principal + six paquets de
+  # plateforme + SBOM), produites seulement sur un PUSH de branche protégée,
+  # après les tests, la fumée du paquet installé et les tests musl, dans
+  # l'environment « release » (relecteurs requis : le secret de signature n'est
+  # libéré qu'après approbation). La publication reste un acte humain
+  # (CONTRIBUTING.md) : les archives sont des artefacts du run, accompagnées
+  # d'une attestation de provenance (sigstore) vérifiable par
+  # `gh attestation verify`.
+  release-archives:
+    name: archives signées
+    if: github.event_name == 'push'
+    needs: [native-build, native-check, native-musl, test, pack-smoke]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: npm
+
+      # Pas de scripts de cycle de vie des dépendances dans le job qui détient
+      # la clé de signature (chaîne d'approvisionnement) : tsc et pack.ts n'en
+      # ont pas besoin.
+      - run: npm ci --ignore-scripts
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: native-*
+          path: native-dist
+
+      - name: Disposition des binaires
+        run: for dir in native-dist/native-*; do mv "$dir" "native-dist/${dir#native-dist/native-}"; done
+
+      - name: Archives signées
+        env:
+          STRIART_NATIVE_SIGNING_KEY: ${{ secrets.STRIART_NATIVE_SIGNING_KEY }}
+          STRIART_NATIVE_SIGNING_KEY_PASSWORD: ${{ secrets.STRIART_NATIVE_SIGNING_KEY_PASSWORD }}
+        run: |
+          if [ -z "$STRIART_NATIVE_SIGNING_KEY" ]; then
+            echo "::warning::secret STRIART_NATIVE_SIGNING_KEY absent : aucune archive de release produite"
+            exit 0
+          fi
+          npm run pack:release -- --native-dir native-dist --out-dir dist --json > dist-result.json
+          cat dist-result.json
+
+      - name: Attestation de provenance
+        if: hashFiles('dist/*.tgz') != ''
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.tgz
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-archives
+          path: |
+            dist/*.tgz
+            dist/*.cdx.json
+          if-no-files-found: ignore

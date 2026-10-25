@@ -1,0 +1,45 @@
+# cargo-deny — politique supply chain des composants natifs (CI : job
+# « native », `cargo deny check`). Toute exception se justifie ici, en
+# commentaire, jamais en silence.
+
+[graph]
+# Les six cibles publiées : une dépendance propre à une seule d'entre elles
+# (windows-sys, libc) est auditée comme les autres.
+targets = [
+  "x86_64-pc-windows-msvc",
+  "aarch64-pc-windows-msvc",
+  "x86_64-apple-darwin",
+  "aarch64-apple-darwin",
+  "x86_64-unknown-linux-musl",
+  "aarch64-unknown-linux-musl",
+]
+all-features = true
+
+[advisories]
+# Base RustSec : tout avis (vulnérabilité, crate non maintenu, version
+# retirée) sur une dépendance est un échec.
+version = 2
+yanked = "deny"
+unmaintained = "all"
+ignore = []
+
+[licenses]
+version = 2
+# Licences permissives compatibles avec la licence MIT du paquet.
+allow = ["MIT", "Apache-2.0"]
+confidence-threshold = 0.93
+
+[licenses.private]
+# Le crate du dépôt (publish = false) n'est pas publié sur crates.io.
+ignore = true
+
+[bans]
+multiple-versions = "deny"
+wildcards = "deny"
+allow-wildcard-paths = false
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

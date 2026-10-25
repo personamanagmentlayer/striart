@@ -33,16 +33,25 @@ Depuis les sources :
 
 ```bash
 git clone https://github.com/personamanagmentlayer/striart.git
-cd striart && npm install && npm link   # expose la commande `striart`
+cd striart && npm install && npm run native:build && npm link   # expose la commande `striart`
 ```
+
+Un paquet construit par `npm run pack:release` embarque un petit **binaire natif** (`striart-native`, Rust)
+pour sa plateforme — Windows, macOS ou Linux, en x64 ou arm64 —, installé comme
+dépendance optionnelle et vérifié contre un manifeste signé avant chaque
+exécution : rien à compiler. Depuis les sources, `npm run native:build`
+le construit (toolchain Rust requise, voir CONTRIBUTING.md). `striart doctor`
+affiche la source retenue et l'état de la vérification.
 
 Sans `npm link`, tout s'appelle aussi directement :
 `node /chemin/vers/striart/src/cli.js init`.
 
-Il n'y a **rien à compiler** : `bin` pointe sur la source (ESM). Les modules
+Il n'y a **rien à compiler côté JavaScript** : `bin` pointe sur la source (ESM). Les modules
 TypeScript sont exécutés tels quels par le type stripping natif de Node, les
 `.js` annotés JSDoc cohabitent, et l'ensemble est vérifié par `tsc` — sans
-étape de build.
+étape de build. Le paquet construit par `npm run pack:release`, lui, contient du JS émis à la
+construction : Node refuse le type stripping des fichiers situés sous
+`node_modules`.
 
 ## `striart init`
 
@@ -56,13 +65,17 @@ striart init
 `init` est idempotent et ne touche jamais un fichier existant. Il :
 
 1. crée `.striart/` (gitignoré) : `agents/`, `conflicts/`, `logs/`,
-   `queue.json`, `locks.json`, `agents.json` ;
+   `queue.json`, `locks.json`, `agents.json` (les autres dossiers — `usage/`,
+   `reviews/`, `acp/`, `control/`… — naissent à l'usage) ;
 2. ajoute `.striart/` au `.gitignore` du repo s'il n'y est pas déjà ;
 3. génère `striart.config.mjs` **si aucune config n'existe** (cosmiconfig
-   accepte aussi `striart.config.js`, `.striartrc.json`, etc.) ;
-4. diagnostique le LLM configuré — ping d'Ollama, ou présence de la clé API
-   pour un provider cloud. **Avertissement seulement, jamais bloquant** : on
-   peut initialiser d'abord et configurer le LLM ensuite.
+   accepte aussi `striart.config.js`, `.striartrc.json`, etc.), puis valide
+   la config — une config invalide fait échouer `init` ;
+4. enchaîne le diagnostic de `striart doctor` et n'en affiche que ce qui
+   demande une action : dépôt sans commit, branche cible absente, LLM
+   injoignable ou clé API manquante… avec la commande à lancer.
+   **Signalé, jamais bloquant** : l'initialisation réussit (sortie 0), on
+   peut configurer le LLM ensuite.
 
 Deux réglages à vérifier avant le premier agent :
 
@@ -77,14 +90,14 @@ Deux réglages à vérifier avant le premier agent :
 Puis vérifiez l'ensemble :
 
 ```bash
-striart doctor    # git, repo, config, LLM joignable, verrous, tickets
+striart doctor    # git, repo, config, branche cible, LLM, secrets, verrous, agents, tickets
 ```
 
 ## Guide : 3 agents en parallèle sans conflit
 
 ```bash
 cd mon-projet
-striart init                          # crée .striart/, la config, vérifie le LLM
+striart init                          # crée .striart/, la config, puis diagnostique
 
 # Onglet 1 — l'orchestrateur
 striart watch                         # merge + Test Gate + rebase automatiques
@@ -99,10 +112,12 @@ striart run "Nouveau composant de login" --command "claude" --open
 striart run "Ajoute des tests unitaires à src/parser.js" --autonomous --profile claude
 ```
 
-`--open` ouvre directement un onglet terminal dans le clone de l'agent
-(Windows Terminal, Terminal.app, gnome-terminal) et y lance l'outil. Chaque
-session est indépendante : elle reste ouverte jusqu'à ce que **vous** la
-fermiez.
+`--open` démarre un **hôte de pty** détaché qui lance l'outil dans le clone,
+puis ouvre un onglet (Windows Terminal, console PowerShell, Terminal.app,
+gnome-terminal) qui s'y attache par `striart attach <agent>`. La session vit
+indépendamment de l'onglet : le fermer ne tue pas l'agent, et
+`striart attach <agent>` (depuis le clone) la rejoint. Sans `--open`, la
+commande exacte à lancer dans le clone est affichée.
 
 Ensuite, tout est automatique :
 
@@ -140,11 +155,20 @@ Ensuite, tout est automatique :
 ## Suivi en temps réel
 
 ```bash
-striart status          # agents, mode (auto/supervisé), branches, outils, commits en attente
+striart status          # agents, sessions, mode, branches, commits en attente, ce qui attend un humain
 striart queue           # scheduler : RUNNING / WAITING + blocages
-striart dashboard       # http://localhost:3456 — vue web temps réel
+striart dashboard       # http://localhost:3456 — vue web temps réel (lien de connexion à usage unique affiché)
 striart resolve         # tickets de conflit en attente de résolution humaine
 ```
+
+## Complétion du shell
+
+```bash
+striart completion bash >> ~/.bashrc          # zsh, fish, powershell aussi
+```
+
+Commandes, options, noms d'agents, ids de tickets et profils se complètent
+à la touche Tab — voir [Commandes](commandes.md#striart-completion-shell).
 
 ## Pour aller plus loin
 

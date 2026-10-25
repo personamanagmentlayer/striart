@@ -1,0 +1,3391 @@
+{
+  "openrpc": "1.3.2",
+  "info": {
+    "title": "Striart Control Protocol",
+    "version": "1.0.0",
+    "description": "Human control plane of Striart: read the orchestrator state, follow its changes, and act as the human in the loop (launch, merge, sync, stop, promote, rollback, resolve, arbitrate permissions, release the main session, reconcile).\n\nJSON-RPC 2.0, named parameters. Transports: stdio (`striart api --stdio`, NDJSON or Content-Length framing — for IDE extensions, no network surface) and HTTP loopback (`striart dashboard`: POST /rpc + GET /events Server-Sent Events, sign-in link + HttpOnly session cookie, Host/Origin/X-Striart checks).\n\nEvery result is a Striart Document ({schemaVersion, command, ok, outcome, data, warnings}); every error carries the same Document in `error.data` (code/kind/message/hint/details) — the shapes of `striart <command> --json`.\n\nThe agent plane (MCP) never exposes permission arbitration, ticket closing nor lock release: they exist only here.",
+    "license": {
+      "name": "MIT"
+    }
+  },
+  "x-schemaVersion": 1,
+  "x-protocolVersion": 1,
+  "x-transports": {
+    "stdio": {
+      "command": "striart api --stdio [--framing ndjson|content-length]",
+      "framing": {
+        "ndjson": "One JSON-RPC message per line (UTF-8, LF). 1 MiB per message at most.",
+        "content-length": "LSP-style \"Content-Length: <bytes>\\r\\n\\r\\n<json>\" frames (vscode-jsonrpc, lsp4j). 1 MiB per message at most."
+      }
+    },
+    "http": {
+      "command": "striart dashboard",
+      "endpoints": {
+        "GET /auth?code=<one-time>": "Exchanges a one-time sign-in link for the session cookie, then redirects to /.",
+        "POST /rpc": "JSON-RPC 2.0 (single or batch). Requires the session cookie, Origin = this server, X-Striart: 1, Content-Type: application/json.",
+        "GET /events": "Server-Sent Events: \"state.changed\" and \"control.notice\", data = the JSON-RPC notification, id = seq. A slow client is disconnected and reconnects (the state is idempotent)."
+      }
+    }
+  },
+  "x-errors": [
+    {
+      "name": "PARSE_ERROR",
+      "code": -32700
+    },
+    {
+      "name": "INVALID_REQUEST",
+      "code": -32600
+    },
+    {
+      "name": "METHOD_NOT_FOUND",
+      "code": -32601
+    },
+    {
+      "name": "INVALID_PARAMS",
+      "code": -32602
+    },
+    {
+      "name": "INTERNAL_ERROR",
+      "code": -32603
+    },
+    {
+      "name": "FAILURE",
+      "code": -32000
+    },
+    {
+      "name": "REFUSAL",
+      "code": -32001
+    },
+    {
+      "name": "UNAUTHENTICATED",
+      "code": -32002
+    }
+  ],
+  "methods": [
+    {
+      "name": "control.initialize",
+      "summary": "Handshake: negotiate the protocol version, list methods and notifications.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "protocolVersion",
+          "required": true,
+          "description": "Version the client speaks.",
+          "schema": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        {
+          "name": "client",
+          "required": false,
+          "schema": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 100
+              },
+              "version": {
+                "type": "string",
+                "maxLength": 50
+              }
+            },
+            "required": ["name"],
+            "additionalProperties": false
+          }
+        }
+      ],
+      "result": {
+        "name": "document",
+        "schema": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ResultDocument"
+            },
+            {
+              "properties": {
+                "command": {
+                  "const": "control.initialize"
+                },
+                "data": {
+                  "$ref": "#/components/schemas/InitializeResult"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "x-mutating": false,
+      "x-transports": ["stdio", "http"]
+    },
+    {
+      "name": "rpc.discover",
+      "summary": "This OpenRPC document (methods, parameters, results, notifications, schemas).",
+      "paramStructure": "by-name",
+      "params": [],
+      "result": {
+        "name": "document",
+        "schema": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ResultDocument"
+            },
+            {
+              "properties": {
+                "command": {
+                  "const": "rpc.discover"
+                },
+                "data": {
+                  "$ref": "#/components/schemas/OpenRpcDocument"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "x-mutating": false,
+      "x-transports": ["stdio", "http"]
+    },
+    {
+      "name": "state.get",
+      "summary": "Full state: agents, queue, tickets, locks heatmap, history, main session, pending permissions, watcher, profiles.",
+      "paramStructure": "by-name",
+      "params": [],
+      "result": {
+        "name": "document",
+        "schema": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ResultDocument"
+            },
+            {
+              "properties": {
+                "command": {
+                  "const": "state.get"
+                },
+                "data": {
+                  "$ref": "#/components/schemas/ControlState"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "x-mutating": false,
+      "x-transports": ["stdio", "http"]
+    },
+    {
+      "name": "state.subscribe",
+      "summary": "Subscribe to state changes: the current state now, then `state.changed` and `control.notice` notifications. Over HTTP, use GET /events (Server-Sent Events) instead.",
+      "paramStructure": "by-name",
+      "params": [],
+      "result": {
+        "name": "document",
+        "schema": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ResultDocument"
+            },
+            {
+              "properties": {
+                "command": {
+                  "const": "state.subscribe"
+                },
+                "data": {
+                  "$ref": "#/components/schemas/SubscribeResult"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "x-mutating": false,
+      "x-transports": ["stdio"]
+    },
+    {
+      "name": "state.unsubscribe",
+      "summary": "End a subscription.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "subscriptionId",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/SubscriptionId"
+          }
+        }
+      ],
+      "result": {
+        "name": "document",
+        "schema": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ResultDocument"
+            },
+            {
+              "properties": {
+                "command": {
+                  "const": "state.unsubscribe"
+                },
+                "data": {
+                  "$ref": "#/components/schemas/UnsubscribeResult"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "x-mutating": false,
+      "x-transports": ["stdio"]
+    },
+    {
+      "name": "ticket.get",
+      "summary": "Read a conflict ticket in 3-way form (BASE / OURS / THEIRS / LLM attempt) with the Test Gate log.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/TicketId"
+          }
+        }
+      ],
+      "result": {
+        "name": "document",
+        "schema": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ResultDocument"
+            },
+            {
+              "properties": {
+                "command": {
+                  "const": "ticket.get"
+                },
+                "data": {
+                  "$ref": "#/components/schemas/TicketDetail"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "x-mutating": false,
+      "x-transports": ["stdio", "http"]
+    },
+    {
+      "name": "session.log",
+      "summary": "Tail of an autonomous session log (64 KB at most).",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "agent",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/AgentName"
+          }
+        }
+      ],
+      "result": {
+        "name": "document",
+        "schema": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ResultDocument"
+            },
+            {
+              "properties": {
+                "command": {
+                  "const": "session.log"
+                },
+                "data": {
+                  "$ref": "#/components/schemas/SessionLog"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "x-mutating": false,
+      "x-transports": ["stdio", "http"]
+    },
+    {
+      "name": "doctor.run",
+      "summary": "Environment diagnosis (same report as `striart doctor --json`).",
+      "paramStructure": "by-name",
+      "params": [],
+      "result": {
+        "name": "document",
+        "schema": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ResultDocument"
+            },
+            {
+              "properties": {
+                "command": {
+                  "const": "doctor.run"
+                },
+                "data": {
+                  "$ref": "#/components/schemas/DoctorReport"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "x-mutating": false,
+      "x-transports": ["stdio", "http"]
+    },
+    {
+      "name": "task.run",
+      "summary": "Launch a task through the Router: a clone if no collision, else the queue. mode \"autonomous\" starts a supervised session in the background.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "prompt",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/Prompt"
+          }
+        },
+        {
+          "name": "agent",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentName"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mode",
+          "required": false,
+          "schema": {
+            "enum": ["attended", "autonomous"]
+          }
+        },
+        {
+          "name": "profile",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProfileName"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "document",
+        "schema": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ResultDocument"
+            },
+            {
+              "properties": {
+                "command": {
+                  "const": "task.run"
+                },
+                "data": {
+                  "$ref": "#/components/schemas/TaskRunData"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "x-mutating": true,
+      "x-transports": ["stdio", "http"]
+    },
+    {
+      "name": "agent.merge",
+      "summary": "Merge an agent's last commit (rebase, semantic merge on conflict, blocking Test Gate).",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "agent",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/AgentName"
+          }
+        }
+      ],
+      "result": {
+        "name": "document",
+        "schema": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ResultDocument"
+            },
+            {
+              "properties": {
+                "command": {
+                  "const": "agent.merge"
+                },
+                "data": {
+                  "$ref": "#/components/schemas/MergeResult"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "x-mutating": true,
+      "x-transports": ["stdio", "http"]
+    },
+    {
+      "name": "agent.sync",
+      "summary": "Rebase one agent (or all of them) on the target branch.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "agent",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentName"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "document",
+        "schema": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ResultDocument"
+            },
+            {
+              "properties": {
+                "command": {
+                  "const": "agent.sync"
+                },
+                "data": {
+                  "$ref": "#/components/schemas/SyncData"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "x-mutating": true,
+      "x-transports": ["stdio", "http"]
+    },
+    {
+      "name": "agent.stop",
+      "summary": "Stop an agent; refused while unmerged commits remain, unless force abandons them.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "agent",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/AgentName"
+          }
+        },
+        {
+          "name": "force",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          }
+        }
+      ],
+      "result": {
+        "name": "document",
+        "schema": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ResultDocument"
+            },
+            {
+              "properties": {
+                "command": {
+                  "const": "agent.stop"
+                },
+                "data": {
+                  "$ref": "#/components/schemas/StopData"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "x-mutating": true,
+      "x-transports": ["stdio", "http"]
+    },
+    {
+      "name": "queue.retry",
+      "summary": "Start the queued tasks that nothing blocks any more.",
+      "paramStructure": "by-name",
+      "params": [],
+      "result": {
+        "name": "document",
+        "schema": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ResultDocument"
+            },
+            {
+              "properties": {
+                "command": {
+                  "const": "queue.retry"
+                },
+                "data": {
+                  "$ref": "#/components/schemas/QueueRetryData"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "x-mutating": true,
+      "x-transports": ["stdio", "http"]
+    },
+    {
+      "name": "reconcile.run",
+      "summary": "Neutralize dead sessions and unblock the queue (`striart reconcile`).",
+      "paramStructure": "by-name",
+      "params": [],
+      "result": {
+        "name": "document",
+        "schema": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ResultDocument"
+            },
+            {
+              "properties": {
+                "command": {
+                  "const": "reconcile.run"
+                },
+                "data": {
+                  "$ref": "#/components/schemas/ReconcileData"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "x-mutating": true,
+      "x-transports": ["stdio", "http"]
+    },
+    {
+      "name": "staging.promote",
+      "summary": "Promote staging to the main branch under the global Test Gate.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "rollback",
+          "required": false,
+          "description": "Undo the target branch to its previous head if the gate is red.",
+          "schema": {
+            "type": "boolean"
+          }
+        }
+      ],
+      "result": {
+        "name": "document",
+        "schema": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ResultDocument"
+            },
+            {
+              "properties": {
+                "command": {
+                  "const": "staging.promote"
+                },
+                "data": {
+                  "$ref": "#/components/schemas/PromoteResult"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "x-mutating": true,
+      "x-transports": ["stdio", "http"]
+    },
+    {
+      "name": "merge.rollback",
+      "summary": "Undo the last Striart merge of the target branch.",
+      "paramStructure": "by-name",
+      "params": [],
+      "result": {
+        "name": "document",
+        "schema": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ResultDocument"
+            },
+            {
+              "properties": {
+                "command": {
+                  "const": "merge.rollback"
+                },
+                "data": {
+                  "$ref": "#/components/schemas/RollbackResult"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "x-mutating": true,
+      "x-transports": ["stdio", "http"]
+    },
+    {
+      "name": "ticket.prepare",
+      "summary": "Seed `.resolved` files from the agent version (never overwrites a prepared resolution).",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/TicketId"
+          }
+        },
+        {
+          "name": "acceptTheirs",
+          "required": false,
+          "description": "Protected paths whose `.resolved` may be seeded from the agent version (explicit human decision; protected paths are otherwise never seeded).",
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      ],
+      "result": {
+        "name": "document",
+        "schema": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ResultDocument"
+            },
+            {
+              "properties": {
+                "command": {
+                  "const": "ticket.prepare"
+                },
+                "data": {
+                  "$ref": "#/components/schemas/ResolveData"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "x-mutating": true,
+      "x-transports": ["stdio", "http"]
+    },
+    {
+      "name": "ticket.apply",
+      "summary": "Replay the ticket merge with the prepared resolutions, under the main lock and the Test Gate.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/TicketId"
+          }
+        }
+      ],
+      "result": {
+        "name": "document",
+        "schema": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ResultDocument"
+            },
+            {
+              "properties": {
+                "command": {
+                  "const": "ticket.apply"
+                },
+                "data": {
+                  "$ref": "#/components/schemas/ResolveData"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "x-mutating": true,
+      "x-transports": ["stdio", "http"]
+    },
+    {
+      "name": "ticket.close",
+      "summary": "Mark a ticket resolved by hand (no Test Gate) — human plane only.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/TicketId"
+          }
+        }
+      ],
+      "result": {
+        "name": "document",
+        "schema": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ResultDocument"
+            },
+            {
+              "properties": {
+                "command": {
+                  "const": "ticket.close"
+                },
+                "data": {
+                  "$ref": "#/components/schemas/ResolveData"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "x-mutating": true,
+      "x-transports": ["stdio", "http"]
+    },
+    {
+      "name": "permission.answer",
+      "summary": "Arbitrate a semi-autonomous permission request with one of the options the agent proposed — human plane only.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/PermissionId"
+          }
+        },
+        {
+          "name": "option",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/PermissionOptionId"
+          }
+        }
+      ],
+      "result": {
+        "name": "document",
+        "schema": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ResultDocument"
+            },
+            {
+              "properties": {
+                "command": {
+                  "const": "permission.answer"
+                },
+                "data": {
+                  "$ref": "#/components/schemas/PermissionRequest"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "x-mutating": true,
+      "x-transports": ["stdio", "http"]
+    },
+    {
+      "name": "review.list",
+      "summary": "List the human review requests (most recent first), with \"alive\" = the waiting orchestrator still lives.",
+      "paramStructure": "by-name",
+      "params": [],
+      "result": {
+        "name": "document",
+        "schema": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ResultDocument"
+            },
+            {
+              "properties": {
+                "command": {
+                  "const": "review.list"
+                },
+                "data": {
+                  "$ref": "#/components/schemas/ReviewListData"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "x-mutating": false,
+      "x-transports": ["stdio", "http"]
+    },
+    {
+      "name": "review.answer",
+      "summary": "Give the verdict of a PENDING human review (approve, request-changes, reject, with a summary and structured remarks) — human plane only. The verdict is validated like an agent verdict; it only proposes: the merge still passes the Test Gate. Answered once; an expired or abandoned request is refused (REVIEW_NOT_PENDING).",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/ReviewId"
+          }
+        },
+        {
+          "name": "verdict",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/ReviewVerdictValue"
+          }
+        },
+        {
+          "name": "summary",
+          "required": false,
+          "schema": {
+            "$ref": "#/components/schemas/ReviewSummary"
+          }
+        },
+        {
+          "name": "comments",
+          "required": false,
+          "schema": {
+            "$ref": "#/components/schemas/ReviewCommentsInput"
+          }
+        }
+      ],
+      "result": {
+        "name": "document",
+        "schema": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ResultDocument"
+            },
+            {
+              "properties": {
+                "command": {
+                  "const": "review.answer"
+                },
+                "data": {
+                  "$ref": "#/components/schemas/ReviewAnswerData"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "x-mutating": true,
+      "x-transports": ["stdio", "http"]
+    },
+    {
+      "name": "orchestration.state",
+      "summary": "Runs and groups of the orchestrated modes (review, team, pipeline, race) and the human reviews.",
+      "paramStructure": "by-name",
+      "params": [],
+      "result": {
+        "name": "document",
+        "schema": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ResultDocument"
+            },
+            {
+              "properties": {
+                "command": {
+                  "const": "orchestration.state"
+                },
+                "data": {
+                  "$ref": "#/components/schemas/OrchestrationStateData"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "x-mutating": false,
+      "x-transports": ["stdio", "http"]
+    },
+    {
+      "name": "elicitation.answer",
+      "summary": "Answer an agent's structured question (accept with content validated against its requestedSchema, decline, cancel) — human plane only. Invalid content keeps the request open.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "id",
+          "required": true,
+          "schema": {
+            "$ref": "#/components/schemas/ElicitationId"
+          }
+        },
+        {
+          "name": "action",
+          "required": true,
+          "schema": {
+            "enum": ["accept", "decline", "cancel"]
+          }
+        },
+        {
+          "name": "content",
+          "required": false,
+          "description": "Form values (mode \"form\", action \"accept\").",
+          "schema": {
+            "type": "object"
+          }
+        }
+      ],
+      "result": {
+        "name": "document",
+        "schema": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ResultDocument"
+            },
+            {
+              "properties": {
+                "command": {
+                  "const": "elicitation.answer"
+                },
+                "data": {
+                  "$ref": "#/components/schemas/ElicitationRequest"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "x-mutating": true,
+      "x-transports": ["stdio", "http"]
+    },
+    {
+      "name": "mainSession.release",
+      "summary": "Release the main repository session (`striart lock --stop`) — human plane only.",
+      "paramStructure": "by-name",
+      "params": [],
+      "result": {
+        "name": "document",
+        "schema": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ResultDocument"
+            },
+            {
+              "properties": {
+                "command": {
+                  "const": "mainSession.release"
+                },
+                "data": {
+                  "$ref": "#/components/schemas/LockStopData"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "x-mutating": true,
+      "x-transports": ["stdio", "http"]
+    },
+    {
+      "name": "semantic.unlock",
+      "summary": "Leave manual mode: re-enable the semantic merge (`striart resolve --unlock`).",
+      "paramStructure": "by-name",
+      "params": [],
+      "result": {
+        "name": "document",
+        "schema": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ResultDocument"
+            },
+            {
+              "properties": {
+                "command": {
+                  "const": "semantic.unlock"
+                },
+                "data": {
+                  "$ref": "#/components/schemas/ResolveData"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "x-mutating": true,
+      "x-transports": ["stdio", "http"]
+    },
+    {
+      "name": "clones.clean",
+      "summary": "Delete the clones of stopped agents with nothing pending (never all/force: the cleanClones guards keep the last word).",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "agent",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentName"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "document",
+        "schema": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ResultDocument"
+            },
+            {
+              "properties": {
+                "command": {
+                  "const": "clones.clean"
+                },
+                "data": {
+                  "$ref": "#/components/schemas/CleanResult"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "x-mutating": true,
+      "x-transports": ["stdio", "http"]
+    },
+    {
+      "name": "workspace.prune",
+      "summary": "Prune idle stopped clones and resolved tickets (config retention).",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "dryRun",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          }
+        }
+      ],
+      "result": {
+        "name": "document",
+        "schema": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ResultDocument"
+            },
+            {
+              "properties": {
+                "command": {
+                  "const": "workspace.prune"
+                },
+                "data": {
+                  "$ref": "#/components/schemas/PruneResult"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "x-mutating": true,
+      "x-transports": ["stdio", "http"]
+    }
+  ],
+  "x-notifications": [
+    {
+      "name": "state.changed",
+      "summary": "The state changed (disk, agent refs, an action). Idempotent: render the latest revision. Over HTTP: SSE event \"state.changed\".",
+      "params": {
+        "$ref": "#/components/schemas/StateChangedParams"
+      }
+    },
+    {
+      "name": "control.notice",
+      "summary": "Human-readable event (merge done, gate red, autonomous session end). Over HTTP: SSE event \"control.notice\".",
+      "params": {
+        "$ref": "#/components/schemas/NoticeParams"
+      }
+    }
+  ],
+  "components": {
+    "schemas": {
+      "AgentName": {
+        "type": "string",
+        "description": "Agent name: a letter or digit, then letters, digits, \"-\" or \"_\", 64 characters at most (same rule as the CLI).",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$",
+        "x-striart-error": "INVALID_AGENT_NAME"
+      },
+      "TicketId": {
+        "type": "string",
+        "description": "Conflict ticket id (its folder name under .striart/conflicts/).",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,80}$",
+        "x-striart-error": "INVALID_ARGUMENT"
+      },
+      "ElicitationId": {
+        "type": "string",
+        "description": "Id of a pending elicitation (structured question of an ACP agent).",
+        "pattern": "^elic-[0-9a-f-]{8,36}$",
+        "x-striart-error": "INVALID_ARGUMENT"
+      },
+      "ReviewId": {
+        "type": "string",
+        "description": "Id of a human review request (.striart/reviews/<id>.json).",
+        "pattern": "^rev-[0-9a-f]{12}$",
+        "x-striart-error": "INVALID_ARGUMENT"
+      },
+      "ReviewVerdictValue": {
+        "description": "Verdict of a review: approve, request-changes or reject.",
+        "enum": ["approve", "request-changes", "reject"],
+        "x-striart-error": "REVIEW_VERDICT_INVALID"
+      },
+      "ReviewSummary": {
+        "type": "string",
+        "description": "Free-text summary of the verdict (neutralised and bounded by the domain).",
+        "maxLength": 16384,
+        "x-striart-error": "REVIEW_VERDICT_INVALID"
+      },
+      "ReviewCommentsInput": {
+        "type": "array",
+        "description": "Structured remarks (50 at most). Paths are relative to the project and checked by the domain.",
+        "maxItems": 50,
+        "items": {
+          "type": "object",
+          "properties": {
+            "file": {
+              "type": ["string", "null"],
+              "maxLength": 1024
+            },
+            "line": {
+              "type": ["integer", "null"],
+              "minimum": 1
+            },
+            "severity": {
+              "enum": ["blocker", "major", "minor", "info"]
+            },
+            "body": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 16384
+            }
+          },
+          "required": ["severity", "body"],
+          "additionalProperties": false
+        },
+        "x-striart-error": "REVIEW_VERDICT_INVALID"
+      },
+      "PermissionId": {
+        "type": "string",
+        "description": "Id of a pending semi-autonomous permission request.",
+        "pattern": "^perm-[0-9a-f-]{8,36}$",
+        "x-striart-error": "PERMISSION_ID_INVALID"
+      },
+      "PermissionOptionId": {
+        "type": "string",
+        "description": "One of the optionId values the agent proposed for this request.",
+        "minLength": 1,
+        "maxLength": 256,
+        "x-striart-error": "PERMISSION_ID_INVALID"
+      },
+      "Prompt": {
+        "type": "string",
+        "description": "Task prompt — data, never code: passed to the agent as one argv element.",
+        "pattern": "\\S",
+        "maxLength": 200000,
+        "x-striart-error": "EMPTY_PROMPT"
+      },
+      "ProfileName": {
+        "type": "string",
+        "description": "Key of config.agentProfiles.",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "SubscriptionId": {
+        "type": "string",
+        "pattern": "^sub-[0-9]{1,12}$"
+      },
+      "ErrorKind": {
+        "enum": ["usage", "refusal", "failure"],
+        "description": "usage = invalid input (CLI exit 2); refusal = a Striart guard said no (exit 3); failure = execution failed, may be transient (exit 1)."
+      },
+      "Outcome": {
+        "enum": ["ok", "refused", "failed"],
+        "description": "Outcome of an operation that returned a result (the CLI maps it to exit 0/3/1)."
+      },
+      "ErrorObject": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]*$",
+            "description": "Stable machine code."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ErrorKind"
+          },
+          "message": {
+            "type": "string",
+            "description": "Human message, localized (STRIART_LANG)."
+          },
+          "hint": {
+            "type": ["string", "null"],
+            "description": "Next action, ideally an exact command."
+          },
+          "details": {
+            "type": "object",
+            "description": "Identifiers only (agent, ticket, path, PID) — secrets are redacted."
+          }
+        },
+        "required": ["code", "kind", "message", "hint", "details"]
+      },
+      "Warning": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": ["code", "message"]
+      },
+      "Document": {
+        "description": "Machine document: `striart <command> --json` on stdout, and the `result` (or `error.data`) of every Striart Control Protocol call.",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ResultDocument"
+          },
+          {
+            "$ref": "#/components/schemas/ErrorDocument"
+          }
+        ]
+      },
+      "ResultDocument": {
+        "type": "object",
+        "properties": {
+          "schemaVersion": {
+            "const": 1
+          },
+          "command": {
+            "type": "string",
+            "description": "CLI command name, or protocol method name."
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/Outcome"
+          },
+          "data": {},
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Warning"
+            }
+          }
+        },
+        "required": ["schemaVersion", "command", "ok", "data"]
+      },
+      "ErrorDocument": {
+        "type": "object",
+        "properties": {
+          "schemaVersion": {
+            "const": 1
+          },
+          "command": {
+            "type": ["string", "null"]
+          },
+          "ok": {
+            "const": false
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorObject"
+          }
+        },
+        "required": ["schemaVersion", "command", "ok", "error"]
+      },
+      "StreamEvent": {
+        "type": "object",
+        "properties": {
+          "schemaVersion": {
+            "const": 1
+          },
+          "command": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "at": {
+            "type": "string"
+          },
+          "data": {}
+        },
+        "required": ["schemaVersion", "command", "type", "at"]
+      },
+      "AgentSession": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "state": {
+                "const": "running"
+              },
+              "via": {
+                "enum": ["autonomous", "pty"]
+              },
+              "pid": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": ["state", "via", "pid"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "state": {
+                "const": "recent-activity"
+              },
+              "via": {
+                "type": "null"
+              },
+              "pid": {
+                "type": "null"
+              }
+            },
+            "required": ["state"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "state": {
+                "const": "idle"
+              },
+              "via": {
+                "type": "null"
+              },
+              "pid": {
+                "type": "null"
+              }
+            },
+            "required": ["state"]
+          }
+        ]
+      },
+      "Agent": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "enum": ["ACTIVE", "MISSING", "BROKEN", "REMOVING"],
+            "description": "REMOVING: the clone is being deleted (`removing` in the registry) — never shown as active or broken."
+          },
+          "removing": {
+            "type": "boolean"
+          },
+          "removingSince": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "currentBranch": {
+            "type": "string"
+          },
+          "command": {
+            "type": ["string", "null"]
+          },
+          "mode": {
+            "enum": ["attended", "autonomous"]
+          },
+          "profile": {
+            "type": ["string", "null"]
+          },
+          "pendingCommits": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "lastMessage": {
+            "type": ["string", "null"]
+          },
+          "sizeBytes": {
+            "type": ["integer", "null"]
+          },
+          "sizeHuman": {
+            "type": ["string", "null"]
+          },
+          "session": {
+            "$ref": "#/components/schemas/AgentSession"
+          },
+          "acpHost": {
+            "$ref": "#/components/schemas/AcpHostStatus"
+          }
+        },
+        "required": ["name", "status", "pendingCommits"]
+      },
+      "Collision": {
+        "type": "object",
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": ["agent", "files"]
+      },
+      "QueueRow": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "status": {
+            "enum": ["RUNNING", "WAITING"]
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "blockedBy": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Collision"
+            }
+          },
+          "after": {
+            "type": ["string", "null"]
+          },
+          "ready": {
+            "type": "boolean"
+          }
+        },
+        "required": ["id", "agent", "status", "files", "blockedBy"]
+      },
+      "QueueTask": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "const": "WAITING"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "predictedFiles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "collisions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Collision"
+            }
+          },
+          "command": {
+            "type": ["string", "null"]
+          },
+          "after": {
+            "type": ["string", "null"]
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": ["id", "status", "agent", "predictedFiles", "collisions", "createdAt"]
+      },
+      "Ticket": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/TicketId"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "sha": {
+            "type": "string"
+          },
+          "reason": {
+            "enum": [
+              "MERGE_CONFLICT",
+              "UNMERGEABLE_CONFLICT",
+              "GATE_FAILED",
+              "SEMANTIC_MERGE_FAILED",
+              "SEMANTIC_GATE_FAILED",
+              "PROMOTION_GATE_FAILED"
+            ]
+          },
+          "conflictedFiles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "unmergeable": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string"
+                }
+              },
+              "required": ["path", "kind"]
+            }
+          },
+          "prompt": {
+            "type": ["string", "null"]
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "attempts": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "dir": {
+            "type": "string"
+          },
+          "resolved": {
+            "type": "boolean"
+          }
+        },
+        "required": ["id", "agent", "sha", "reason", "conflictedFiles", "createdAt", "dir"]
+      },
+      "CorruptTicket": {
+        "description": "A ticket whose ticket.json is unreadable or missing, listed instead of silently ignored. Its business fields are unknown (null); it can only be closed (ticket.close) — ticket.get / ticket.prepare / ticket.apply refuse it with TICKET_CORRUPT.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/TicketId"
+          },
+          "dir": {
+            "type": "string"
+          },
+          "resolved": {
+            "type": "boolean"
+          },
+          "status": {
+            "const": "CORRUPT"
+          },
+          "cause": {
+            "enum": ["MISSING", "UNREADABLE", "INVALID_JSON", "INCOMPLETE"]
+          },
+          "createdAt": {
+            "type": "string",
+            "description": "Date of the ticket folder."
+          },
+          "agent": {
+            "type": "null"
+          },
+          "branch": {
+            "type": "null"
+          },
+          "sha": {
+            "type": "null"
+          },
+          "reason": {
+            "type": "null"
+          },
+          "conflictedFiles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "prompt": {
+            "type": "null"
+          }
+        },
+        "required": [
+          "id",
+          "dir",
+          "resolved",
+          "status",
+          "cause",
+          "createdAt",
+          "agent",
+          "branch",
+          "sha",
+          "reason",
+          "conflictedFiles",
+          "prompt"
+        ]
+      },
+      "TicketEntry": {
+        "description": "An entry of a ticket list: a readable Ticket, or a CorruptTicket (status \"CORRUPT\").",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/Ticket"
+          },
+          {
+            "$ref": "#/components/schemas/CorruptTicket"
+          }
+        ]
+      },
+      "ReviewVerdictDoc": {
+        "type": "object",
+        "properties": {
+          "verdict": {
+            "$ref": "#/components/schemas/ReviewVerdictValue"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "comments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "file": {
+                  "type": ["string", "null"]
+                },
+                "line": {
+                  "type": ["integer", "null"]
+                },
+                "severity": {
+                  "enum": ["blocker", "major", "minor", "info"]
+                },
+                "body": {
+                  "type": "string"
+                }
+              },
+              "required": ["file", "line", "severity", "body"]
+            }
+          }
+        },
+        "required": ["verdict", "summary", "comments"]
+      },
+      "HumanReview": {
+        "description": "A human review request. Untrusted text (diffstat, verdict summary and remarks come from git and agents): display as text only. \"alive\" = the orchestrator process waiting for the verdict still lives.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ReviewId"
+          },
+          "group": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "reviewer": {
+            "type": "string"
+          },
+          "round": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "branch": {
+            "type": "string"
+          },
+          "sha": {
+            "type": "string"
+          },
+          "baseCommit": {
+            "type": "string"
+          },
+          "diffstat": {
+            "type": "string"
+          },
+          "status": {
+            "enum": ["PENDING", "ANSWERED", "EXPIRED"]
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewVerdictDoc"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "answeredAt": {
+            "type": ["string", "null"]
+          },
+          "expiresAt": {
+            "type": "string"
+          },
+          "pid": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "alive": {
+            "type": "boolean"
+          }
+        },
+        "required": ["id", "group", "agent", "status", "createdAt", "expiresAt", "alive"]
+      },
+      "OrchestrationRun": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "mode": {
+            "enum": ["sequential", "parallel"]
+          },
+          "concurrency": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "status": {
+            "enum": ["running", "done", "interrupted"]
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": ["string", "null"]
+                },
+                "kind": {
+                  "enum": ["task", "review", "pipeline", "race", "team"]
+                },
+                "state": {
+                  "enum": ["pending", "running", "done", "skipped"]
+                },
+                "status": {
+                  "type": ["string", "null"]
+                },
+                "agent": {
+                  "type": ["string", "null"]
+                }
+              },
+              "required": ["kind", "state"]
+            }
+          },
+          "pid": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "startedAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "alive": {
+            "type": "boolean"
+          }
+        },
+        "required": ["id", "status", "nodes", "startedAt", "alive"]
+      },
+      "OrchestrationGroup": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": ["review", "pipeline", "race", "team"]
+          },
+          "runId": {
+            "type": ["string", "null"]
+          },
+          "nodeId": {
+            "type": ["string", "null"]
+          },
+          "agents": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "enum": ["running", "done"]
+          },
+          "result": {
+            "type": ["string", "null"]
+          },
+          "round": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "activeRoles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "verdicts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "reviewer": {
+                  "type": "string"
+                },
+                "verdict": {
+                  "$ref": "#/components/schemas/ReviewVerdictValue"
+                }
+              },
+              "required": ["reviewer", "verdict"]
+            }
+          },
+          "humanReview": {
+            "type": ["string", "null"]
+          },
+          "pid": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "startedAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "alive": {
+            "type": "boolean"
+          }
+        },
+        "required": ["id", "kind", "agents", "status", "startedAt", "alive"]
+      },
+      "OrchestrationSnapshot": {
+        "type": "object",
+        "properties": {
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrchestrationRun"
+            }
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrchestrationGroup"
+            }
+          }
+        },
+        "required": ["runs", "groups"]
+      },
+      "OrchestrationStateData": {
+        "description": "Runs and groups of the orchestrated modes (alive computed) plus the human reviews.",
+        "type": "object",
+        "properties": {
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrchestrationRun"
+            }
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrchestrationGroup"
+            }
+          },
+          "reviews": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HumanReview"
+            }
+          }
+        },
+        "required": ["runs", "groups", "reviews"]
+      },
+      "ReviewListData": {
+        "type": "object",
+        "properties": {
+          "reviews": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HumanReview"
+            }
+          }
+        },
+        "required": ["reviews"]
+      },
+      "ReviewAnswerData": {
+        "type": "object",
+        "properties": {
+          "review": {
+            "$ref": "#/components/schemas/HumanReview"
+          }
+        },
+        "required": ["review"]
+      },
+      "TicketDetail": {
+        "description": "Full 3-way view of a ticket: BASE / OURS / THEIRS / LLM attempt per file.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Ticket"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "resolutions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    },
+                    "base": {
+                      "type": ["string", "null"]
+                    },
+                    "ours": {
+                      "type": ["string", "null"]
+                    },
+                    "theirs": {
+                      "type": ["string", "null"]
+                    },
+                    "llmAttempt": {
+                      "type": ["string", "null"]
+                    }
+                  },
+                  "required": ["path", "base", "ours", "theirs", "llmAttempt"]
+                }
+              },
+              "log": {
+                "type": ["string", "null"]
+              },
+              "resolutionInputs": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": ["content", "delete", "missing"]
+                    }
+                  },
+                  "required": ["path", "kind"]
+                }
+              }
+            },
+            "required": ["resolutions", "log", "resolutionInputs"]
+          }
+        ]
+      },
+      "HeatmapEntry": {
+        "type": "object",
+        "properties": {
+          "file": {
+            "type": "string"
+          },
+          "agents": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "queued": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "conflicts": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "score": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": ["file", "agents", "queued", "conflicts", "score"]
+      },
+      "HistoryEntry": {
+        "type": "object",
+        "properties": {
+          "sha": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string"
+          },
+          "type": {
+            "enum": ["merge", "rollback"]
+          },
+          "agent": {
+            "type": ["string", "null"]
+          },
+          "semantic": {
+            "type": "boolean"
+          },
+          "semanticFiles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "ticketId": {
+            "type": ["string", "null"]
+          }
+        },
+        "required": ["sha", "date", "type"]
+      },
+      "StriartState": {
+        "type": "object",
+        "properties": {
+          "semanticFailureStreak": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "manualMode": {
+            "type": "boolean"
+          }
+        },
+        "required": ["semanticFailureStreak", "manualMode"]
+      },
+      "DaemonStatus": {
+        "type": "object",
+        "properties": {
+          "running": {
+            "type": "boolean"
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "verified": {
+            "type": "boolean"
+          },
+          "pid": {
+            "type": ["integer", "null"]
+          },
+          "startedAt": {
+            "type": ["string", "null"]
+          },
+          "logPath": {
+            "type": "string"
+          },
+          "url": {
+            "type": ["string", "null"]
+          }
+        },
+        "required": ["running", "stale", "pid", "logPath"]
+      },
+      "PermissionRequest": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "permission"
+          },
+          "id": {
+            "$ref": "#/components/schemas/PermissionId"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "taskId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "optionId": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string"
+                }
+              },
+              "required": ["optionId"]
+            }
+          },
+          "status": {
+            "enum": ["PENDING", "ANSWERED"]
+          },
+          "answer": {
+            "type": ["string", "null"]
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "answeredAt": {
+            "type": ["string", "null"]
+          },
+          "expiresAt": {
+            "type": "string"
+          }
+        },
+        "required": ["id", "agent", "title", "options", "status", "expiresAt"]
+      },
+      "AcpHostStatus": {
+        "type": "object",
+        "properties": {
+          "running": {
+            "type": "boolean"
+          },
+          "stale": {
+            "type": "boolean"
+          },
+          "verified": {
+            "type": "boolean"
+          },
+          "listening": {
+            "type": "boolean"
+          },
+          "pid": {
+            "type": ["integer", "null"]
+          },
+          "startedAt": {
+            "type": ["string", "null"]
+          }
+        },
+        "required": ["running", "stale", "listening", "pid"]
+      },
+      "ElicitationRequest": {
+        "description": "Structured question of an ACP agent, routed to the human. `message`, `url` and `requestedSchema` come from the agent: UNTRUSTED content — display as text, never interpret; a `url` is shown, never opened automatically.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "const": "elicitation"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ElicitationId"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "taskId": {
+            "type": "string"
+          },
+          "mode": {
+            "enum": ["form", "url"]
+          },
+          "message": {
+            "type": "string"
+          },
+          "requestedSchema": {
+            "type": ["object", "null"]
+          },
+          "url": {
+            "type": ["string", "null"]
+          },
+          "status": {
+            "enum": ["PENDING", "ANSWERED"]
+          },
+          "answer": {
+            "type": ["object", "null"]
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "answeredAt": {
+            "type": ["string", "null"]
+          },
+          "expiresAt": {
+            "type": "string"
+          }
+        },
+        "required": ["kind", "id", "agent", "mode", "message", "status", "expiresAt"]
+      },
+      "MainSessionStatus": {
+        "type": "object",
+        "properties": {
+          "pid": {
+            "type": ["integer", "null"]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "startedAt": {
+            "type": "string"
+          },
+          "alive": {
+            "type": "boolean"
+          }
+        },
+        "required": ["pid", "reason", "startedAt", "alive"]
+      },
+      "ProfileSummary": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "command": {
+            "type": "string"
+          },
+          "invocation": {
+            "type": "string"
+          },
+          "envKeys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "timeout": {
+            "type": ["integer", "null"]
+          },
+          "acp": {
+            "type": "boolean"
+          }
+        },
+        "required": ["name", "command", "envKeys", "acp"]
+      },
+      "ControlState": {
+        "type": "object",
+        "properties": {
+          "instanceId": {
+            "type": "string",
+            "description": "Random id of the serving instance: a change means a restart."
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Monotonic per instance: a client keeps the highest revision it rendered and ignores older ones."
+          },
+          "generatedAt": {
+            "type": "string"
+          },
+          "agents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Agent"
+            }
+          },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QueueRow"
+            }
+          },
+          "tickets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TicketEntry"
+            }
+          },
+          "heatmap": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeatmapEntry"
+            }
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HistoryEntry"
+            }
+          },
+          "state": {
+            "$ref": "#/components/schemas/StriartState"
+          },
+          "daemon": {
+            "$ref": "#/components/schemas/DaemonStatus"
+          },
+          "permissions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PermissionRequest"
+            }
+          },
+          "elicitations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ElicitationRequest"
+            }
+          },
+          "mainSession": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MainSessionStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "orchestration": {
+            "$ref": "#/components/schemas/OrchestrationSnapshot"
+          },
+          "reviews": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HumanReview"
+            }
+          },
+          "profiles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProfileSummary"
+            }
+          },
+          "config": {
+            "type": "object",
+            "properties": {
+              "testCommand": {
+                "type": "string"
+              },
+              "targetBranch": {
+                "type": "string"
+              },
+              "semanticMerge": {
+                "type": "boolean"
+              },
+              "autoRebase": {
+                "type": "boolean"
+              },
+              "autoPush": {
+                "type": "boolean"
+              }
+            },
+            "required": ["testCommand", "targetBranch", "semanticMerge", "autoRebase", "autoPush"]
+          }
+        },
+        "required": [
+          "instanceId",
+          "revision",
+          "generatedAt",
+          "agents",
+          "tasks",
+          "tickets",
+          "heatmap",
+          "history",
+          "state",
+          "daemon",
+          "permissions",
+          "elicitations",
+          "mainSession",
+          "orchestration",
+          "reviews",
+          "profiles",
+          "config"
+        ]
+      },
+      "StatusData": {
+        "description": "Data of `striart status --json` (same objects as ControlState).",
+        "type": "object",
+        "properties": {
+          "agents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Agent"
+            }
+          },
+          "queue": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QueueRow"
+            }
+          },
+          "tickets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TicketEntry"
+            }
+          },
+          "state": {
+            "$ref": "#/components/schemas/StriartState"
+          },
+          "daemon": {
+            "$ref": "#/components/schemas/DaemonStatus"
+          },
+          "mainSession": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MainSessionStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": ["agents", "queue", "tickets", "state", "daemon", "mainSession"]
+      },
+      "GateResult": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "exitCode": {
+            "type": ["integer", "null"]
+          },
+          "timedOut": {
+            "type": "boolean"
+          },
+          "log": {
+            "type": "string"
+          }
+        },
+        "required": ["success", "timedOut"]
+      },
+      "SyncResult": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "UP_TO_DATE"
+              },
+              "agent": {
+                "type": "string"
+              },
+              "mainHead": {
+                "type": "string"
+              }
+            },
+            "required": ["status", "agent", "mainHead"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "REBASED"
+              },
+              "agent": {
+                "type": "string"
+              },
+              "mainHead": {
+                "type": "string"
+              },
+              "rebasedCommits": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "stashed": {
+                "type": "boolean"
+              }
+            },
+            "required": ["status", "agent", "mainHead"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "SKIPPED_DIRTY"
+              },
+              "agent": {
+                "type": "string"
+              },
+              "files": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "overlap": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": ["status", "agent", "files"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "SKIPPED_SESSION"
+              },
+              "agent": {
+                "type": "string"
+              },
+              "pid": {
+                "type": ["integer", "null"]
+              }
+            },
+            "required": ["status", "agent", "pid"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "REBASE_CONFLICT"
+              },
+              "agent": {
+                "type": "string"
+              },
+              "mainHead": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string"
+              },
+              "stashKept": {
+                "type": "boolean"
+              }
+            },
+            "required": ["status", "agent", "error"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "STASH_CONFLICT"
+              },
+              "agent": {
+                "type": "string"
+              },
+              "mainHead": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string"
+              }
+            },
+            "required": ["status", "agent", "error"]
+          }
+        ]
+      },
+      "MergeResult": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "UP_TO_DATE"
+              },
+              "agent": {
+                "type": "string"
+              },
+              "sha": {
+                "type": "string"
+              }
+            },
+            "required": ["status", "agent", "sha"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "MERGED"
+              },
+              "agent": {
+                "type": "string"
+              },
+              "sha": {
+                "type": "string"
+              },
+              "mergeSha": {
+                "type": "string"
+              },
+              "gate": {
+                "$ref": "#/components/schemas/GateResult"
+              },
+              "pushError": {
+                "type": ["string", "null"]
+              },
+              "semantic": {
+                "type": "boolean"
+              },
+              "resolvedFiles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": ["status", "agent", "sha", "mergeSha"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "CONFLICT"
+              },
+              "reason": {
+                "enum": ["MERGE_CONFLICT", "UNMERGEABLE_CONFLICT", "SEMANTIC_MERGE_FAILED"]
+              },
+              "agent": {
+                "type": "string"
+              },
+              "sha": {
+                "type": "string"
+              },
+              "conflictedFiles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ticket": {
+                "$ref": "#/components/schemas/Ticket"
+              },
+              "manualMode": {
+                "type": "boolean"
+              }
+            },
+            "required": ["status", "reason", "agent", "ticket"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "GATE_FAILED"
+              },
+              "agent": {
+                "type": "string"
+              },
+              "sha": {
+                "type": "string"
+              },
+              "gate": {
+                "$ref": "#/components/schemas/GateResult"
+              },
+              "ticket": {
+                "$ref": "#/components/schemas/Ticket"
+              },
+              "manualMode": {
+                "type": "boolean"
+              }
+            },
+            "required": ["status", "agent", "gate", "ticket"]
+          }
+        ]
+      },
+      "RunResult": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "STARTED"
+              },
+              "info": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "branch": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": ["name"]
+              },
+              "predictedFiles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "collisions": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Collision"
+                }
+              }
+            },
+            "required": ["status", "info", "predictedFiles"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "QUEUED"
+              },
+              "task": {
+                "$ref": "#/components/schemas/QueueTask"
+              },
+              "predictedFiles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "collisions": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Collision"
+                }
+              }
+            },
+            "required": ["status", "task"]
+          }
+        ]
+      },
+      "TaskRunData": {
+        "description": "Attended: same shape as `striart run --json` (no terminal is opened by the protocol: `session` is null). Autonomous: the session runs in the background of the serving process; its end is reported by `control.notice`.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "const": "attended"
+              },
+              "run": {
+                "$ref": "#/components/schemas/RunResult"
+              },
+              "session": {
+                "type": "null"
+              }
+            },
+            "required": ["mode", "run", "session"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "const": "autonomous"
+              },
+              "launched": {
+                "const": true
+              },
+              "agent": {
+                "type": ["string", "null"]
+              },
+              "profile": {
+                "type": "string"
+              }
+            },
+            "required": ["mode", "launched", "agent", "profile"]
+          }
+        ]
+      },
+      "StartedTask": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "$ref": "#/components/schemas/QueueTask"
+          },
+          "info": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": ["name"]
+          }
+        },
+        "required": ["task", "info"]
+      },
+      "QueueRetryData": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "const": "retry"
+          },
+          "started": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StartedTask"
+            }
+          },
+          "stillWaiting": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QueueTask"
+            }
+          }
+        },
+        "required": ["action", "started", "stillWaiting"]
+      },
+      "ReconcileData": {
+        "type": "object",
+        "properties": {
+          "sessionPidsCleared": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "started": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StartedTask"
+            }
+          },
+          "stillWaiting": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QueueTask"
+            }
+          }
+        },
+        "required": ["sessionPidsCleared", "started", "stillWaiting"]
+      },
+      "SyncData": {
+        "type": "object",
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SyncResult"
+            }
+          }
+        },
+        "required": ["results"]
+      },
+      "StopData": {
+        "type": "object",
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "clonePath": {
+            "type": "string"
+          },
+          "cloneMissing": {
+            "type": "boolean"
+          },
+          "started": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StartedTask"
+            }
+          },
+          "stillWaiting": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QueueTask"
+            }
+          },
+          "ptyHost": {
+            "type": "object"
+          }
+        },
+        "required": ["agent", "started", "stillWaiting"]
+      },
+      "PromoteResult": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "UP_TO_DATE"
+              },
+              "sha": {
+                "type": "string"
+              }
+            },
+            "required": ["status", "sha"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "PROMOTED"
+              },
+              "sha": {
+                "type": "string"
+              },
+              "commits": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "gate": {
+                "$ref": "#/components/schemas/GateResult"
+              }
+            },
+            "required": ["status", "sha"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "GATE_FAILED"
+              },
+              "sha": {
+                "type": "string"
+              },
+              "gate": {
+                "$ref": "#/components/schemas/GateResult"
+              },
+              "ticket": {
+                "$ref": "#/components/schemas/Ticket"
+              },
+              "rolledBack": {
+                "type": "boolean"
+              }
+            },
+            "required": ["status", "sha", "ticket"]
+          }
+        ]
+      },
+      "RollbackResult": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "const": "ROLLED_BACK"
+          },
+          "mode": {
+            "enum": ["reset", "revert"]
+          },
+          "agent": {
+            "type": "string"
+          },
+          "undoneSha": {
+            "type": "string"
+          },
+          "newHead": {
+            "type": "string"
+          },
+          "agentResynced": {
+            "type": "boolean"
+          }
+        },
+        "required": ["status", "mode", "undoneSha", "newHead"]
+      },
+      "ManualResolutionResult": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "ALREADY_CLEAN"
+              },
+              "ticketId": {
+                "type": "string"
+              },
+              "agent": {
+                "type": "string"
+              },
+              "sha": {
+                "type": "string"
+              }
+            },
+            "required": ["status", "ticketId", "agent", "sha"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "GATE_FAILED"
+              },
+              "ticketId": {
+                "type": "string"
+              },
+              "agent": {
+                "type": "string"
+              },
+              "gate": {
+                "$ref": "#/components/schemas/GateResult"
+              }
+            },
+            "required": ["status", "ticketId", "agent", "gate"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "const": "MERGED"
+              },
+              "ticketId": {
+                "type": "string"
+              },
+              "agent": {
+                "type": "string"
+              },
+              "sha": {
+                "type": "string"
+              },
+              "mergeSha": {
+                "type": "string"
+              },
+              "closedTickets": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": ["status", "ticketId", "mergeSha"]
+          }
+        ]
+      },
+      "ResolveData": {
+        "description": "Same shapes as `striart resolve --json`.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "const": "unlock"
+              }
+            },
+            "required": ["action"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "const": "close"
+              },
+              "ticket": {
+                "$ref": "#/components/schemas/TicketEntry"
+              }
+            },
+            "required": ["action", "ticket"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "const": "prepare"
+              },
+              "ticketId": {
+                "type": "string"
+              },
+              "files": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    },
+                    "created": {
+                      "type": "boolean"
+                    },
+                    "source": {
+                      "enum": ["theirs", "ours", "base", null]
+                    },
+                    "held": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["path", "created", "source"]
+                }
+              }
+            },
+            "required": ["action", "ticketId", "files"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "const": "apply"
+              },
+              "result": {
+                "$ref": "#/components/schemas/ManualResolutionResult"
+              }
+            },
+            "required": ["action", "result"]
+          }
+        ]
+      },
+      "LockStopData": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "const": "stop"
+          },
+          "released": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MainSessionStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": ["action", "released"]
+      },
+      "CleanResult": {
+        "type": "object",
+        "properties": {
+          "removed": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "freedBytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "wasActive": {
+                  "type": "boolean"
+                }
+              },
+              "required": ["name", "freedBytes"]
+            }
+          },
+          "skipped": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": ["name", "reason"]
+            }
+          }
+        },
+        "required": ["removed", "skipped"]
+      },
+      "PruneResult": {
+        "type": "object",
+        "properties": {
+          "retentionDays": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "dryRun": {
+            "type": "boolean"
+          },
+          "freedBytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "clones": {
+            "type": "object"
+          },
+          "tickets": {
+            "type": "object"
+          }
+        },
+        "required": ["retentionDays", "dryRun", "freedBytes", "clones", "tickets"]
+      },
+      "DoctorReport": {
+        "type": "object",
+        "properties": {
+          "healthy": {
+            "type": "boolean"
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "level": {
+                  "enum": ["ok", "warn", "fail", "skip"]
+                },
+                "label": {
+                  "type": "string"
+                },
+                "detail": {
+                  "type": "string"
+                },
+                "hint": {
+                  "type": ["string", "null"]
+                }
+              },
+              "required": ["level", "label"]
+            }
+          },
+          "summary": {
+            "type": "object"
+          }
+        },
+        "required": ["healthy", "checks"]
+      },
+      "SessionLog": {
+        "type": "object",
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "log": {
+            "type": "string"
+          }
+        },
+        "required": ["agent", "path", "log"]
+      },
+      "InitializeResult": {
+        "type": "object",
+        "properties": {
+          "protocolVersion": {
+            "const": 1
+          },
+          "schemaVersion": {
+            "const": 1
+          },
+          "server": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "const": "striart"
+              },
+              "version": {
+                "type": "string"
+              }
+            },
+            "required": ["name", "version"]
+          },
+          "transport": {
+            "enum": ["stdio", "http"]
+          },
+          "locale": {
+            "enum": ["fr", "en"]
+          },
+          "methods": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "notifications": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "protocolVersion",
+          "schemaVersion",
+          "server",
+          "transport",
+          "locale",
+          "methods",
+          "notifications"
+        ]
+      },
+      "SubscribeResult": {
+        "type": "object",
+        "properties": {
+          "subscriptionId": {
+            "$ref": "#/components/schemas/SubscriptionId"
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "state": {
+            "$ref": "#/components/schemas/ControlState"
+          }
+        },
+        "required": ["subscriptionId", "seq", "state"]
+      },
+      "UnsubscribeResult": {
+        "type": "object",
+        "properties": {
+          "subscriptionId": {
+            "$ref": "#/components/schemas/SubscriptionId"
+          },
+          "unsubscribed": {
+            "type": "boolean"
+          }
+        },
+        "required": ["subscriptionId", "unsubscribed"]
+      },
+      "StateChangedParams": {
+        "type": "object",
+        "properties": {
+          "subscriptionId": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SubscriptionId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "seq": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "state": {
+            "$ref": "#/components/schemas/ControlState"
+          },
+          "droppedNotices": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": ["subscriptionId", "seq", "state", "droppedNotices"]
+      },
+      "NoticeParams": {
+        "type": "object",
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "type": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": ["seq", "type", "message"]
+      },
+      "OpenRpcDocument": {
+        "type": "object",
+        "description": "OpenRPC 1.3 document (https://spec.open-rpc.org).",
+        "required": ["openrpc", "info", "methods"]
+      }
+    }
+  }
+}

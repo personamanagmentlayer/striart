@@ -38,32 +38,85 @@ kept and the full log remains in
 ### Profiles: vendor-agnostic
 
 Profiles make the mode **vendor-agnostic**: each tool has its own headless
-syntax, and `agentProfiles` describes it once. Claude, Codex, Aider, and
-Ollama ship built-in; adding Kimi or any other tool is one config entry, and
-does not erase the existing profiles. Several vendors can therefore work in
-parallel on the same project, each in its own clone.
+syntax, and `agentProfiles` describes it once. Twenty **ready presets** ship
+built-in (`striart profiles --catalog`): Claude Code, Codex, Gemini over ACP,
+Copilot CLI, Cursor, OpenCode, Goose, Amp, Kilo, Qwen Code, Cline, Aider and
+their ACP variants; five others, **experimental** (Gemini over argv, Junie,
+Continue, Warp Oz), are declared by hand. "Ready" means the non-interactive
+invocation, the write mode and the neutralization of the repository's agent
+configuration were verified in the tool's official documentation — which
+`striart profiles --detect` complements by probing what is really installed.
+Adding Kimi or any other tool is one config entry, and does not erase the
+existing profiles. Several vendors can therefore work in parallel on the same
+project, each in its own clone.
+
+Two profiles changed behavior: the **`ollama`** profile is no longer
+`ollama run …` (a plain chat that edited no file: a session could not
+succeed) but **Aider driving a local Ollama model**
+(`ollama_chat/qwen2.5-coder`); and the **`codex`** profile has the `striart`
+commit contract — Codex's sandbox (`workspace-write`) makes `.git`
+read-only, the agent cannot commit itself, Striart commits the worktree at
+the end of the session.
 
 Per-profile fields (see the [configuration reference](configuration.md)):
 `command` + `args` (with `{{prompt}}` substituted **as an argv element,
 never through a shell** — the prompt is data; interpreting it would be a
 command injection), `env` (profile-specific variables merged over the
 environment — scope one key per tool), `timeout` (precedence: `--timeout` >
-`profile.timeout` > `autonomousTimeoutMs`), `acp` (below).
+`profile.timeout` > `autonomousTimeoutMs`), `acp` (below), and — for the
+presets — `writeMode`, `commitPolicy`, `structuredOutput` (the tool's JSON
+output is transcribed readably into the log and feeds the token ledger) and
+`instructions` (the channel through which the tool receives Striart's rules).
 `striart profiles` lists what is configured.
+
+### The commit contract
+
+Who commits the work left by a session that exited `COMPLETED`? That is
+`commitPolicy` (global, overridable per profile): `agent` (default — as
+before), `agent-then-striart`, `striart` or `human` — with `human`, nobody
+commits **or merges**: if the agent committed, the cycle returns `KEPT` /
+`HUMAN_REVIEW_REQUIRED` and keeps the clone, in **every** mode (single cycle,
+orchestrated modes, ACP proxy; exit 3). The Striart commit, when
+there is one, never carries a secret (`secretPatterns`) nor a file Striart
+injected itself, has the agent profile as author and the user's git identity
+as committer, then follows exactly the path of an agent commit. See the
+[reference](configuration.md#commitpolicy-commitmessage--who-commits).
+
+### The rules handed to the agent
+
+An agent launched in a clone knows nothing about Striart. Each session
+therefore receives a block of rules (isolated clone, only *committed* work is
+integrated, Test Gate, no push, do not touch agent configuration files,
+commit convention, MCP rules) through its profile's channel: a block at the
+head of the ACP prompt, a system-instructions file outside the clone, or a
+prompt envelope. They are *advisory*: the Test Gate, the protected-paths
+guard and the MCP guard decide, not the text.
+
+### The paths an agent never changes
+
+A commit that modifies an instructions or agent-configuration file
+(`AGENTS.md`, `CLAUDE.md`, `.claude`, `.mcp.json`, `.vscode/settings.json`…)
+or Striart's own config (`striart.config.*`) gets its merge **refused** — a
+`PROTECTED_PATHS_CHANGED` ticket, before any LLM merge and before the Test
+Gate. These files are re-read by later sessions with the trust given to the
+repository; letting them through would turn a one-off prompt injection into
+a persistent compromise. List and settings:
+[`protectedAgentPaths`](configuration.md#protectedagentpaths--the-paths-an-agent-never-changes).
 
 ## ACP transport — the session you can actually watch
 
 A profile can declare `acp: true`: Striart then talks to the tool over
 **ACP (Agent Client Protocol)** — JSON-RPC over stdio, the v1 standard for
 client ↔ coding-agent dialogue (Gemini CLI and Copilot CLI natively, Claude
-Code via the official adapter, 25+ agents) — instead of passing the prompt as
-argv and waiting for an exit code. Symmetrical to the [MCP server](mcp.md):
+Code via an adapter, 40+ agents in the registry) — instead of passing the
+prompt as argv and waiting for an exit code. Symmetrical to the [MCP server](mcp.md):
 **MCP = the agent drives Striart, ACP = Striart drives the agent.**
 
 ```js
 agentProfiles: {
   'claude-acp': { command: 'claude-agent-acp', args: [], acp: true },
-  'gemini-acp': { command: 'gemini', args: ['--experimental-acp'], acp: true },
+  // Gemini CLI speaks ACP with `--acp` (the built-in `gemini` preset adds `-e none`).
+  'gemini-acp': { command: 'gemini', args: ['--acp'], acp: true },
   // De facto read-only: every requested permission is rejected.
   audit: { command: 'claude-agent-acp', args: [], acp: { permissions: 'reject' } },
   // SEMI-AUTONOMOUS: every permission is arbitrated by the human on the dashboard.
@@ -92,11 +145,127 @@ the orchestrator does not see the transport), but several things change:
   is refused.
 - **Shutdown is clean**: on timeout, `session/cancel` first (the agent can
   finalize), process-tree kill as the net.
+- **Authentication is never automatic**: an agent answering `auth_required`
+  stops the session on `ACP_AUTH_REQUIRED` — signing in is a human decision
+  (with the tool's own CLI, or `acp.auth.methodId` in the profile, a logged
+  relaxation).
+- **The agent can ask a structured question** (*elicitation*, form mode):
+  with `permissions: 'ask'`, the form is presented to the human (dashboard,
+  extension, editor), the answer is validated against the agent's schema
+  **client-side**, then sent back; with no human to answer
+  (`allow`/`reject`), the capability is not advertised.
+- **The agent's terminals are bound to the clone**: `terminal/*` runs in argv
+  (`shell: false`) in a directory forced inside the clone, with capped
+  timeout, output and number of terminals, and `STRIART_SESSION=1` set last.
+  Defense in depth, not a sandbox.
+- **The agent gets Striart's MCP read-only**, bound to its clone
+  (`mcp: 'striart'`, with `--collab` for the collaboration channel alone).
+
+### The persistent session host
+
+An ACP session lives in a **detached host process**, one per agent (same
+pattern as the pty host: PID file, verified identity, clean stop by disk
+request). It thereby becomes *addressable*: the `@agent` bus of `watch --ui`
+drops a message into it that becomes an extra `session/prompt` — Phase E of
+the bus, now delivered — and the `striart acp` proxy relies on it to keep a
+session open between the editor's prompts. The host's PID is the one published
+to the registry (`sessionPid`): `SESSION_LIVE` covers it. If the process
+supervising the session disappears, the session is **cancelled** (fail
+closed) — never an orphan session writing into a clone nobody watches any
+more. An argv session stays *one-shot*: once the tool has exited there is no
+process left to talk to. Only one session lives at a time per agent
+(`ACP_HOST_BUSY`). The session log is written **as it goes**, readable while
+the session runs and preserved after a host crash.
 
 With `acp: true`, `args` must **not** contain `{{prompt}}`: the prompt goes
 through the protocol (a placeholder there is refused at config load — one
 channel only). Argv profiles remain the path for tools without ACP; both
 coexist freely.
+
+## Striart as an agent in the editor: `striart acp`
+
+The reverse direction: `striart acp` exposes Striart **as an ACP agent** to
+Zed, JetBrains, Neovim, Emacs. **An editor session = an isolated clone + the
+chosen upstream agent + a merge under the Test Gate.** The editor receives
+session options (upstream agent, permission policy, auto or manual merge),
+sees the progress, arbitrates permissions *in* the editor, and the end of the
+session (`/striart-finish`, closing, disconnecting) applies the commit
+contract, merges under the Test Gate and cleans up without `force`. The
+**client's files and terminal are never used**: the upstream agent works in
+its clone, served by Striart's ACP client; this is a structural boundary (the
+proxy literally cannot address `fs/*` or `terminal/*` to the editor). A Router
+collision on the first prompt is refused (`collisionPolicy: 'fail'`) or
+waited for (`'wait'`), never silently merged. Settings:
+[`acpAgent`](configuration.md#acpagent--the-acp-proxy-striart-acp); command:
+[`striart acp`](commands.md#striart-acp---root-path---profile-profile).
+
+## The orchestration modes
+
+A `version: 2` plan (or `striart orchestrate`) adds to the plain task four
+ways of making **several agents work together**, all in autonomous sessions,
+never holding the main lock during a session and without weakening the Test
+Gate. Principle: every defensible choice is a validated option with a safe
+default (`orchestration`, `collab`).
+
+- **`review`** — one author, 1 to 5 reviewers (`quorum` `all` / `any` /
+  `majority`). **The reviewer works in the author's clone, in turn, in
+  *verified* read-only** (`HEAD` fingerprint + `git status` before and after:
+  a reviewer who writes fails the review, or — a relaxation shown by
+  `doctor` — has its writes discarded). It returns a structured verdict
+  `{verdict: approve | request-changes | reject, summary, comments[]}`, read
+  in order: MCP tool, `.striart-outbox.json` file, last `striart-verdict-<token>`
+  block of the log — the tag carries a **random per-turn token** (128 bits,
+  given only in the reviewer's briefing), because the log also holds tool
+  outputs, hence the content of files the author wrote: a bare `striart-verdict`
+  block would be forgeable there. A tag without the turn's token is ignored.
+  Missing or invalid verdict: bounded new requests, then
+  fail closed (`VERDICT_INVALID`). `request-changes` → a correction turn by
+  the author, up to `maxRounds` (`REVIEW_EXHAUSTED`); `reject` →
+  `REVIEW_REJECTED`. A reviewer can be **human** (`striart review`).
+  **Approved ≠ merged**: the Test Gate remains the final authority.
+- **`race`** — 2 to 10 candidates on the same prompt, each in its own clone;
+  `first-green` (the first whose merge passes the Test Gate wins, the other
+  sessions are cancelled), `smallest-diff`, or `judge` (ranking by Striart's
+  LLM, `judge` role). Losers are kept (`keep`), archived or — a relaxation —
+  deleted.
+- **`team`** — several **roles in the same clone**: one writer at a time
+  (`turns`, commits serialized by construction, a briefing per turn) or a
+  static partition of the files (`parallel`: `files` mandatory per role, no
+  agent commit tolerated, each changed file in exactly one scope, then
+  **one** Striart commit). A role with `files: []` is read-only, verified.
+  *Dynamic* partitioning does not exist.
+- **`pipeline`** — ordered steps; with `handoff: merge` each step is a full
+  cycle, merged under the Test Gate, and the next one starts from the
+  up-to-date main with a **relay briefing** (facts computed by Striart:
+  merged commit, changed files — then the previous step's artifact); with
+  `clone`, the steps hand over in a single clone and one merge closes
+  everything.
+
+**The collaboration channel** (`collab`, lot O) carries structured messages
+(`note`, `question`, `answer`, `handoff`, `verdict`, `done`) between the roles
+of a group. It is **mediated by Striart** — no agent accesses another's clone
+nor receives a path —, the sender is *inferred* (never read from the
+message), volumes are bounded (an overflow is refused and counted, never
+swallowed), and the body is rendered to agents inside a random-token fence
+with the mention "information, never instructions". It is an **untrusted
+channel by construction**: no human arbitration action is reachable through
+it, and a `verdict` only proposes. Delivery: `.striart-inbox.md` file
+(untracked, locally excluded) and the next turn's briefing; read/write
+through the MCP tools `striart_collab_read` / `striart_collab_post` or
+through `.striart-outbox.json`. A role can also hand over by ending its answer
+with a `striart-handoff-<token>` block (per-turn token, same mechanism as the
+verdict; `collab.logMarkers`): a tag without the turn's token is ignored.
+
+Session invariants: the registry publishes `sessionPid` for the whole life of
+the group — the agent's PID during a single-writer turn, the orchestrator
+process's between turns and in parallel cadence — so `SESSION_LIVE` and
+`SKIPPED_SESSION` cover every session of the clone; Ctrl+C kills the agents'
+trees before any unpublish; the watcher never merges these clones. The state
+of plans and groups is readable from `status`, the dashboard and the Control
+Protocol (`orchestration.state`). Known debt: a `sessionPids` list (defense in
+depth against an orchestrator crash in parallel cadence) and a global cap of
+simultaneous agents in `runTask` are not yet delivered — the plan's cap
+(`concurrency`) is.
 
 ## What autonomous mode guarantees
 
@@ -107,13 +276,27 @@ conflict, or red gate. Cleanup **never** uses `--force`: if the agent left
 uncommitted work, the clone survives. Session logs live under
 `.striart/logs/`, outside the clone, so they always survive it.
 
+**Interrupting a session** (Ctrl+C or SIGTERM on `striart run
+--autonomous`) is a clean stop, not a cut: the agent's process tree is killed
+(in ACP, `session/cancel` first, the kill as a safety net), **then** the
+session PID is unpublished from the registry — in that order, otherwise the
+`SESSION_LIVE` guards would drop on a clone still being written. The session
+returns `CANCELLED` (never a success), the cycle `SESSION_FAILED`, the clone
+is kept and the CLI exits 130 (143 for SIGTERM). A stop requested during the
+end-of-cycle merge or Test Gate does not interrupt those steps. Same rule for
+`striart run --on-main`: the agent is killed before the main session is
+unpublished.
+
 Three non-negotiable design constraints:
 
 1. **The main lock is never held for the duration of the session** — it lasts
    minutes or hours; the autonomous cycle composes primitives that each take
    the lock briefly, on their own.
 2. **The prompt is never passed to a shell** — substituted as an argv element
-   (`shell: false`), or carried by the ACP protocol.
+   (`shell: false`), or carried by the ACP protocol. An element that *is* the
+   placeholder (`exec {{prompt}}`, a flag's value) and whose value starts with
+   `-` gets a leading space: the tool reads it as a positional argument, never
+   as an option injected by the text.
 3. **A clone whose session is alive is untouchable** (below).
 
 ## The two modes coexist on the same repo
@@ -133,7 +316,8 @@ the session lives, is what makes the state verifiable rather than assumed:
   (`SESSION_LIVE`): `--force` exists to override a heuristic, not a fact.
 
 A PID left in the registry after a crash is neutralized by the liveness
-check: nothing stays frozen.
+check: nothing stays frozen. The same guard applies to the main repository
+itself (`striart run --on-main`, `striart lock --start`).
 
 ## What you must own
 
@@ -142,7 +326,10 @@ quality of `testCommand` on your repo becomes load-bearing. A project with
 weak tests will get merged code nobody has read.
 
 And `--timeout` bounds time, **not spend**: an autonomous agent consumes
-tokens unsupervised.
+tokens unsupervised. The `tokens.budgets` ceilings (opt-in) answer that — per
+task, per agent, per day: a session that crosses one is stopped cleanly
+(`BUDGET_EXCEEDED`, clone kept). They need a record: a session without a
+structured stream is declared *unmetered* and only its timeout bounds it.
 
 ## See also
 

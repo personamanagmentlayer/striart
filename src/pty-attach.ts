@@ -1,66 +1,50 @@
-import * as pty from 'node-pty';
+import { spawn } from 'node:child_process';
+import type { ChildProcess, StdioOptions } from 'node:child_process';
 import net from 'node:net';
 import readline from 'node:readline';
 import { createHash } from 'node:crypto';
-import { chmod, mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { StriartError } from './errors.js';
 import { logger } from './logger.js';
 import { ptyDir } from './paths.js';
-import { validateAgentName } from './clone.js';
+import { validateAgentName } from './agent-name.ts';
+import { nativePtyHostCommand, PTY_HOST_EXIT_ALREADY_RUNNING } from './native.ts';
+import {
+  ptyHostStateDir,
+  ptyHostStatus,
+  ptyHostStopFilePath,
+  readPtyHostPidFile,
+} from './pty-host-state.ts';
+import { requestStop } from './stop-request.ts';
 
 /**
- * Possession de pty + protocole d'attache (roadmap : « `watch` interactif —
- * UI Ink + bus de messages `@agent` », Phase B).
+ * Possession de pty + protocole d'attache (roadmap : « `watch` interactif »,
+ * Phase B ; hôte natif depuis le lot R2 « Composants natifs (Rust) »).
  *
- * Striart devient propriétaire d'un pty par agent (`node-pty`, ConPTY sur
- * Windows) — patron de multiplexeur maison, même famille que tmux/screen.
- * Le pty vit dans CE process (le futur daemon `watch`) ; d'autres process
- * (le client d'attache que `--open` lancera en Phase C, un futur panneau du
- * dashboard…) s'y connectent par IPC locale — named pipe sous Windows, socket
- * Unix ailleurs — et deviennent des clients supplémentaires du même pty :
- * plusieurs clients peuvent lire ET écrire en même temps, comme plusieurs
- * `tmux attach` sur la même session. `writeToOwnedSession` est le raccourci
- * pour un écrivain qui vit DANS ce process (le futur bus `@agent` de l'UI
- * Ink) — pas besoin de faire un aller-retour IPC vers soi-même.
+ * Le pty d'un agent vit dans un process HÔTE dédié : le binaire natif
+ * `striart-native pty-host` (ConPTY sous Windows, `openpty` ailleurs — voir
+ * native/striart-native/src/pty_host). Patron de multiplexeur maison, même
+ * famille que tmux/screen : d'autres process (`striart attach`, le panneau de
+ * `watch --ui`, le bus `@agent`) s'y connectent par IPC locale — named pipe
+ * sous Windows (DACL limitée à l'utilisateur courant), socket Unix `0600`
+ * ailleurs — et deviennent des clients du même pty : plusieurs clients
+ * peuvent lire ET écrire en même temps, comme plusieurs `tmux attach`.
  *
- * Protocole ndjson (une frame JSON par ligne), même famille artisanale que
- * `acp.ts`/`mcp.js` — le sous-ensemble utilisé ne justifie pas une lib de
- * cadrage binaire. Les octets de sortie du pty sont encodés en base64 : un
- * pty transporte des séquences ANSI et potentiellement des octets qui ne
- * sont pas de l'UTF-8 valide (sortie d'outils tiers), base64 les rend
- * transparents à un cadrage ligne par ligne.
+ * Deux façons de posséder un hôte :
+ *  - détaché (`ensurePtyHost`, pty-host.ts) : survit au process qui l'a lancé
+ *    — `--open` depuis une commande CLI éphémère ;
+ *  - possédé par CE process (`startOwnedSession`) : l'hôte est un enfant,
+ *    lancé avec `--parent-pid` — il s'arrête de lui-même si ce process meurt,
+ *    et `writeToOwnedSession` y écrit par une connexion d'attache gardée
+ *    ouverte.
+ *
+ * Protocole ndjson (une frame JSON par ligne), inchangé depuis l'hôte Node :
+ * `hello`/`data`/`resize`/`exit` (+ `evicted`, client trop lent) côté
+ * serveur, `input`/`message`/`resize` côté client. Les octets de sortie du
+ * pty sont en base64 : un pty transporte des séquences ANSI et parfois des
+ * octets qui ne sont pas de l'UTF-8 valide.
  */
-
-/** Un agent = un pty possédé, tant que ce process (le daemon watch) vit. */
-const sessions = new Map<string, OwnedSession>();
-
-/** Résolveurs de `waitForSessionExit` en attente, par agent. */
-const exitWaiters = new Map<string, Array<() => void>>();
-
-interface OwnedSession {
-  agent: string;
-  term: pty.IPty;
-  server: net.Server;
-  socketPath: string;
-  clients: Set<net.Socket>;
-  cols: number;
-  rows: number;
-  /** Rejeu pour un client qui se connecte APRÈS coup — cf. REPLAY_BUFFER_CHARS. */
-  replayBuffer: string;
-}
-
-/**
- * Sortie récente conservée pour rejeu à la connexion (octets, avant base64).
- * Sans ça, un client qui se connecte APRÈS que la commande initiale (ou un
- * message du bus) ait déjà produit sa sortie ne verrait jamais rien tant
- * qu'aucune nouvelle sortie n'arrive — le pty n'a pas d'historique, une
- * fenêtre `--open` ouverte une seconde trop tard ou le panneau de `watch`
- * démarrerait sur du vide. Borné (dernier écran plutôt que tout
- * l'historique) : ce n'est pas un remplacement du scrollback du terminal
- * lui-même, juste assez pour retrouver l'état courant en s'attachant.
- */
-const REPLAY_BUFFER_CHARS = 64_000;
 
 interface HelloFrame {
   type: 'hello';
@@ -79,21 +63,27 @@ interface ExitFrame {
   signal: number | null;
 }
 /**
- * Même forme que `ResizeFrame` (ci-dessous, client → serveur) mais dans
- * l'autre sens : diffusée par le serveur à tous les AUTRES clients attachés
- * quand l'un d'eux redimensionne le pty. Sans ça, un client déjà connecté
- * (par exemple le tail de `watch --ui`, qui émule sa propre grille de
- * caractères à partir des mêmes octets) restait sur les dimensions connues
- * à SA connexion, désynchronisées dès qu'un `attach`/`--open` réel
- * redimensionnait son terminal après coup — retours à la ligne mal
- * recalculés côté émulation, différents de ce qu'un vrai terminal montrerait.
+ * Même forme que `ResizeFrame` (client → serveur) dans l'autre sens :
+ * diffusée par l'hôte à TOUS les clients attachés quand l'un d'eux
+ * redimensionne le pty — un client qui émule sa propre grille (le tail de
+ * `watch --ui`) reste aligné sur ce qu'un vrai terminal montrerait.
  */
 interface ServerResizeFrame {
   type: 'resize';
   cols: number;
   rows: number;
 }
-type ServerFrame = HelloFrame | DataFrame | ExitFrame | ServerResizeFrame;
+/**
+ * Contre-pression : le client n'a pas lu sa sortie assez vite (file d'envoi
+ * de l'hôte au-delà de `pty.clientQueueBytes`). L'hôte a vidé sa file et
+ * ferme la connexion ; `connectAttachClient` se reconnecte et reçoit l'état
+ * courant par le rejeu.
+ */
+interface EvictedFrame {
+  type: 'evicted';
+  reason: string;
+}
+type ServerFrame = HelloFrame | DataFrame | ExitFrame | ServerResizeFrame | EvictedFrame;
 
 interface InputFrame {
   type: 'input';
@@ -102,7 +92,7 @@ interface InputFrame {
 }
 interface MessageFrame {
   type: 'message';
-  /** Instruction du bus `@agent` — Entrée ajoutée automatiquement. */
+  /** Instruction du bus `@agent` — Entrée ajoutée par l'hôte. */
   text: string;
 }
 interface ResizeFrame {
@@ -111,18 +101,6 @@ interface ResizeFrame {
   rows: number;
 }
 type ClientFrame = InputFrame | MessageFrame | ResizeFrame;
-
-export interface StartOwnedSessionOptions {
-  shell: string;
-  args?: string[];
-  cwd: string;
-  env?: NodeJS.ProcessEnv;
-  cols?: number;
-  rows?: number;
-}
-
-const DEFAULT_COLS = 80;
-const DEFAULT_ROWS = 24;
 
 /**
  * Chemin d'attache d'un agent. Sous Windows, les named pipes vivent dans un
@@ -139,21 +117,166 @@ export function attachSocketPath(root: string, agent: string): string {
   return path.join(ptyDir(root), agent, 'attach.sock');
 }
 
-function writeFrame(socket: net.Socket, frame: ServerFrame | ClientFrame): void {
-  socket.write(`${JSON.stringify(frame)}\n`);
+function writeFrame(socket: net.Socket, frame: ClientFrame): void {
+  if (!socket.destroyed) socket.write(`${JSON.stringify(frame)}\n`);
 }
 
-function broadcast(session: OwnedSession, frame: ServerFrame): void {
-  for (const client of session.clients) {
-    if (!client.destroyed) writeFrame(client, frame);
+// ── Lancement de l'hôte natif ────────────────────────────────────────────
+
+/** Réglages de l'hôte (config `pty`, voir src/config.js). */
+export interface PtyHostSettings {
+  replayBytes?: number;
+  clientQueueBytes?: number;
+  killGraceMs?: number;
+}
+
+export interface LaunchPtyHostOptions extends PtyHostSettings {
+  shell: string;
+  args?: string[];
+  cwd: string;
+  cols?: number;
+  rows?: number;
+  initialCommand?: string | null;
+  env?: NodeJS.ProcessEnv;
+  /** Détaché (survit à ce process) ou enfant possédé (`--parent-pid`). */
+  detached: boolean;
+  stdio: StdioOptions;
+}
+
+/** Délai de mise en service de l'hôte (canal ouvert, programme lancé). */
+export const PTY_HOST_READY_TIMEOUT_MS = 20_000;
+
+/** `TERM` du programme hébergé sous POSIX (ce que node-pty posait). */
+const POSIX_TERM = 'xterm-256color';
+
+/**
+ * Lance `striart-native pty-host` pour un agent. Binaire absent ou non
+ * vérifiable : NATIVE_UNAVAILABLE / NATIVE_INTEGRITY_FAILED — jamais de
+ * repli silencieux.
+ */
+export async function launchPtyHost(
+  root: string,
+  agent: string,
+  options: LaunchPtyHostOptions,
+): Promise<ChildProcess> {
+  validateAgentName(agent);
+  const { file, args } = await nativePtyHostCommand({
+    agent,
+    stateDir: path.resolve(ptyHostStateDir(root, agent)),
+    endpoint: attachSocketPath(root, agent),
+    cwd: path.resolve(options.cwd),
+    program: options.shell,
+    args: options.args ?? [],
+    cols: options.cols,
+    rows: options.rows,
+    initial: options.initialCommand ?? null,
+    term: process.platform === 'win32' ? null : POSIX_TERM,
+    replayBytes: options.replayBytes,
+    clientQueueBytes: options.clientQueueBytes,
+    killGraceMs: options.killGraceMs,
+    parentPid: options.detached ? null : process.pid,
+  });
+  const child = spawn(file, args, {
+    cwd: options.cwd,
+    detached: options.detached,
+    stdio: options.stdio,
+    env: options.env ?? process.env,
+    windowsHide: true,
+  });
+  if (!child.pid) {
+    // spawn a échoué de façon synchrone (EACCES, ENOENT) : l'erreur arrive
+    // en événement, on la rend nommée.
+    const error = await new Promise<Error | null>((resolve) => {
+      child.once('error', resolve);
+      setImmediate(() => resolve(null));
+    });
+    throw new StriartError(`Failed to start the pty host for "${agent}".`, {
+      code: 'PTY_HOST_SPAWN_FAILED',
+      hint: 'striart doctor',
+      details: {
+        agent,
+        reason: 'SPAWN',
+        errno: (error as NodeJS.ErrnoException | null)?.code ?? null,
+      },
+    });
   }
+  return child;
 }
 
 /**
- * Démarre (ou réutilise) le pty possédé d'un agent. Idempotent par
- * conception : plusieurs `--open` sur le même agent ne respawnent jamais un
- * second pty, ils deviennent des clients supplémentaires du même — c'est ce
- * qui permet au bus `@agent` d'écrire alors qu'une fenêtre est déjà attachée.
+ * Issue du démarrage. Discriminant chaîne (`state`) et non booléen : le
+ * `tsc` natif (TS 7) ne rétrécit pas une union discriminée par littéral
+ * booléen sous `strict: false` (voir roadmap, Phase D).
+ */
+export type PtyHostReadiness =
+  | { state: 'ready' }
+  | { state: 'exited'; exitCode: number | null; signal: NodeJS.Signals | null }
+  | { state: 'timeout' };
+
+/**
+ * Attend que l'hôte lancé publie son PID file (canal ouvert, programme
+ * lancé), qu'il sorte (échec, ou sortie 3 : un autre hôte tient l'agent) ou
+ * que le délai expire.
+ */
+export async function waitForPtyHostReady(
+  root: string,
+  agent: string,
+  child: ChildProcess,
+  timeoutMs = PTY_HOST_READY_TIMEOUT_MS,
+): Promise<PtyHostReadiness> {
+  let exited: { exitCode: number | null; signal: NodeJS.Signals | null } | null = null;
+  const onExit = (exitCode: number | null, signal: NodeJS.Signals | null) => {
+    exited = { exitCode, signal };
+  };
+  child.once('exit', onExit);
+  try {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const info = await readPtyHostPidFile(root, agent);
+      if (info?.pid === child.pid) return { state: 'ready' };
+      const end = exited as { exitCode: number | null; signal: NodeJS.Signals | null } | null;
+      if (end) return { state: 'exited', ...end };
+      if (child.exitCode !== null || child.signalCode !== null) {
+        return { state: 'exited', exitCode: child.exitCode, signal: child.signalCode };
+      }
+      if (Date.now() >= deadline) return { state: 'timeout' };
+      await sleep(25);
+    }
+  } finally {
+    child.removeListener('exit', onExit);
+  }
+}
+
+// ── Hôte possédé par CE process ─────────────────────────────────────────
+
+interface OwnedSession {
+  root: string;
+  agent: string;
+  child: ChildProcess;
+  conn: AttachConnection;
+  exited: Promise<void>;
+}
+
+/** Un agent = un hôte possédé, tant que ce process vit. */
+const sessions = new Map<string, OwnedSession>();
+/** Démarrages en cours (deux appels concurrents partagent le même). */
+const starting = new Map<string, Promise<void>>();
+
+export interface StartOwnedSessionOptions extends PtyHostSettings {
+  shell: string;
+  args?: string[];
+  cwd: string;
+  env?: NodeJS.ProcessEnv;
+  cols?: number;
+  rows?: number;
+}
+
+/** Plus grande part du journal d'erreur de l'hôte gardée en mémoire. */
+const STDERR_TAIL_BYTES = 16 * 1024;
+
+/**
+ * Démarre (ou réutilise) le pty possédé d'un agent. Idempotent : un second
+ * appel ne relance jamais un second hôte, il réutilise le premier.
  */
 export async function startOwnedSession(
   root: string,
@@ -161,117 +284,117 @@ export async function startOwnedSession(
   options: StartOwnedSessionOptions,
 ): Promise<void> {
   validateAgentName(agent);
-  const existing = sessions.get(agent);
-  if (existing) return;
+  if (sessions.has(agent)) return;
+  const pending = starting.get(agent);
+  if (pending) return pending;
+  const start = startOwnedSessionNow(root, agent, options).finally(() => starting.delete(agent));
+  starting.set(agent, start);
+  return start;
+}
 
-  const cols = options.cols ?? DEFAULT_COLS;
-  const rows = options.rows ?? DEFAULT_ROWS;
-  const term = pty.spawn(options.shell, options.args ?? [], {
-    name: 'xterm-256color',
-    cols,
-    rows,
-    cwd: options.cwd,
-    env: (options.env ?? process.env) as { [key: string]: string },
+async function startOwnedSessionNow(
+  root: string,
+  agent: string,
+  options: StartOwnedSessionOptions,
+): Promise<void> {
+  const child = await launchPtyHost(root, agent, {
+    ...options,
+    detached: false,
+    stdio: ['ignore', 'ignore', 'pipe'],
   });
-
-  const socketPath = attachSocketPath(root, agent);
-  if (process.platform !== 'win32') {
-    await mkdir(path.dirname(socketPath), { recursive: true });
-    // Un socket orphelin d'un précédent daemon crashé ferait échouer le
-    // listen (EADDRINUSE) — aucun process ne le possède plus, sûr à retirer.
-    await rm(socketPath, { force: true });
+  let stderrTail = '';
+  child.stderr?.setEncoding('utf8');
+  child.stderr?.on('data', (chunk: string) => {
+    stderrTail = (stderrTail + chunk).slice(-STDERR_TAIL_BYTES);
+  });
+  const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
+  const readiness = await waitForPtyHostReady(root, agent, child);
+  if (readiness.state !== 'ready') {
+    child.kill();
+    throw hostStartError(agent, readiness, stderrTail);
   }
-
-  const server = net.createServer((socket) => {
-    writeFrame(socket, { type: 'hello', agent, cols: session.cols, rows: session.rows });
-    // Rejeu AVANT l'ajout aux diffusions live, dans le même tick synchrone
-    // (aucun await entre les deux) : aucune sortie ne peut arriver entre le
-    // rejeu et le direct, donc jamais de trou ni de doublon.
-    if (session.replayBuffer) {
-      writeFrame(socket, {
-        type: 'data',
-        chunk: Buffer.from(session.replayBuffer, 'utf8').toString('base64'),
-      });
-    }
-    session.clients.add(socket);
-
-    const rl = readline.createInterface({ input: socket });
-    // readline.Interface réémet l'erreur du socket sur lui-même — sans ce
-    // no-op, un socket client qui coupe brutalement (readline.Interface sans
-    // écouteur d'erreur) plante tout le process propriétaire du pty.
-    rl.on('error', () => {});
-    rl.on('line', (line) => {
-      let frame: ClientFrame;
-      try {
-        frame = JSON.parse(line);
-      } catch {
-        return; // ligne malformée : ignorée, pas de crash du pty partagé
-      }
-      if (frame.type === 'input') {
-        term.write(Buffer.from(frame.data, 'base64').toString('utf8'));
-      } else if (frame.type === 'message') {
-        term.write(`${frame.text}\r`);
-      } else if (frame.type === 'resize') {
-        session.cols = frame.cols;
-        session.rows = frame.rows;
-        term.resize(frame.cols, frame.rows);
-        // Diffusé à TOUS les clients (l'émetteur inclus — idempotent, il
-        // connaît déjà cette taille) : plus simple et plus sûr que de tenir
-        // à jour une exclusion par socket pour un cas qui n'a aucun effet
-        // observable de toute façon.
-        broadcast(session, { type: 'resize', cols: frame.cols, rows: frame.rows });
-      }
+  const conn = await new Promise<AttachConnection>((resolve, reject) => {
+    const connection = connectAttachClient(root, agent, {
+      onData: () => {},
+      onConnect: () => resolve(connection),
+      onError: (error) => reject(error),
     });
-
-    socket.on('close', () => session.clients.delete(socket));
-    socket.on('error', () => session.clients.delete(socket));
-  });
-
-  const session: OwnedSession = {
-    agent,
-    term,
-    server,
-    socketPath,
-    clients: new Set(),
-    cols,
-    rows,
-    replayBuffer: '',
-  };
-  sessions.set(agent, session);
-
-  term.onData((chunk) => {
-    session.replayBuffer = (session.replayBuffer + chunk).slice(-REPLAY_BUFFER_CHARS);
-    broadcast(session, { type: 'data', chunk: Buffer.from(chunk, 'utf8').toString('base64') });
-  });
-  term.onExit(({ exitCode, signal }) => {
-    void stopOwnedSession(agent, { exitCode, signal: signal ?? null });
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(socketPath, () => {
-      server.removeListener('error', reject);
-      resolve();
-    });
-  }).catch((error) => {
-    sessions.delete(agent);
-    term.kill();
-    throw new StriartError(`Impossible d'ouvrir le canal d'attache de l'agent "${agent}".`, {
+  }).catch((error: Error) => {
+    child.kill();
+    throw new StriartError(`Cannot open the attach channel of agent "${agent}".`, {
       code: 'PTY_ATTACH_LISTEN_FAILED',
-      details: { agent, socketPath, message: (error as Error).message },
+      hint: 'striart doctor',
+      details: { agent, errno: (error as NodeJS.ErrnoException).code ?? null },
     });
   });
+  const session: OwnedSession = { root, agent, child, conn, exited };
+  sessions.set(agent, session);
+  void exited.then(() => {
+    conn.close();
+    if (sessions.get(agent) === session) sessions.delete(agent);
+    const waiters = exitWaiters.get(agent);
+    exitWaiters.delete(agent);
+    for (const resolve of waiters ?? []) resolve();
+  });
+  logger.info({ agent, hostPid: child.pid }, 'Pty possédé démarré (hôte natif)');
+}
 
-  if (process.platform !== 'win32') {
-    // SECURITY.md : un socket Unix hérite du umask du process, pas
-    // forcément propriétaire-seul — sur une machine partagée, un autre
-    // utilisateur local (sans accès en écriture au repo, donc hors du
-    // modèle de menace habituel) pourrait sinon s'y attacher et injecter
-    // des frappes dans le pty. 0600 explicite, jamais laissé à l'umask.
-    await chmod(socketPath, 0o600);
+/** Erreur nommée d'un hôte qui n'a pas démarré (journal : dernière ligne JSON). */
+export function hostStartError(
+  agent: string,
+  readiness: Exclude<PtyHostReadiness, { state: 'ready' }>,
+  stderrTail: string,
+  logFile: string | null = null,
+): StriartError {
+  if (readiness.state === 'timeout') {
+    return new StriartError(`The pty host of "${agent}" did not become ready in time.`, {
+      code: 'PTY_HOST_SPAWN_FAILED',
+      // Le journal est dans `details.logFile` et dans le message du catalogue ;
+      // un hint est une COMMANDE à copier, jamais une phrase.
+      hint: 'striart doctor',
+      details: { agent, reason: 'TIMEOUT', logFile },
+    });
   }
+  if (readiness.exitCode === PTY_HOST_EXIT_ALREADY_RUNNING) {
+    return new StriartError(`A pty host already runs for agent "${agent}".`, {
+      code: 'PTY_HOST_ALREADY_RUNNING',
+      hint: `striart attach ${agent}`,
+      details: { agent },
+    });
+  }
+  const nativeCode = lastNativeErrorCode(stderrTail);
+  return new StriartError(
+    `The pty host of "${agent}" exited before being ready${nativeCode ? ` (${nativeCode})` : ''}.`,
+    {
+      code: 'PTY_HOST_SPAWN_FAILED',
+      // Le journal est dans `details.logFile` et dans le message du catalogue ;
+      // un hint est une COMMANDE à copier, jamais une phrase.
+      hint: 'striart doctor',
+      details: {
+        agent,
+        reason: 'EXITED',
+        exitCode: readiness.exitCode,
+        signal: readiness.signal,
+        nativeCode,
+        logFile,
+      },
+    },
+  );
+}
 
-  logger.info({ agent, socketPath }, 'Pty possédé démarré');
+/** Code d'erreur natif de la dernière ligne JSON `{"error":{"code"}}` d'un journal. */
+export function lastNativeErrorCode(log: string): string | null {
+  const lines = log.trimEnd().split(/\r?\n/);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      const parsed = JSON.parse(lines[i]);
+      const code = parsed?.error?.code;
+      if (typeof code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(code)) return code;
+    } catch {
+      // Ligne non JSON (sortie d'un outil tiers) : on remonte.
+    }
+  }
+  return null;
 }
 
 /** Le pty d'un agent est-il possédé par CE process ? */
@@ -280,59 +403,67 @@ export function hasOwnedSession(agent: string): boolean {
 }
 
 /**
- * Écrit directement dans le pty depuis CE process — le raccourci du bus
- * `@agent` (Phase D), qui vit dans le même process que le pty (le daemon
- * `watch`) et n'a donc pas besoin de repasser par l'IPC pour s'écrire à
- * lui-même. `appendEnter` distingue une instruction complète (Entrée
- * ajoutée, comportement par défaut du bus) d'une frappe brute.
+ * Écrit dans le pty possédé depuis CE process, par la connexion d'attache
+ * gardée ouverte. `appendEnter` distingue une instruction complète (Entrée
+ * ajoutée par l'hôte, comportement par défaut du bus) d'une frappe brute.
  */
 export function writeToOwnedSession(agent: string, text: string, appendEnter = true): void {
   const session = sessions.get(agent);
   if (!session) {
-    throw new StriartError(`Aucun pty possédé pour l'agent "${agent}" dans ce process.`, {
+    throw new StriartError(`No owned pty for agent "${agent}" in this process.`, {
       code: 'PTY_SESSION_NOT_FOUND',
       details: { agent },
     });
   }
-  session.term.write(appendEnter ? `${text}\r` : text);
+  if (appendEnter) session.conn.sendMessage(text);
+  else session.conn.sendRaw(text);
 }
 
+/** Attente de l'accusé puis de la sortie de l'hôte possédé. */
+const OWNED_STOP_ACK_WAIT_MS = 3_000;
+const OWNED_STOP_WAIT_MS = 10_000;
+
 /**
- * Arrête le pty d'un agent : diffuse une frame `exit` à tous les clients
- * attachés (arrêt naturel du pty comme arrêt explicite passent tous les deux
- * ici — `exitInfo` distingue les deux, mais le client voit toujours un exit
- * propre, jamais une connexion juste coupée), puis ferme les clients et le
- * canal d'attache. `client.end()` (pas `.destroy()`) : laisse la frame déjà
- * écrite partir avant la fermeture — un destroy immédiat pourrait la perdre.
+ * Arrête le pty possédé d'un agent par le canal d'arrêt propre
+ * (`host.stop`, accusé par l'hôte) : l'hôte ferme le pty, tue la descendance
+ * restante après son délai de grâce, envoie la frame `exit` à tous les
+ * clients puis sort. Sans accusé, l'enfant est tué (le Job Object / le
+ * groupe POSIX emporte alors le shell). Résout quand l'hôte est sorti.
  */
-export async function stopOwnedSession(
-  agent: string,
-  exitInfo: { exitCode: number | null; signal: number | null } = { exitCode: null, signal: null },
-): Promise<void> {
+export async function stopOwnedSession(agent: string): Promise<void> {
   const session = sessions.get(agent);
   if (!session) return;
-  sessions.delete(agent);
-  broadcast(session, { type: 'exit', exitCode: exitInfo.exitCode, signal: exitInfo.signal });
-  for (const client of session.clients) client.end();
-  await new Promise<void>((resolve) => session.server.close(() => resolve()));
-  try {
-    session.term.kill();
-  } catch {
-    // Déjà mort (c'est parfois onExit qui déclenche cet arrêt) : rien à faire.
+  const pid = session.child.pid;
+  if (pid && session.child.exitCode === null && session.child.signalCode === null) {
+    await requestStop({
+      file: ptyHostStopFilePath(session.root, agent),
+      pid,
+      ackWaitMs: OWNED_STOP_ACK_WAIT_MS,
+      waitMs: OWNED_STOP_WAIT_MS,
+      fallback: () => session.child.kill(),
+      // Le délai d'accusé est une fenêtre où le numéro peut changer de propriétaire :
+      // l'enfant doit être toujours vivant ET reconnu (identité relue sans cache)
+      // juste avant le signal de repli.
+      confirmIdentity: async () => {
+        if (session.child.exitCode !== null || session.child.signalCode !== null) return false;
+        const fresh = await ptyHostStatus(session.root, agent, { fresh: true });
+        return fresh.verified && fresh.pid === pid;
+      },
+    }).catch(() => {
+      // Process déjà sorti entre le test et la demande : rien à arrêter.
+    });
   }
-  if (process.platform !== 'win32') {
-    await rm(session.socketPath, { force: true }).catch(() => {});
-  }
-  const waiters = exitWaiters.get(agent);
-  exitWaiters.delete(agent);
-  for (const resolve of waiters ?? []) resolve();
+  await Promise.race([session.exited, sleep(OWNED_STOP_WAIT_MS)]);
+  session.conn.close();
+  if (sessions.get(agent) === session) sessions.delete(agent);
 }
+
+/** Résolveurs de `waitForSessionExit` en attente, par agent. */
+const exitWaiters = new Map<string, Array<() => void>>();
 
 /**
  * Résout quand le pty possédé d'un agent s'arrête (naturellement ou via
- * `stopOwnedSession`) — le process hôte détaché (`pty-host-run`, Phase C)
- * s'en sert pour savoir combien de temps rester en vie : le pty EST sa
- * seule raison d'exister. Résout immédiatement si rien n'est possédé.
+ * `stopOwnedSession`). Résout immédiatement si rien n'est possédé.
  */
 export function waitForSessionExit(agent: string): Promise<void> {
   if (!sessions.has(agent)) return Promise.resolve();
@@ -343,43 +474,42 @@ export function waitForSessionExit(agent: string): Promise<void> {
   });
 }
 
+// ── Client d'attache ─────────────────────────────────────────────────────
+
 export interface AttachClientOptions {
   onData: (text: string) => void;
   onExit?: (exitCode: number | null, signal: number | null) => void;
   /**
-   * Canal introuvable (agent jamais démarré, daemon mort) ou connexion
+   * Canal introuvable (agent jamais démarré, hôte mort) ou connexion
    * rompue. Sans ce handler, l'événement 'error' non écouté d'un socket
    * ferait planter tout le process — jamais acceptable pour un client.
    */
   onError?: (error: Error) => void;
   /**
    * La connexion est établie côté serveur (frame `hello` reçue) — le signal
-   * fiable pour savoir qu'un écrivain concurrent (un autre client, ou
-   * `writeToOwnedSession` dans le process propriétaire) sera désormais vu
-   * par ce client. Écrire avant ce signal risque une frame de sortie
-   * manquée (le client n'est pas encore dans la liste des diffusions).
-   * `cols`/`rows` : dimensions RÉELLES du pty au moment de l'attache (pas
-   * celles éventuellement demandées via l'option `cols`/`rows` ci-dessous,
-   * qui ne sont appliquées qu'après ce frame) — un client qui doit
-   * reproduire fidèlement l'affichage de l'outil hébergé (un terminal émulé
-   * en tail, par exemple) en a besoin pour se dimensionner pareil.
+   * fiable pour savoir qu'un écrivain concurrent sera désormais vu par ce
+   * client. `cols`/`rows` : dimensions RÉELLES du pty au moment de l'attache
+   * (celles éventuellement demandées ci-dessous ne sont appliquées qu'après).
    */
   onConnect?: (info: { cols: number; rows: number }) => void;
   /**
    * Le pty a été redimensionné APRÈS la connexion — par ce client lui-même
-   * (si `cols`/`rows` a été passé ci-dessous) ou par un AUTRE client attaché
-   * (un `attach` réel dont le terminal a changé de taille). Un client qui
-   * émule sa propre grille de caractères à partir des octets bruts (le tail
-   * de `watch --ui`) doit la redimensionner pareil, sous peine de mal
-   * recalculer les retours à la ligne de l'outil hébergé.
+   * ou par un AUTRE client attaché.
    */
   onResize?: (info: { cols: number; rows: number }) => void;
+  /**
+   * L'hôte a évincé ce client (trop lent à lire sa sortie). La connexion est
+   * rétablie aussitôt et le rejeu suit (`onConnect` puis `onData`) : un
+   * client qui émule un écran (le tail de `watch --ui`) doit le remettre à
+   * zéro ici, sans quoi le rejeu s'ajouterait à l'écran déjà affiché.
+   */
+  onEvicted?: () => void;
   cols?: number;
   rows?: number;
 }
 
 export interface AttachConnection {
-  /** Instruction complète, façon bus `@agent` — Entrée ajoutée par le pty possédé. */
+  /** Instruction complète, façon bus `@agent` — Entrée ajoutée par l'hôte. */
   sendMessage(text: string): void;
   /** Frappes brutes (client interactif attaché en direct). */
   sendRaw(text: string): void;
@@ -387,50 +517,101 @@ export interface AttachConnection {
   close(): void;
 }
 
+/** Reconnexions successives après éviction avant d'abandonner (onError). */
+const MAX_EVICTION_RECONNECTS = 5;
+const EVICTION_RECONNECT_DELAY_MS = 100;
+
 /**
- * Connecte un client externe au pty possédé d'un agent (le client d'attache
- * de la Phase C, ou un test). Distinct de `writeToOwnedSession` : celui-ci
- * passe par le canal IPC réel, pour un process qui n'est pas le propriétaire
- * du pty.
+ * Connecte un client au pty d'un agent par le canal IPC réel (`striart
+ * attach`, le panneau de `watch --ui`, le bus `@agent`, un test).
+ *
+ * La sortie est décodée en UTF-8 EN FLUX (un caractère multi-octets coupé
+ * entre deux frames reste entier). Évincé par l'hôte (client trop lent), le
+ * client se reconnecte de lui-même et reçoit le rejeu ; au-delà de
+ * MAX_EVICTION_RECONNECTS évictions consécutives sans sortie lue, il
+ * abandonne par `onError`.
  */
 export function connectAttachClient(
   root: string,
   agent: string,
-  { onData, onExit, onError, onConnect, onResize, cols, rows }: AttachClientOptions,
+  options: AttachClientOptions,
 ): AttachConnection {
-  const socket = net.createConnection(attachSocketPath(root, agent));
-  socket.on('error', (error) => onError?.(error));
-  const rl = readline.createInterface({ input: socket });
-  // readline.Interface réémet l'erreur du socket sur lui-même — sans ce
-  // no-op, le socket.on('error') ci-dessus ne suffit pas : l'event non
-  // écouté sur l'Interface plante quand même le process du client.
-  rl.on('error', () => {});
-  rl.on('line', (line) => {
-    let frame: ServerFrame;
-    try {
-      frame = JSON.parse(line);
-    } catch {
-      return;
-    }
-    if (frame.type === 'data') {
-      onData(Buffer.from(frame.chunk, 'base64').toString('utf8'));
-    } else if (frame.type === 'exit') {
-      onExit?.(frame.exitCode, frame.signal);
-    } else if (frame.type === 'hello') {
-      if (cols || rows) {
-        writeFrame(socket, { type: 'resize', cols: cols ?? frame.cols, rows: rows ?? frame.rows });
+  const { onData, onExit, onError, onConnect, onResize, onEvicted } = options;
+  const endpoint = attachSocketPath(root, agent);
+  let requested: { cols: number; rows: number } | null =
+    options.cols || options.rows ? { cols: options.cols ?? 0, rows: options.rows ?? 0 } : null;
+  let socket: net.Socket;
+  let closed = false;
+  let exited = false;
+  let evictions = 0;
+
+  const open = () => {
+    const current = net.createConnection(endpoint);
+    socket = current;
+    let evicted = false;
+    const decoder = new TextDecoder('utf-8');
+    current.on('error', (error) => {
+      if (!evicted && !closed) onError?.(error);
+    });
+    const rl = readline.createInterface({ input: current });
+    // readline.Interface réémet l'erreur du socket sur lui-même — sans ce
+    // no-op, l'événement non écouté sur l'Interface planterait le client.
+    rl.on('error', () => {});
+    rl.on('line', (line) => {
+      let frame: ServerFrame;
+      try {
+        frame = JSON.parse(line);
+      } catch {
+        return;
       }
-      onConnect?.({ cols: frame.cols, rows: frame.rows });
-    } else if (frame.type === 'resize') {
-      onResize?.({ cols: frame.cols, rows: frame.rows });
-    }
-  });
+      if (frame.type === 'data') {
+        evictions = 0;
+        const text = decoder.decode(Buffer.from(frame.chunk, 'base64'), { stream: true });
+        if (text) onData(text);
+      } else if (frame.type === 'exit') {
+        exited = true;
+        onExit?.(frame.exitCode, frame.signal);
+      } else if (frame.type === 'hello') {
+        if (requested) {
+          writeFrame(current, {
+            type: 'resize',
+            cols: requested.cols || frame.cols,
+            rows: requested.rows || frame.rows,
+          });
+        }
+        onConnect?.({ cols: frame.cols, rows: frame.rows });
+      } else if (frame.type === 'resize') {
+        onResize?.({ cols: frame.cols, rows: frame.rows });
+      } else if (frame.type === 'evicted') {
+        evicted = true;
+      }
+    });
+    current.on('close', () => {
+      if (!evicted || closed || exited) return;
+      evictions += 1;
+      if (evictions > MAX_EVICTION_RECONNECTS) {
+        onError?.(new Error(`attach client evicted ${evictions} times in a row (too slow)`));
+        return;
+      }
+      onEvicted?.();
+      setTimeout(() => {
+        if (!closed) open();
+      }, EVICTION_RECONNECT_DELAY_MS);
+    });
+  };
+  open();
 
   return {
     sendMessage: (text) => writeFrame(socket, { type: 'message', text }),
     sendRaw: (text) =>
       writeFrame(socket, { type: 'input', data: Buffer.from(text, 'utf8').toString('base64') }),
-    resize: (c, r) => writeFrame(socket, { type: 'resize', cols: c, rows: r }),
-    close: () => socket.end(),
+    resize: (c, r) => {
+      requested = { cols: c, rows: r };
+      writeFrame(socket, { type: 'resize', cols: c, rows: r });
+    },
+    close: () => {
+      closed = true;
+      socket.end();
+    },
   };
 }

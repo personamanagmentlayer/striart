@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { PRESETS, materializePreset } from '../../src/agents/catalog.ts';
 import { DEFAULT_CONFIG } from '../../src/config.js';
 import {
   PROMPT_PLACEHOLDER,
@@ -105,6 +106,37 @@ describe("session — construction de l'argv", () => {
     expect(argv.args[1]).toBe(hostile);
   });
 
+  it("un prompt commençant par '-' n'est jamais pris pour une option (arg positionnel exact)", () => {
+    const argv = buildAgentArgv(
+      { command: 'tool', args: ['run', PROMPT_PLACEHOLDER] },
+      '--dangerously-skip-permissions fais X',
+    );
+    expect(argv.args[0]).toBe('run');
+    expect(argv.args[1].startsWith('-')).toBe(false);
+    expect(argv.args[1].trim()).toBe('--dangerously-skip-permissions fais X');
+    // Intégré à un drapeau (--flag=valeur) : déjà sûr, laissé tel quel.
+    expect(buildAgentArgv({ command: 'tool', args: ['--message={{prompt}}'] }, '-x').args).toEqual([
+      '--message=-x',
+    ]);
+  });
+
+  it("chaque preset du catalogue : aucun élément d'argv issu du prompt ne commence par '-'", () => {
+    for (const preset of PRESETS) {
+      if (preset.transport === 'acp') continue;
+      const profile = materializePreset(preset);
+      if (!profile.args.some((a) => a.includes(PROMPT_PLACEHOLDER))) continue;
+      const argv = buildAgentArgv(profile, '-rf /', {
+        instructions: '-instr',
+        instructionsFile: '-file',
+        testCommand: '-test',
+      });
+      // Les seuls éléments commençant par '-' sont les drapeaux écrits par le
+      // preset lui-même : une valeur substituée ne crée jamais une option.
+      const flags = (list) => list.filter((a) => a.startsWith('-')).length;
+      expect(flags(argv.args), preset.id).toBeLessThanOrEqual(flags(profile.args));
+    }
+  });
+
   it('refuse un profil sans marqueur — le prompt ne serait jamais transmis', () => {
     // Sans ce garde-fou, l'agent démarrerait sans tâche et sortirait en 0 :
     // un succès vide, le pire des résultats en mode autonome.
@@ -167,6 +199,36 @@ describe('session — exécution supervisée', () => {
     await expect(readFile(result.logPath, 'utf8')).resolves.toContain('bonjour');
   });
 
+  it('arrêt demandé (signal) → arbre tué, statut CANCELLED, jamais une session orpheline', async () => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 300);
+    const startedAt = Date.now();
+    const result = await run(
+      {
+        command: process.execPath,
+        args: ['-e', 'setInterval(() => {}, 1000)', PROMPT_PLACEHOLDER],
+      },
+      { signal: controller.signal },
+    );
+    expect(result.status).toBe('CANCELLED');
+    expect(result.timedOut).toBe(false);
+    expect(Date.now() - startedAt).toBeLessThan(10_000);
+    await expect(readFile(result.logPath, 'utf8')).resolves.toContain('arrêt demandé');
+  });
+
+  it('signal déjà levé : la session est arrêtée dès son lancement', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const result = await run(
+      {
+        command: process.execPath,
+        args: ['-e', 'setInterval(() => {}, 1000)', PROMPT_PLACEHOLDER],
+      },
+      { signal: controller.signal },
+    );
+    expect(result.status).toBe('CANCELLED');
+  });
+
   it('rapporte FAILED sur sortie non nulle, sans throw', async () => {
     const result = await run({
       command: process.execPath,
@@ -188,6 +250,18 @@ describe('session — exécution supervisée', () => {
     expect(result.error).toContain('striart-binaire-absent-xyz');
   });
 
+  it('le prompt n’est recopié ni dans `error` ni dans `command` du résultat', async () => {
+    const secret = 'SECRET-PROMPT-ne-doit-pas-fuiter';
+    const result = await run(
+      { command: process.execPath, args: ['-e', 'process.exit(3)', PROMPT_PLACEHOLDER] },
+      { prompt: secret },
+    );
+    expect(result.status).toBe('FAILED');
+    expect(result.error).toContain('exit code 3');
+    expect(result.error).not.toContain(secret);
+    expect(result.command).not.toContain(secret);
+  });
+
   it('tue la session au-delà du délai et rapporte TIMEOUT', async () => {
     const result = await run(
       {
@@ -199,5 +273,103 @@ describe('session — exécution supervisée', () => {
     expect(result.status).toBe('TIMEOUT');
     expect(result.timedOut).toBe(true);
     await expect(readFile(result.logPath, 'utf8')).resolves.toContain('délai');
+  });
+});
+
+describe('session — PROFILE_INVALID ne divulgue pas le profil', () => {
+  const secretEnv = { ANTHROPIC_API_KEY: 'sk-ant-LEAK' };
+  it.each([
+    ['command vide', { command: '', args: ['{{prompt}}'], env: secretEnv }],
+    ['args non tableau', { command: 'x', args: 'nope', env: secretEnv }],
+    ['sans placeholder', { command: 'x', args: ['-p'], env: secretEnv }],
+    ['profil ACP', { command: 'x', acp: true, env: secretEnv }],
+  ])('%s : details sans env ni valeur', (_label, profile) => {
+    let caught;
+    try {
+      buildAgentArgv(profile, 'tâche');
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught?.code).toBe('PROFILE_INVALID');
+    expect(JSON.stringify(caught.details)).not.toContain('sk-ant-LEAK');
+    expect(caught.details).not.toHaveProperty('profile');
+  });
+
+  it('profil ACP mal formé : refus sans divulguer l’env (runAgentSession)', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'striart-profile-'));
+    try {
+      const caught = await runAgentSession({
+        root: dir,
+        agent: 'agent-a',
+        taskId: 'task-1',
+        cwd: dir,
+        profile: { command: '', acp: true, env: secretEnv },
+        prompt: 'tâche',
+      }).catch((error) => error);
+      expect(caught?.code).toBe('PROFILE_INVALID');
+      expect(JSON.stringify(caught.details)).not.toContain('sk-ant-LEAK');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("session — emplacements de consignes dans l'argv (lot I5)", () => {
+  it('remplit les emplacements en UNE passe : un prompt porteur de marqueurs reste de la donnée', () => {
+    const argv = buildAgentArgv(
+      { command: 'x', args: ['--system', '{{striartInstructions}}', '-p', '{{prompt}}'] },
+      'tâche {{striartInstructions}} {{prompt}}',
+      { instructions: 'RÈGLES' },
+    );
+    expect(argv.args).toEqual([
+      '--system',
+      'RÈGLES',
+      '-p',
+      'tâche {{striartInstructions}} {{prompt}}',
+    ]);
+  });
+
+  it('retire un emplacement vide AVEC son drapeau (un drapeau orphelin avalerait le prompt)', () => {
+    const argv = buildAgentArgv(
+      { command: 'x', args: ['--system', '{{striartInstructions}}', '{{prompt}}'] },
+      'tâche',
+    );
+    expect(argv.args).toEqual(['tâche']);
+  });
+
+  it('ajoute les arguments de fin (drapeau + fichier de consignes) et la commande du Test Gate', () => {
+    const argv = buildAgentArgv(
+      {
+        command: 'claude',
+        args: ['--allowedTools', 'Bash({{striartTestCommand}} *)', '-p', '{{prompt}}'],
+      },
+      't',
+      { testCommand: 'npm test' },
+      ['--append-system-prompt-file', '/r/.striart/logs/i.md'],
+    );
+    expect(argv.args).toEqual([
+      '--allowedTools',
+      'Bash(npm test *)',
+      '-p',
+      't',
+      '--append-system-prompt-file',
+      '/r/.striart/logs/i.md',
+    ]);
+  });
+
+  it('listProfiles expose preset, contrat de commit, sortie structurée et canal effectif', () => {
+    const rows = listProfiles(DEFAULT_CONFIG);
+    const claude = rows.find((r) => r.name === 'claude');
+    expect(claude).toMatchObject({
+      preset: 'claude-code',
+      commitPolicy: 'agent',
+      structuredOutput: 'claude-stream-json',
+      instructions: 'system-prompt-file',
+      experimental: false,
+    });
+    expect(rows.find((r) => r.name === 'gemini').instructions).toBe('acp-prompt');
+    expect(
+      listProfiles({ ...DEFAULT_CONFIG, agentInstructions: { enabled: false } })[0].instructions,
+    ).toBe('none');
   });
 });

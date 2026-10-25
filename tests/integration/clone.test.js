@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { stat, writeFile } from 'node:fs/promises';
+import { rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { simpleGit } from 'simple-git';
 import { createTempRepo } from '../helpers/temp-repo.js';
 import { initStriart } from '../../src/init.js';
 import {
+  cloneGit,
   agentsDir,
   createAgent,
   listAgents,
@@ -49,8 +50,45 @@ describe('striart init + start + status (intégration)', () => {
       JSON.stringify({ testCommand: 'make test' }),
     );
     const result = await initStriart(repo.root);
-    expect(result.config.testCommand).toBe('make test');
+    expect(result.configPath).toMatch(/.striartrc.json$/);
+    expect(result.created).not.toContain('striart.config.mjs');
     await expect(stat(path.join(repo.root, 'striart.config.mjs'))).rejects.toThrow();
+  });
+
+  // Un clone vit SOUS la racine du principal : sans plafond, git remontait
+  // jusqu'au dépôt principal quand le .git du clone manquait — stash/rebase
+  // destinés au clone visaient alors le principal.
+  it('cloneGit : un clone sans .git échoue au lieu de remonter au dépôt principal', async () => {
+    await initStriart(repo.root);
+    const info = await createAgent({ root: repo.root, name: 'agent-a' });
+    await rm(path.join(info.path, '.git'), { recursive: true, force: true, maxRetries: 5 });
+    await expect(cloneGit(info.path).revparse(['--show-toplevel'])).rejects.toThrow(
+      /not a git repository/i,
+    );
+    // Sans le plafond, la même commande répond… la racine du principal.
+    expect(path.resolve((await simpleGit(info.path).revparse(['--show-toplevel'])).trim())).toBe(
+      path.resolve(repo.root),
+    );
+  });
+
+  // Striart lancé depuis un hook git, un `rebase --exec` ou un IDE hérite de
+  // GIT_DIR/GIT_WORK_TREE : le plafond ne protège que la découverte, pas un
+  // dépôt désigné explicitement par l'environnement.
+  it('cloneGit : GIT_DIR / GIT_WORK_TREE hérités ne détournent pas git vers le principal', async () => {
+    await initStriart(repo.root);
+    const info = await createAgent({ root: repo.root, name: 'agent-a' });
+    const saved = { GIT_DIR: process.env.GIT_DIR, GIT_WORK_TREE: process.env.GIT_WORK_TREE };
+    process.env.GIT_DIR = path.join(repo.root, '.git');
+    process.env.GIT_WORK_TREE = repo.root;
+    try {
+      const gitDir = (await cloneGit(info.path).raw(['rev-parse', '--absolute-git-dir'])).trim();
+      expect(path.resolve(gitDir)).toBe(path.resolve(info.path, '.git'));
+    } finally {
+      for (const [name, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
   });
 
   it('start crée un clone orphelin sur une branche de tâche', async () => {
@@ -251,7 +289,7 @@ describe('nettoyage des secrets au clonage (intégration)', () => {
   const DEFAULT_PATTERNS = ['.env', '.env.*', '*.pem', '*.key', 'credentials.json'];
 
   it('retire les secrets trackés du worktree du clone, status propre', async () => {
-    // force: true — .env et server.pem sont trackés AUJOURD'HUI, donc aussi
+    // allowHistoricalSecrets — .env et server.pem sont trackés AUJOURD'HUI, donc aussi
     // détectés par scanHistoricalSecrets (--diff-filter=A capte l'ajout même
     // encore présent) : ce test cible excludeTrackedSecrets (le masquage du
     // worktree), pas le nouveau garde-fou HISTORICAL_SECRETS_FOUND, qui a sa
@@ -260,7 +298,7 @@ describe('nettoyage des secrets au clonage (intégration)', () => {
       root: repo.root,
       name: 'agent-a',
       secretPatterns: DEFAULT_PATTERNS,
-      force: true,
+      allowHistoricalSecrets: true,
     });
 
     expect(info.secretsExcluded.sort()).toEqual(['.env', 'server.pem']);
@@ -413,14 +451,14 @@ describe('scan des secrets historiques avant clonage (intégration)', () => {
     expect((await readRegistry(repo.root))['agent-a']).toBeUndefined();
   });
 
-  it('createAgent avec force: true clone quand même malgré un secret historique', async () => {
+  it('createAgent avec allowHistoricalSecrets: true clone quand même malgré un secret historique', async () => {
     await commitThenRemoveEnv();
 
     const info = await createAgent({
       root: repo.root,
       name: 'agent-a',
       secretPatterns: ['.env'],
-      force: true,
+      allowHistoricalSecrets: true,
     });
 
     await expect(stat(info.path)).resolves.toBeTruthy();
@@ -429,10 +467,14 @@ describe('scan des secrets historiques avant clonage (intégration)', () => {
     expect(info.secretsExcluded).toEqual([]);
   });
 
-  it('force défaut à false : omettre force revient à le refuser', async () => {
+  it('omettre allowHistoricalSecrets revient à refuser ; force (perte de travail) ne lève pas ce contrôle', async () => {
     await commitThenRemoveEnv();
     await expect(
       createAgent({ root: repo.root, name: 'agent-a', secretPatterns: ['.env'] }),
+    ).rejects.toMatchObject({ code: 'HISTORICAL_SECRETS_FOUND' });
+    // Ancienne sémantique (<= 0.10) : `force` levait aussi ce contrôle.
+    await expect(
+      createAgent({ root: repo.root, name: 'agent-a', secretPatterns: ['.env'], force: true }),
     ).rejects.toMatchObject({ code: 'HISTORICAL_SECRETS_FOUND' });
   });
 

@@ -245,6 +245,15 @@ describe('striart run + queue (intégration)', () => {
   });
 
   it('striart run "prompt" : nom d’agent dérivé du prompt, unique', async () => {
+    // Le Router relève maintenant le dépôt (racine passée explicitement) : son cache
+    // de prédictions (tâche + arbre + HEAD) servirait la 1re prédiction à la 2e
+    // tâche, identique, qui entrerait alors en collision. Ce test vérifie l'unicité
+    // du NOM, pas le cache : on le coupe ici (le cache a ses propres tests).
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(
+      path.join(repo.root, '.striartrc.json'),
+      JSON.stringify({ tokens: { cache: { enabled: false } } }),
+    );
     mockRouter({ 'Faire le login': ['src/login.js'] });
     const first = await runTask({ root: repo.root, prompt: 'Faire le login' });
     expect(first.status).toBe('STARTED');

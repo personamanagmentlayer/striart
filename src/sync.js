@@ -17,35 +17,126 @@
  * rattrapera au prochain commit.
  */
 import { simpleGit } from 'simple-git';
-import { StriartError } from './errors.js';
+import { StriartError, agentUnknownError } from './errors.js';
 import { loadConfig } from './config.js';
-import { assertInitialized, readRegistry, updateAgentMeta } from './clone.js';
+import { assertInitialized, cloneGit, readRegistry, updateAgentMeta } from './clone.js';
 import { emitStriartEvent } from './events.js';
 import { withMainLock } from './lock.js';
 import { syncMemoryToClone } from './memory.js';
+import { syncAgentInstructionsToClone } from './agents/instructions.ts';
 import { isProcessAlive } from './process-tree.js';
+import { logger } from './logger.js';
+
+/**
+ * Tête d'une branche du repo principal, ou refus explicite si elle n'existe
+ * pas. Sans ce contrôle, une `targetBranch` mal configurée remontait en
+ * « Erreur inattendue : fatal: couldn't find remote ref … » depuis le fetch
+ * d'un clone — sans dire quelle branche, ni où la corriger.
+ * @param {import('simple-git').SimpleGit} mainGit
+ * @param {string} branch
+ * @param {string} [setting] clé de config qui désigne cette branche
+ * @returns {Promise<string>}
+ */
+export async function resolveBranchHead(mainGit, branch, setting = 'targetBranch') {
+  // simple-git ne lève pas sur un code de sortie 1 sans stderr (le cas de
+  // `--quiet`) : c'est la forme de la sortie qui fait foi, pas l'exception.
+  // Une VRAIE erreur (git absent, dépôt illisible) lève avec son stderr et
+  // remonte telle quelle : la déguiser en UNKNOWN_BRANCH enverrait corriger
+  // une config qui n'y est pour rien.
+  const sha = (
+    await mainGit.revparse(['--verify', '--quiet', `refs/heads/${branch}^{commit}`])
+  ).trim();
+  if (/^[0-9a-f]{40,64}$/.test(sha)) return sha;
+  throw new StriartError(
+    `La branche « ${branch} » (${setting}) n'existe pas dans le repo principal.`,
+    {
+      code: 'UNKNOWN_BRANCH',
+      details: { branch, setting },
+      hint: `corrige ${setting} dans striart.config (branches existantes : git branch --list)`,
+    },
+  );
+}
+
+/**
+ * Refs PRIVÉES où atterrissent les fetchs de Striart, une par usage —
+ * jamais `FETCH_HEAD`, fichier unique par dépôt que tout fetch concurrent
+ * (autre contexte, autre process, humain ou agent dans le clone) réécrit :
+ * lire FETCH_HEAD après son propre fetch, c'est lire peut-être celui d'un
+ * autre (audit L1). Chaque fetch écrit sa ref (`--no-write-fetch-head`), le
+ * SHA en est relu, et c'est CE SHA exact qui est rebasé, mergé et enregistré.
+ *
+ * Hors de `refs/heads/` : le watcher (qui ne surveille que les branches des
+ * clones) ne les voit pas, et aucun push de Striart (`push origin <branche>`)
+ * ne les emporte.
+ */
+/** Dans un clone : tête de la branche cible, pour son rebase (sous verrou). */
+export const CLONE_TARGET_REF = 'refs/striart/target';
+
+/**
+ * Dans un clone : tête de la branche cible pour la mesure de retard
+ * (`checkAgentsBehind`, HORS verrou) — distincte de CLONE_TARGET_REF pour ne
+ * jamais disputer la ref d'un rebase en cours, et suffixée du PID pour que
+ * deux process qui mesurent en même temps (watch + dashboard) ne se
+ * bloquent pas sur le verrou de ref de git. Supprimée après lecture.
+ */
+function behindProbeRef() {
+  return `refs/striart/behind/${process.pid}`;
+}
+
+/** Dans le principal : tête de la branche de tâche d'un agent, pour son merge. */
+export function incomingRef(agent) {
+  return `refs/striart/incoming/${agent}`;
+}
+
+/**
+ * Fetch `refs/heads/<branch>` de `source` vers la ref privée `ref` de `git`,
+ * puis rend le SHA exact déposé. `+` : la branche de l'agent est réécrite
+ * par chaque rebase, la ref privée suit sans refus de non-fast-forward.
+ * @param {import('simple-git').SimpleGit} git
+ * @param {string} source  Chemin du dépôt source.
+ * @param {string} branch
+ * @param {string} ref
+ * @returns {Promise<string>}
+ */
+export async function fetchBranchToRef(git, source, branch, ref) {
+  await git.raw([
+    'fetch',
+    '--quiet',
+    '--no-tags',
+    '--no-write-fetch-head',
+    source,
+    `+refs/heads/${branch}:${ref}`,
+  ]);
+  return (await git.revparse(['--verify', `${ref}^{commit}`])).trim();
+}
 
 /**
  * Rebase le clone d'un agent sur la branche cible du repo principal.
  * Un rebase en conflit est annulé (REBASE_CONFLICT) : le merge classique
  * + fusion sémantique prendra le relais.
  */
-/** @param {{root: string, agent: string, config?: import('./types.js').StriartConfig|null}} params @returns {Promise<import('./types.js').SyncResult>} */
+/** @param {{root: string, agent: string, config?: import('./types.js').StriartConfig|null, signal?: AbortSignal|null}} params @returns {Promise<import('./types.js').SyncResult>} */
 export async function syncAgentWithMain(params) {
-  return withMainLock(params.root, `sync:${params.agent}`, () => syncAgentWithMainImpl(params));
+  return withMainLock(params.root, `sync:${params.agent}`, () => syncAgentWithMainImpl(params), {
+    signal: params.signal ?? null,
+  });
 }
 
-/** @returns {Promise<import('./types.js').SyncResult>} */
-async function syncAgentWithMainImpl({ root, agent, config = null }) {
+/**
+ * `verifyTarget` : vérification de la branche cible partagée par une passe
+ * (syncAllAgents) — sans elle, chaque agent relançait le même
+ * `rev-parse --verify` sur le repo principal. Interne : les appelants
+ * publics passent par syncAgentWithMain, qui vérifie toujours.
+ * @param {{root: string, agent: string, config?: import('./types.js').StriartConfig|null, verifyTarget?: (() => Promise<string>)|null}} params
+ * @returns {Promise<import('./types.js').SyncResult>}
+ */
+async function syncAgentWithMainImpl({ root, agent, config = null, verifyTarget = null }) {
   await assertInitialized(root);
   const cfg = config ?? (await loadConfig(root));
   const registry = await readRegistry(root);
   const meta = registry[agent];
   if (!meta) {
-    throw new StriartError(`Agent inconnu : "${agent}".`, {
-      code: 'AGENT_UNKNOWN',
-      details: { agent },
-    });
+    throw agentUnknownError(agent);
   }
 
   // Session autonome en cours : le clone est intouchable.
@@ -69,9 +160,9 @@ async function syncAgentWithMainImpl({ root, agent, config = null }) {
     return { status: 'SKIPPED_SESSION', agent, pid: meta.sessionPid ?? null };
   }
 
-  const agentGit = simpleGit(meta.path);
-  await agentGit.fetch(root, cfg.targetBranch);
-  const mainHead = (await agentGit.revparse(['FETCH_HEAD'])).trim();
+  await (verifyTarget ? verifyTarget() : resolveBranchHead(simpleGit(root), cfg.targetBranch));
+  const agentGit = cloneGit(meta.path);
+  const mainHead = await fetchBranchToRef(agentGit, root, cfg.targetBranch, CLONE_TARGET_REF);
   const behind = Number.parseInt(
     (await agentGit.raw(['rev-list', '--count', `HEAD..${mainHead}`])).trim(),
     10,
@@ -129,18 +220,33 @@ async function syncAgentWithMainImpl({ root, agent, config = null }) {
     return { status: 'REBASE_CONFLICT', agent, mainHead, error: error.message, stashKept: stashed };
   }
 
+  /** @type {string | null} */
+  let stashConflict = null;
   if (stashed) {
     try {
       await agentGit.stash(['pop']);
     } catch (error) {
-      // Théoriquement impossible (disjonction vérifiée) — le travail reste
-      // en sécurité dans le stash, résolution humaine dans le clone.
-      return { status: 'STASH_CONFLICT', agent, mainHead, error: error.message };
+      // Rare (la disjonction par chemins est vérifiée, pas celle des types
+      // fichier/dossier) — le travail reste en sécurité dans le stash,
+      // résolution humaine dans le clone. Mais le REBASE, lui, a réussi : la
+      // suite (base de comptage, mémoire, consignes) s'applique quand même, sans
+      // quoi le registre mentirait sur l'état réel du clone.
+      stashConflict = error.message;
     }
   }
 
   // Memory Layer : le clone fraîchement rebasé reçoit la mémoire à jour.
   await syncMemoryToClone(root, meta.path);
+  // Consignes Striart régénérées : un AGENTS.md du commit a pu changer (le
+  // composite AGENTS.override.md en dérive — D11). Advisory, ne throw pas.
+  await syncAgentInstructionsToClone({
+    root,
+    agent,
+    clonePath: meta.path,
+    mode: meta.mode ?? 'attended',
+    command: meta.command ?? null,
+    config: cfg,
+  });
 
   // Le rebase réécrit les SHAs : la base de comptage des commits
   // en attente devient la tête de main (les commits déjà mergés
@@ -149,13 +255,19 @@ async function syncAgentWithMainImpl({ root, agent, config = null }) {
   if (meta.lastMergedCommit) patch.lastMergedCommit = mainHead;
   await updateAgentMeta(root, agent, patch);
 
+  if (stashConflict !== null) {
+    return { status: 'STASH_CONFLICT', agent, mainHead, error: stashConflict };
+  }
   return { status: 'REBASED', agent, mainHead, rebasedCommits: behind, stashed };
 }
 
 /** Rebase tous les agents actifs (appelé après chaque merge réussi en mode watch). */
-/** @param {{root: string, config?: import('./types.js').StriartConfig|null, except?: string[]}} params @returns {Promise<import('./types.js').SyncResult[]>} */
+/** @param {{root: string, config?: import('./types.js').StriartConfig|null, except?: string[], signal?: AbortSignal|null}} params @returns {Promise<import('./types.js').SyncResult[]>} */
 export async function syncAllAgents(params) {
-  return withMainLock(params.root, 'sync-all', () => syncAllAgentsImpl(params));
+  // `signal` n'annule que l'ATTENTE du verrou, jamais un lot commencé.
+  return withMainLock(params.root, 'sync-all', () => syncAllAgentsImpl(params), {
+    signal: params.signal ?? null,
+  });
 }
 
 async function syncAllAgentsImpl({ root, config = null, except = [] }) {
@@ -163,12 +275,19 @@ async function syncAllAgentsImpl({ root, config = null, except = [] }) {
   const cfg = config ?? (await loadConfig(root));
   const registry = await readRegistry(root);
   const results = [];
+  // Une seule vérification de la branche cible pour toute la passe, faite au
+  // premier agent qui en a besoin (même comportement qu'avant : rien n'est
+  // vérifié si aucun agent n'est à synchroniser).
+  /** @type {Promise<string>|null} */
+  let targetCheck = null;
+  const verifyTarget = () => (targetCheck ??= resolveBranchHead(simpleGit(root), cfg.targetBranch));
   for (const agent of Object.keys(registry)) {
     if (except.includes(agent)) continue;
 
     // Le garde « session autonome vivante » (SKIPPED_SESSION) est dans
     // syncAgentWithMainImpl : la primitive protège tous ses appelants.
-    const result = await syncAgentWithMain({ root, agent, config: cfg });
+    // Verrou déjà tenu (sync-all) : appel direct de la primitive.
+    const result = await syncAgentWithMainImpl({ root, agent, config: cfg, verifyTarget });
     if (result.status === 'REBASE_CONFLICT') {
       await emitStriartEvent(cfg, {
         type: 'sync:rebase-conflict',
@@ -200,7 +319,8 @@ async function syncAllAgentsImpl({ root, config = null, except = [] }) {
 
 /**
  * Fetch silencieux : mesure le retard de chaque agent sur targetBranch
- * sans toucher aux working trees (seul FETCH_HEAD est mis à jour).
+ * sans toucher aux working trees (seule une ref privée temporaire du clone
+ * est écrite, puis supprimée — jamais FETCH_HEAD).
  * Utilisé par le watcher pour la visibilité proactive ; le rebase
  * effectif reste déclenché au merge.
  */
@@ -208,17 +328,29 @@ async function syncAllAgentsImpl({ root, config = null, except = [] }) {
 export async function checkAgentsBehind({ root, config = null }) {
   await assertInitialized(root);
   const cfg = config ?? (await loadConfig(root));
+  // Une fois pour tous les agents : une branche absente est une erreur de
+  // configuration, pas un échec de fetch propre à chaque clone.
+  await resolveBranchHead(simpleGit(root), cfg.targetBranch);
   const registry = await readRegistry(root);
   const results = [];
   for (const [agent, meta] of Object.entries(registry)) {
     try {
-      const agentGit = simpleGit(meta.path);
-      await agentGit.fetch(root, cfg.targetBranch);
-      const behind = Number.parseInt(
-        (await agentGit.raw(['rev-list', '--count', 'HEAD..FETCH_HEAD'])).trim(),
-        10,
-      );
-      results.push({ agent, behind });
+      const agentGit = cloneGit(meta.path);
+      const probe = behindProbeRef();
+      try {
+        const mainHead = await fetchBranchToRef(agentGit, root, cfg.targetBranch, probe);
+        const behind = Number.parseInt(
+          (await agentGit.raw(['rev-list', '--count', `HEAD..${mainHead}`])).trim(),
+          10,
+        );
+        results.push({ agent, behind });
+      } finally {
+        // Mesure ponctuelle : la ref ne doit pas retenir d'objets. Un échec
+        // ici est sans conséquence (réécrite au prochain passage, `+`).
+        await agentGit.raw(['update-ref', '-d', probe]).catch((error) => {
+          logger.warn({ agent, err: error.message }, 'Ref de mesure du retard non supprimée');
+        });
+      }
     } catch (error) {
       results.push({ agent, behind: null, error: error.message });
     }

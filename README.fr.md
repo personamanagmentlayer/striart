@@ -10,8 +10,8 @@
 <p align="center">
   <img alt="version 0.10.0" src="https://img.shields.io/badge/version-0.10.0-6e56cf">
   <img alt="Node.js ≥ 22.18" src="https://img.shields.io/badge/node-%E2%89%A5%2022.18-339933?logo=node.js&logoColor=white">
-  <img alt="526 tests" src="https://img.shields.io/badge/tests-526%20%E2%9C%94-2da44e">
-  <img alt="zéro build" src="https://img.shields.io/badge/build-aucun-8250df">
+  <img alt="2512 tests" src="https://img.shields.io/badge/tests-2512%20%E2%9C%94-2da44e">
+  <img alt="zéro build en développement" src="https://img.shields.io/badge/build-aucun%20en%20dev-8250df">
   <img alt="licence MIT" src="https://img.shields.io/badge/licence-MIT-blue">
 </p>
 
@@ -51,9 +51,9 @@ conflits, garantir que rien de cassé n'entre. Striart automatise précisément 
 | Prévention des collisions | ❌ à ta charge | ❌ dépend du découpage du modèle | ✅ Router LLM + file d'attente + dépendances `--after` |
 | Retour du travail dans la branche cible | ❌ merges manuels | ❌ à la charge de l'agent | ✅ merge auto, rebase de tous les agents après chaque merge, fusion sémantique 3-way |
 | Garde-fou de qualité | ❌ | ❌ | ✅ **Test Gate bloquant** — rien n'entre sans suite verte |
-| Multi-fournisseurs | ❌ | ❌ Claude uniquement | ✅ Claude + Aider + Codex + Ollama… côte à côte |
+| Multi-fournisseurs | ❌ | ❌ Claude uniquement | ✅ 20 presets prêts (Claude, Codex, Gemini, Copilot, Cursor, Aider…) côte à côte |
 | Durée de vie | la session | la session | ✅ des heures/jours, plusieurs sessions, file persistante |
-| Observabilité & contrôle | ❌ | limité à la session | ✅ dashboard temps réel, logs persistants, semi-autonome (tu arbitres les permissions), rollback |
+| Observabilité & contrôle | ❌ | limité à la session | ✅ dashboard temps réel (lien de connexion à usage unique), relevé des tokens et coûts avec plafonds, logs persistants, semi-autonome (tu arbitres les permissions), rollback |
 
 Le détail du raisonnement (clones vs worktrees, emboîtement avec les
 sous-agents de Claude Code, symétrie MCP/ACP) est dans
@@ -67,15 +67,18 @@ Depuis les sources :
 
 ```bash
 git clone https://github.com/personamanagmentlayer/striart.git
-cd striart && npm install && npm link   # expose la commande `striart`
+cd striart && npm install && npm run native:build && npm link   # expose la commande `striart`
 cd /chemin/vers/mon-projet
 striart init
 ```
 
-Prérequis : Node.js 22.18+ (type stripping natif — rien à compiler), Git,
-**un repo Git avec au moins un commit**, et un LLM pour le Router/Merger —
-Ollama en local (défaut) **ou** n'importe quelle API cloud. Tout le détail :
-**[docs/fr/demarrage.md](docs/fr/demarrage.md)**.
+Prérequis : Node.js 22.18+ (type stripping natif — rien à compiler côté
+JavaScript), Git, **un repo Git avec au moins un commit**, et un LLM pour le
+Router/Merger — Ollama en local (défaut) **ou** n'importe quelle API cloud. Striart
+s'appuie sur un petit **binaire natif** (Rust) signé, vérifié avant chaque
+exécution : depuis les sources, `npm run native:build` le construit (toolchain
+Rust requise) ; une archive produite par `npm run pack:release` embarque les
+binaires précompilés. Tout le détail : **[docs/fr/demarrage.md](docs/fr/demarrage.md)**.
 
 ---
 
@@ -83,7 +86,7 @@ Ollama en local (défaut) **ou** n'importe quelle API cloud. Tout le détail :
 
 ```bash
 cd mon-projet
-striart init                          # crée .striart/, la config, vérifie le LLM
+striart init                          # crée .striart/, la config, puis diagnostique
 
 # Onglet 1 — l'orchestrateur
 striart watch                         # merge + Test Gate + rebase automatiques
@@ -95,9 +98,23 @@ striart run "Ajoute la facturation Stripe" --agent billing --command "aider --mo
 # ...et pour une tâche cadrée qu'on ne veut pas surveiller, Striart pilote seul :
 striart run "Ajoute des tests unitaires à src/parser.js" --autonomous --profile claude
 
+# Plusieurs agents sur UNE tâche : relecture croisée, course, équipe, pipeline
+striart orchestrate review "Passe l'auth en JWT" --author claude --reviewer codex
+
 # Suivi
-striart status / queue / dashboard / resolve
+striart status / queue / dashboard / usage / resolve
 ```
+
+Striart se pilote par **trois plans distincts** : `striart mcp` (l'agent pilote
+Striart, borné à son clone), `striart api` et `striart dashboard` (l'humain
+pilote Striart : Control Protocol, lien de connexion à usage unique) et
+`striart acp` (Striart comme agent ACP dans Zed, JetBrains, Neovim, Emacs :
+une session d'éditeur = un clone isolé + un merge sous Test Gate).
+
+Codes de sortie scriptables (0 succès, 1 échec, 2 usage, 3 refus d'une
+garde), `--json` sur toutes les commandes à résultat, aide en français ou en
+anglais (`STRIART_LANG`), complétion bash/zsh/fish/PowerShell
+(`striart completion <shell>`) — voir [Commandes](docs/fr/commandes.md#le-contrat-de-la-cli).
 
 ---
 
@@ -109,15 +126,16 @@ La documentation complète vit dans **[docs/fr/](docs/fr/README.md)**
 | Page | Contenu |
 |---|---|
 | [Démarrage](docs/fr/demarrage.md) | Prérequis, installation, `striart init`, guide « 3 agents en parallèle ». |
-| [Architecture](docs/fr/architecture.md) | Clones vs worktrees, chaîne sérialisée, flow d'un commit, les 6 statuts de sync, verrous. |
-| [Commandes](docs/fr/commandes.md) | Les 23 commandes en détail : options, garde-fous, codes de refus. |
-| [Configuration](docs/fr/configuration.md) | Référence complète de `striart.config.mjs`, providers LLM, prompts. |
+| [Architecture](docs/fr/architecture.md) | Clones vs worktrees, chaîne sérialisée, flow d'un commit, les 6 statuts de sync, verrous, fichiers d'état, les trois plans, composants natifs. |
+| [Commandes](docs/fr/commandes.md) | Le contrat de la CLI (codes de sortie, `--json`, langue, complétion) et les 30 commandes : options, garde-fous, codes de refus. |
+| [Configuration](docs/fr/configuration.md) | Référence complète de `striart.config.mjs` : défauts et bornes, providers LLM, tokens, profils, chemins protégés, terminal, MCP, orchestration. |
 | [Branches et pipeline](docs/fr/branches.md) | `targetBranch` sur n'importe quelle branche (`dev`, `master`…), pipeline staging → main. |
-| [Modes d'exécution](docs/fr/modes-execution.md) | Supervisé, autonome, ACP, semi-autonome (arbitrage des permissions). |
-| [Plans](docs/fr/plans.md) | Tâches-as-code : le graphe de tâches YAML versionné. |
-| [Serveur MCP](docs/fr/mcp.md) | Piloter Striart depuis Claude Code, Cursor ou tout hôte MCP. |
+| [Modes d'exécution](docs/fr/modes-execution.md) | Supervisé, autonome, ACP, semi-autonome, `striart acp`, modes d'orchestration (`review`, `race`, `team`, `pipeline`). |
+| [Plans](docs/fr/plans.md) | Tâches-as-code : le graphe de tâches YAML versionné (v1 et v2). |
+| [Serveur MCP](docs/fr/mcp.md) | Piloter Striart depuis Claude Code, Cursor ou tout hôte MCP (borné au clone appelant). |
+| [Intégrations](docs/fr/integrations/README.md) | Visual Studio, VS Code, Cursor, Xcode, Theia, Devin Desktop, JetBrains, Zed, Neovim, Emacs, Warp : MCP et ACP. |
 | [Projets volumineux](docs/fr/projets-volumineux.md) | Maîtriser le coût disque des clones. |
-| [Dépannage](docs/fr/depannage.md) | `striart doctor`, codes d'erreur, tickets, `rollback`, `reconcile`. |
+| [Dépannage](docs/fr/depannage.md) | `striart doctor`, tous les codes d'erreur, tickets, `rollback`, `reconcile`, verrous. |
 
 ---
 
@@ -125,24 +143,30 @@ La documentation complète vit dans **[docs/fr/](docs/fr/README.md)**
 
 1. **Jamais de push depuis un agent.** Les clones sont des îlots sans remote ; seul l'orchestrateur pousse.
 2. **Jamais de commit sans Test Gate vert.** Même si le LLM de fusion est « sûr de lui ».
-3. **Jamais de suppression d'un clone pendant qu'un agent travaille.** `striart clean` refuse à deux niveaux : `IN_USE` (heuristique, `--force` possible en connaissance de cause) et `SESSION_LIVE` (fait vérifié, que **`--force` ne peut pas écraser**).
+3. **Jamais de suppression d'un clone pendant qu'un agent travaille.** `striart clean` refuse à deux niveaux : `IN_USE` (heuristique, `--force` possible en connaissance de cause) et `SESSION_LIVE` (fait vérifié — session autonome ou terminal `--open` vivant —, que **`--force` ne peut pas écraser**).
 4. **Fallback humain obligatoire.** 3 fusions sémantiques échouées d'affilée → mode manuel jusqu'à `striart resolve --unlock`, avec un ticket complet par échec dans `.striart/conflicts/`.
 
 ---
 
 ## Développement
 
-**526 tests** (294 unitaires + 232 d'intégration sur de vrais repos Git),
+**2512 tests** (1586 unitaires + 920 d'intégration sur de vrais repos Git, plus
+6 tests de fumée du paquet construit — projet `pack` —, comptés par
+`npx vitest list` le 2026-10-25),
 typecheck `tsc` sur tout le code (TS natif + JS annoté JSDoc), zéro étape de
-build — `bin` pointe sur la source.
+build en développement — `bin` pointe sur la source. Seul le paquet construit par `npm run pack:release`
+contient du JS émis (`npm run pack:release` : Node refuse le type stripping
+sous `node_modules`).
 
 ```bash
 npm install
-npm run test:unit        # 294 tests, ~20 s — la boucle de dev
-npm run test:integration # 232 tests, ~7 min — vrais repos Git temporaires
-npm test                 # les deux
+npm run native:build     # binaire natif (toolchain Rust) — requis depuis les sources
+npm run test:unit        # 1586 tests — la boucle de dev
+npm run test:integration # 920 tests — vrais repos Git temporaires
+npm run test:pack        # paquet construit : pack → npm install → binaire installé (réseau)
+npm test                 # unit + intégration (hors réseau)
 npm run lint             # ESLint (correctness) + Prettier --check
-npm run test:ci          # typecheck + tout + coverage
+npm run test:ci          # typecheck + unit + intégration avec coverage, puis paquet
 ```
 
 Voir [CONTRIBUTING.md](CONTRIBUTING.md) et [SECURITY.md](SECURITY.md).

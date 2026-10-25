@@ -2,6 +2,26 @@ import { mkdir, open, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { connectAttachClient } from '../../src/pty-attach.ts';
+import { defaultShell } from '../../src/pty-host.ts';
+
+/**
+ * Shell des tests pty qui NE testent PAS le profil du shell : même programme
+ * que le produit, mais PowerShell lancé sans profil (`-NoProfile -NoLogo`).
+ * Windows PowerShell 5.1 charge sinon les profils utilisateur (en échec sur
+ * une politique d'exécution restrictive) puis ses modules : mesuré 8,5-12,7 s
+ * contre 3-3,8 s sous charge pour `powershell -Command exit` — le démarrage
+ * interactif dépassait le délai des tests. cmd/bash/sh : rien à ajouter.
+ * À passer via `{ shell, args }` à ensurePtyHost/startOwnedSession ; les
+ * assertions des tests ne changent pas.
+ */
+export function quietShell(shell = defaultShell()) {
+  const name = path.win32
+    .basename(shell.replace(/\//g, '\\'))
+    .toLowerCase()
+    .replace(/\.exe$/, '');
+  const isPowerShell = name === 'powershell' || name === 'pwsh';
+  return { shell, args: isPowerShell ? ['-NoProfile', '-NoLogo'] : [] };
+}
 
 /**
  * Écrit une entrée minimale dans `.striart/agents.json` — `ensurePtyHost`
@@ -30,6 +50,16 @@ export async function seedAgentRegistry(root, agent, overrides = {}) {
   await writeFile(path.join(dir, 'agents.json'), JSON.stringify(registry), 'utf8');
 }
 
+/**
+ * Délai des attentes sur un VRAI pty : ces tests vérifient qu'un événement
+ * ARRIVE (écho, diffusion d'un resize), pas sa vitesse. Isolé, PowerShell
+ * sous ConPTY répond en 1 à 2 s ; sous la charge de la suite d'intégration
+ * complète (Windows, antivirus), son démarrage a dépassé les 8 s du délai
+ * par défaut — échecs intermittents. 30 s reste très en dessous du budget
+ * de 90 s par test (vitest.config.js).
+ */
+export const REAL_PTY_WAIT_MS = 30_000;
+
 /** Poll générique — attend qu'un prédicat synchrone devienne vrai. */
 export async function waitFor(predicate, timeoutMs = 8000) {
   const deadline = Date.now() + timeoutMs;
@@ -40,13 +70,11 @@ export async function waitFor(predicate, timeoutMs = 8000) {
 }
 
 /**
- * Un process hôte détaché (pty-host-run) met un instant à réellement
- * écouter (spawn Node + import de node-pty) — contrairement à
- * `startOwnedSession` en direct, le canal d'attache n'existe pas encore à
- * l'instant où `ensurePtyHost()`/`routeAgentMessage()` résolvent (elles
- * attendent le spawn, pas l'écoute effective côté enfant). Retente la
- * connexion à intervalle raisonnable plutôt que de spammer un connect
- * toutes les 20ms.
+ * Retente la connexion à intervalle raisonnable plutôt que de spammer un
+ * connect toutes les 20 ms. Depuis l'hôte natif (lot R2), `ensurePtyHost()`
+ * résout une fois le canal ouvert (PID file publié par l'hôte) ; le retry
+ * reste la défense contre une instance de named pipe pas encore recréée
+ * entre deux clients.
  */
 export async function connectWithRetry(root, agent, options, timeoutMs = 10000) {
   const deadline = Date.now() + timeoutMs;
@@ -74,8 +102,8 @@ const REAL_PTY_LOCK_PATH = path.join(os.tmpdir(), 'striart-real-pty-tests.lock')
 const REAL_PTY_LOCK_STALE_MS = 45_000;
 
 /**
- * Sérialise les spawns RÉELS de pty (ConPTY/powershell, éventuellement un
- * hôte détaché node.exe en plus via `ensurePtyHost`) entre `pty-attach.test.js`,
+ * Sérialise les spawns RÉELS de pty (ConPTY/powershell et leur hôte
+ * striart-native) entre `pty-attach.test.js`,
  * `pty-host.test.js` et le bloc `routeAgentMessage` de `watch-ui.test.js` —
  * vitest lance chaque fichier de test dans son propre process forké, donc
  * ces trois fichiers spawnent chacun plusieurs vrais shells SANS coordination
@@ -126,4 +154,18 @@ async function isRealPtyLockStale() {
   } catch {
     return true; // disparu entre-temps (libéré par son détenteur) : plus rien à considérer périmé
   }
+}
+
+/**
+ * Écrit dans le dépôt de test la config `pty.shellArgs` « sans profil » :
+ * pour les chemins du produit qui choisissent eux-mêmes le shell (hôte lancé
+ * par `routeAgentMessage`), la config est le seul levier — et c'est
+ * précisément la fonctionnalité `pty.shellArgs` qui est ainsi exercée.
+ */
+export async function writeQuietPtyConfig(root) {
+  await writeFile(
+    path.join(root, '.striartrc.json'),
+    JSON.stringify({ pty: { shellArgs: quietShell().args } }),
+    'utf8',
+  );
 }

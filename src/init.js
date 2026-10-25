@@ -1,9 +1,8 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { loadConfig } from './config.js';
-import { pingOllama } from './ollama.js';
-import { resolveLlmConfig } from './llm.js';
-import { agentsDir, findRepoRoot, striartDir } from './clone.js';
+import { findRepoRoot } from './clone.js';
+import { agentsDir, striartDir } from './paths.js';
 
 const CONFIG_TEMPLATE = `export default {
   testCommand: 'npm test',      // Test Gate : 'yarn test', 'make test', 'pytest'...
@@ -59,13 +58,19 @@ async function ensureGitignore(root) {
  * striart init :
  *  - crée .striart/{agents,conflicts,logs} + queue.json, locks.json, agents.json
  *  - ajoute .striart/ au .gitignore du repo
- *  - génère striart.config.mjs si absent, puis charge la config
- *  - diagnostique le LLM configuré (ping Ollama, ou présence de la clé API
- *    pour un provider cloud) — warning seulement, jamais bloquant
+ *  - génère striart.config.mjs si absent, puis valide la config
+ * Idempotent. Aucun diagnostic ici : c'est le rôle de `runDoctor`
+ * (doctor.js), source unique — la CLI l'enchaîne après l'initialisation.
+ *
+ * `created` liste des identifiants stables (contrat `--json`) :
+ * 'queue.json' | 'locks.json' | 'agents.json' | 'striart.config.mjs' | '.gitignore'.
+ * @param {string} [cwd]
+ * @returns {Promise<{root: string, configPath: string|null, created: string[], alreadyInitialized: boolean}>}
  */
 export async function initStriart(cwd = process.cwd()) {
   const root = await findRepoRoot(cwd);
   const base = striartDir(root);
+  const alreadyInitialized = Boolean(await stat(base).catch(() => null));
 
   await mkdir(agentsDir(root), { recursive: true });
   await mkdir(path.join(base, 'conflicts'), { recursive: true });
@@ -83,29 +88,9 @@ export async function initStriart(cwd = process.cwd()) {
   if (!hasConfig && (await writeIfAbsent(path.join(root, 'striart.config.mjs'), CONFIG_TEMPLATE))) {
     created.push('striart.config.mjs');
   }
-  if (await ensureGitignore(root)) created.push('.gitignore (.striart/ ajouté)');
+  if (await ensureGitignore(root)) created.push('.gitignore');
 
+  // Validation : une config invalide fait échouer init (CONFIG_INVALID).
   const config = await loadConfig(root);
-
-  let llm = null;
-  let llmReady = false;
-  let llmDetail;
-  try {
-    llm = resolveLlmConfig(config);
-    if (llm.provider === 'ollama') {
-      llmReady = await pingOllama(llm.baseUrl);
-      llmDetail = llmReady
-        ? `Ollama OK (${llm.baseUrl}, modèle ${llm.model})`
-        : `Ollama ne répond pas sur ${llm.baseUrl}`;
-    } else {
-      llmReady = Boolean(llm.apiKey);
-      llmDetail = llmReady
-        ? `${llm.provider} prêt (modèle ${llm.model}, clé via ${llm.apiKeyEnv})`
-        : `clé API absente : définis ${llm.apiKeyEnv} (par ex. dans .env)`;
-    }
-  } catch (error) {
-    llmDetail = error.message;
-  }
-
-  return { root, config, llm, llmReady, llmDetail, created };
+  return { root, configPath: config.configPath ?? null, created, alreadyInitialized };
 }

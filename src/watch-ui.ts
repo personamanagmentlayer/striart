@@ -7,7 +7,12 @@ import { listAgents } from './clone.js';
 import { listConflictTickets } from './conflicts.js';
 import { connectAttachClient } from './pty-attach.ts';
 import { defaultShell, ensurePtyHost, resolveAttendedCommand } from './pty-host.ts';
+import { sendHumanPrompt } from './acp/host.ts';
 import type { AgentMeta } from './types.js';
+import { fr } from './cli/i18n/fr.ts';
+import type { Messages } from './cli/i18n/fr.ts';
+import { publicCommands } from './cli/registry.ts';
+import type { ForegroundReason } from './cli/registry.ts';
 import type { IBufferCell, IBufferLine, Terminal as HeadlessTerminal } from '@xterm/headless';
 
 // `@xterm/headless` s'exporte en CommonJS (pas d'`exports` ESM) — Node ne
@@ -41,13 +46,13 @@ const COLOR = { cyan: '#00D4AA', violet: '#7B61FF', red: '#FF4D4D' };
  * dans la ligne « zéro build » du projet ; Ink lui-même n'exige pas JSX,
  * ce n'est qu'un sucre syntaxique côté React.
  *
- * Portée : le bus n'adresse que les agents SUPERVISÉS (mode `attended`,
- * pty possédé — Phase B/C). Les sessions autonomes (argv ou ACP) sont
- * refusées explicitement (`routeAgentMessage`) — les adresser réellement
- * demanderait le même changement architectural que la Phase C (sessions
- * portées par un process persistant, pas par le CLI éphémère qui les
- * lance aujourd'hui) : chantier distinct, noté dans le roadmap, pas fait
- * ici en silence.
+ * Portée : le bus adresse les agents SUPERVISÉS (mode `attended`, pty
+ * possédé — Phase B/C) et, depuis la Phase E (lot I6), les sessions
+ * AUTONOMES ACP vivantes : portées par leur hôte de session persistant
+ * (`src/acp/host.ts`), elles reçoivent le message comme un session/prompt
+ * supplémentaire, joué après le tour en cours. Une session argv (one-shot,
+ * plus de process à qui parler) ou une session ACP terminée est refusée
+ * explicitement, jamais en silence (`routeAgentMessage`).
  */
 
 const h = React.createElement;
@@ -62,7 +67,7 @@ const LOG_BUFFER_LINES = 500;
  * alternatif — `alternateScreen: true` — ils n'ont AUCUN scrollback, la
  * sortie d'une commande précédente est perdue dès qu'un redessin la
  * recouvre). `@` — jamais permis en premier caractère d'un nom d'agent
- * (`AGENT_NAME_RE` dans `clone.js` : alphanumérique uniquement en tête) —
+ * (`AGENT_NAME_RE` dans `agent-name.js` : alphanumérique uniquement en tête) —
  * rend cette clé structurellement impossible à confondre avec un agent réel,
  * pas juste par convention de nommage.
  */
@@ -282,59 +287,87 @@ const TERMINAL_TAB_COLS = 200;
 const TERMINAL_TAB_ROWS = 50;
 
 /**
- * Achemine un message vers le pty possédé d'un agent supervisé — démarre
- * son hôte s'il n'existe pas encore (idempotent, même mécanisme que
- * `--open`, Phase C) puis envoie via une connexion d'attache éphémère.
- * Refuse explicitement, jamais silencieusement, pour tout ce qui n'est pas
- * un agent supervisé actif.
+ * Achemine un message HUMAIN (tapé dans le champ de saisie — jamais une
+ * sortie d'agent réinjectée) vers un agent :
+ *  - supervisé : son pty possédé — démarre son hôte s'il n'existe pas encore
+ *    (idempotent, même mécanisme que `--open`, Phase C) puis envoie via une
+ *    connexion d'attache éphémère ;
+ *  - autonome : sa session ACP vivante (Phase E) — le texte devient un
+ *    session/prompt supplémentaire, via le canal du bus de l'hôte de session
+ *    persistant ; aucune session vivante → refus explicite.
+ * Refuse explicitement, jamais silencieusement, tout le reste.
  */
 export async function routeAgentMessage(
   root: string,
   agentName: string,
   text: string,
   agentMeta: (AgentMeta & { name?: string }) | undefined,
+  m: Messages = fr,
 ): Promise<MessageRouteResult> {
   if (!agentMeta) {
-    return { ok: false, reason: `Agent inconnu : "${agentName}".` };
+    return { ok: false, reason: m.watchUi.unknownAgent(agentName) };
   }
   if (agentMeta.mode === 'autonomous') {
-    return {
-      ok: false,
-      reason:
-        `"${agentName}" est en mode autonome — l'adressage direct d'une session autonome ` +
-        "(argv ou ACP) n'est pas câblé (roadmap Phase E : demande le même hébergement " +
-        'persistant que --open, Phase C). Utilise le dashboard ou striart resolve.',
-    };
+    return routeToAcpSession(root, agentName, text, m);
   }
 
   try {
     await ensurePtyHost(root, agentName, {
-      shell: defaultShell(),
       cwd: agentMeta.path,
       initialCommand: await resolveAttendedCommand(root, agentMeta),
     });
   } catch (error) {
     return {
       ok: false,
-      reason: `Hôte de pty indisponible pour "${agentName}" : ${(error as Error).message}`,
+      reason: m.watchUi.hostUnavailable(agentName, (error as Error).message),
     };
   }
 
-  return sendWithRetry(root, agentName, text);
+  return sendWithRetry(root, agentName, text, m);
 }
 
 /**
- * `ensurePtyHost` résout dès le SPAWN du process hôte détaché, pas dès qu'il
- * écoute réellement (spawn Node + import de node-pty côté enfant, un
- * instant réel) — sans retry, un premier message envoyé juste après le
- * démarrage d'un agent jamais `--open`é échouerait par pure course, pas par
- * une vraie indisponibilité. Même leçon que la Phase C, appliquée ici en
- * production plutôt que contournée seulement dans les tests.
+ * Phase E du bus `@agent` : remet le message humain à la session ACP
+ * vivante de l'agent autonome (hôte persistant). Ni hôte ni session → refus
+ * explicite qui dit pourquoi (argv one-shot, session terminée) ; refus de
+ * l'hôte (bus désactivé, session en fermeture, texte invalide) → sa raison.
+ */
+async function routeToAcpSession(
+  root: string,
+  agentName: string,
+  text: string,
+  m: Messages,
+): Promise<MessageRouteResult> {
+  let delivered;
+  try {
+    delivered = await sendHumanPrompt(root, agentName, text);
+  } catch (error) {
+    return { ok: false, reason: m.watchUi.acpRefused(agentName, (error as Error).message) };
+  }
+  if ('code' in delivered) {
+    if (delivered.code === 'ACP_SESSION_NOT_FOUND') {
+      return { ok: false, reason: m.watchUi.autonomousRefused(agentName) };
+    }
+    return {
+      ok: false,
+      reason: m.watchUi.acpRefused(agentName, `${delivered.message} (${delivered.code})`),
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * `ensurePtyHost` résout désormais quand l'hôte natif a publié son PID file
+ * (canal ouvert) ; le retry reste la défense contre une connexion refusée
+ * transitoirement (instance de named pipe pas encore recréée entre deux
+ * clients, hôte qui redémarre) — un premier message ne doit jamais échouer
+ * par pure course, seulement sur une vraie indisponibilité.
  */
 async function sendWithRetry(
   root: string,
   agentName: string,
   text: string,
+  m: Messages,
   attemptsLeft = 15,
 ): Promise<MessageRouteResult> {
   const attempt = await new Promise<MessageRouteResult>((resolve) => {
@@ -352,10 +385,10 @@ async function sendWithRetry(
   // plus haut sur routeAgentMessage (bug de rétrécissement TS7 natif).
   if ('reason' in attempt) {
     if (attemptsLeft <= 0) {
-      return { ok: false, reason: `Injection impossible vers "${agentName}" : ${attempt.reason}` };
+      return { ok: false, reason: m.watchUi.injectFailed(agentName, attempt.reason) };
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
-    return sendWithRetry(root, agentName, text, attemptsLeft - 1);
+    return sendWithRetry(root, agentName, text, m, attemptsLeft - 1);
   }
   return attempt;
 }
@@ -389,25 +422,21 @@ export function tokenizeCommand(line: string): string[] {
  *   dupliquerait la boucle de merge et se disputerait `main.lock`.
  * - `mcp` : sert un protocole sur stdin/stdout — ce champ ne peut pas lui
  *   fournir un client, il resterait bloqué à lire jusqu'au timeout pour rien.
- * - `attach`/`pty-host-run` : doivent posséder le terminal RÉEL (mode raw,
- *   E/S directes) — incompatible avec un sous-process exécuté en tâche de
- *   fond pendant qu'Ink garde la main sur ce même terminal. `pty-host-run`
- *   est de toute façon interne (jamais destiné à un humain, même ailleurs).
+ * - `attach` : doit posséder le terminal RÉEL (mode raw, E/S directes) —
+ *   incompatible avec un sous-process exécuté en tâche de fond pendant
+ *   qu'Ink garde la main sur ce même terminal.
  *
  * `dashboard` est un cas à part, traité séparément ci-dessous : seule la
  * forme qui démarre le serveur HTTP en premier plan est bloquante —
  * `--daemon`/`--stop`/`--status` rendent la main immédiatement (même
  * mécanisme que `watch --daemon`, `daemon.js`) et sont donc autorisés.
  */
-const FOREGROUND_ONLY_REASONS: Record<string, string> = {
-  watch:
-    'lancerait un second watcher en plus de celui qui héberge déjà ce panneau — doublons de merge, contention sur main.lock',
-  mcp: "sert un protocole sur stdin/stdout — ce champ ne peut pas lui fournir un client, il resterait bloqué à lire jusqu'au timeout",
-  attach:
-    'doit posséder le terminal réel (mode raw) — incompatible avec ce panneau qui le possède déjà',
-  'pty-host-run':
-    'commande interne, jamais destinée à un humain (lancée par --open via ensurePtyHost)',
-};
+/** Raison localisée pour laquelle une commande est refusée depuis ce champ (registre des commandes). */
+function foregroundReason(cmd: string, m: Messages): string | null {
+  const reason = publicCommands().find((c) => c.name === cmd)?.foreground;
+  if (!reason || reason === 'server') return null;
+  return m.watchUi.foreground[reason as Exclude<ForegroundReason, 'server'>];
+}
 
 export interface StriartCommandResult {
   ok: boolean;
@@ -426,6 +455,7 @@ export interface StriartCommandResult {
 export async function runStriartCommand(
   root: string,
   tokens: string[],
+  m: Messages = fr,
 ): Promise<StriartCommandResult> {
   const [cmd] = tokens;
   if (!cmd) return { ok: false, output: '' };
@@ -435,17 +465,11 @@ export async function runStriartCommand(
     !tokens.includes('--stop') &&
     !tokens.includes('--status')
   ) {
-    return {
-      ok: false,
-      output:
-        '"dashboard" démarre un serveur HTTP qui tourne indéfiniment — utilise "dashboard --daemon" ' +
-        'pour le lancer en arrière-plan depuis ce champ ("dashboard --stop"/"--status" pour le piloter), ' +
-        'ou lance-le directement dans un terminal séparé.',
-    };
+    return { ok: false, output: m.watchUi.dashboardForeground };
   }
-  const reason = FOREGROUND_ONLY_REASONS[cmd];
+  const reason = foregroundReason(cmd, m);
   if (reason) {
-    return { ok: false, output: `"${cmd}" ne peut pas se lancer depuis ce champ : ${reason}.` };
+    return { ok: false, output: m.watchUi.foregroundRefused(cmd, reason) };
   }
   const cliPath = fileURLToPath(new URL('./cli.js', import.meta.url));
   const result = await execa(process.execPath, [cliPath, ...tokens], {
@@ -453,6 +477,8 @@ export async function runStriartCommand(
     all: true,
     reject: false,
     timeout: 120_000,
+    // L'onglet Terminal est un vrai émulateur (xterm) : couleur conservée.
+    env: { ...process.env, FORCE_COLOR: process.env.NO_COLOR ? '0' : '1' },
   });
   return { ok: result.exitCode === 0, output: result.all ?? '' };
 }
@@ -597,7 +623,6 @@ export class LogTailManager {
     if (!this.state.has(agent)) this.state.set(agent, { lines: [], connected: false });
     try {
       await ensurePtyHost(this.root, agent, {
-        shell: defaultShell(),
         cwd: agentMeta.path,
         initialCommand: await resolveAttendedCommand(this.root, agentMeta),
       });
@@ -645,6 +670,10 @@ export class LogTailManager {
       // croit avoir comme terminal (cf. commentaire de `ServerResizeFrame`).
       onResize: ({ cols, rows }) => this.ensureTerminal(agent, cols, rows),
       onData: (text) => this.appendData(agent, text),
+      // Évincé par l'hôte (panneau trop lent à lire) : le client se
+      // reconnecte et le rejeu redessine l'état courant — l'émulation repart
+      // d'un écran vierge, sans quoi le rejeu s'empilerait sur l'ancien.
+      onEvicted: () => this.terminals.get(agent)?.reset(),
       onExit: () => {
         // Retiré de `connections`, pas seulement marqué déconnecté : sans
         // ça, `ensure()` verrait toujours une entrée et ne retenterait
@@ -702,6 +731,34 @@ export class LogTailManager {
   }
 
   /**
+   * Ajoute UNE ligne au tab "Terminal" (événements de la boucle de watch :
+   * commit, merge, rebase…), sans l'en-tête ni l'espacement d'une sortie de
+   * commande.
+   */
+  appendLine(line: string): void {
+    const term = this.ensureTerminal(TERMINAL_TAB, TERMINAL_TAB_COLS, TERMINAL_TAB_ROWS);
+    void this.refreshTerminalTab(term, line);
+  }
+
+  /** Écrit dans le terminal émulé de l'onglet Terminal, puis republie ses lignes. */
+  private async refreshTerminalTab(term: HeadlessTerminal, line: string): Promise<void> {
+    const state = this.state.get(TERMINAL_TAB) ?? { lines: [], connected: true };
+    try {
+      await writeToTerminal(term, `${line.replace(/\r?\n/g, '\r\n')}\r\n`);
+      state.lines = readTerminalLines(term, LOG_BUFFER_LINES);
+      state.connected = true;
+    } catch (error) {
+      // Terminal émulé disposé entre-temps (/clear) ou en échec : l'onglet le
+      // dit, au lieu d'une promesse rejetée sans gestionnaire.
+      state.connected = false;
+      const message = error instanceof Error ? error.message : String(error);
+      state.lines = [...state.lines, [{ text: `[striart] ${message}`, color: 'red' }]];
+    }
+    this.state.set(TERMINAL_TAB, state);
+    this.onChange(TERMINAL_TAB);
+  }
+
+  /**
    * "/clear" sur l'onglet Terminal — vide l'historique accumulé de sorties
    * de commandes. Dispose le terminal émulé plutôt que de le vider par une
    * séquence ANSI (`\x1b[2J`) : plus simple, et évite de dépendre d'un
@@ -742,8 +799,19 @@ export class LogTailManager {
   }
 }
 
+/** Abonnement aux lignes de la boucle de watch : rend la fonction de désabonnement. */
+export type WatchLineSubscription = (listener: (line: string) => void) => () => void;
+
 interface AppProps {
   root: string;
+  /**
+   * Événements de la boucle de `watch` qui tourne dans le même process,
+   * déjà mis en forme par la CLI. Affichés dans le tab "Terminal" — jamais
+   * écrits sur l'écran alternatif, où ils corrompraient le rendu.
+   */
+  subscribeLoop?: WatchLineSubscription;
+  /** Catalogue de la langue choisie par la CLI. */
+  m: Messages;
 }
 
 function statusIcon(agent: AgentMeta & { name: string; status: string }): string {
@@ -778,55 +846,28 @@ interface StriartCommandInfo {
 
 /**
  * Catalogue des commandes striart proposées par l'autocomplétion "/" — même
- * liste que les sous-commandes de `cli.js`, moins `pty-host-run` (interne,
- * jamais destinée à un humain — son propre `--help` le dit déjà, inutile de
- * l'annoncer ici) et plus "exit" (natif à ce panneau, pas une vraie commande
+ * liste que les sous-commandes publiques de `cli.js` (les internes masquées
+ * ne sont jamais destinées à un humain) et plus "exit" (natif à ce panneau, pas une vraie commande
  * striart). Les restrictions (`watch`/`mcp`/`attach`, `dashboard` sans
  * `--daemon`) restent tranchées par `runStriartCommand` au moment de
  * soumettre — signalées ici juste pour prévenir avant même de taper Entrée.
  */
-const STRIART_COMMANDS: StriartCommandInfo[] = [
-  { name: 'status', description: 'Liste les agents actifs, leurs branches et commits en attente' },
-  { name: 'start', description: '<agent> — Clone le repo pour un nouvel agent isolé' },
-  {
-    name: 'run',
-    description: 'Router préventif : prédit les fichiers puis lance ou met en attente',
-  },
-  { name: 'merge', description: '<agent> — Merge le dernier commit derrière le Test Gate' },
-  { name: 'stop', description: '<agent> — Marque un agent comme terminé' },
-  { name: 'sync', description: 'Rebase un agent (ou tous) sur la branche cible' },
-  { name: 'clean', description: 'Supprime des clones pour libérer le disque' },
-  { name: 'prune', description: 'Rétention : clones arrêtés inactifs et tickets résolus' },
-  { name: 'history', description: 'Historique des merges et rollbacks' },
-  { name: 'doctor', description: 'Diagnostic complet (git, repo, config, LLM, verrous, tickets)' },
-  { name: 'rollback', description: 'Défait le dernier merge Striart de la branche cible' },
-  { name: 'promote', description: 'Promotion staging → main' },
-  { name: 'lock', description: 'Réserve/libère le repo principal pour une intervention directe' },
-  { name: 'resolve', description: 'Liste les tickets de conflit en attente de résolution' },
-  { name: 'queue', description: 'Scheduler : agents RUNNING, tâches WAITING et blocages' },
-  { name: 'reconcile', description: 'Neutralise les sessions mortes, débloque la file' },
-  { name: 'profiles', description: "Liste les profils d'agents configurés (mode autonome)" },
-  { name: 'plan', description: '<file> — Applique un plan « tâches-as-code » (YAML)' },
-  { name: 'init', description: '.striart/ déjà là si tu es dans ce panneau — rarement utile ici' },
-  { name: 'dashboard', description: '⛔ seul, tourne en premier plan — "--daemon" pour ce champ' },
-  {
-    name: 'watch',
-    description: '⛔ non disponible ici (doublerait le watcher qui héberge ce panneau)',
-  },
-  { name: 'mcp', description: '⛔ non disponible ici (sert un protocole sur stdin/stdout)' },
-  { name: 'attach', description: '⛔ non disponible ici (doit posséder le terminal réel)' },
-  {
-    name: 'clear',
-    description:
-      "Efface l'onglet actif — vide l'historique sur Terminal, envoie la vraie commande d'effacement du shell sur un agent",
-  },
-  {
-    name: 'relaunch',
-    description:
-      '[agent] — retape la commande de lancement (utile si l’outil hébergé s’est arrêté)',
-  },
-  { name: 'exit', description: 'Quitte ce panneau (comme Ctrl+C)' },
-];
+function striartCommands(m: Messages): StriartCommandInfo[] {
+  const fromRegistry = publicCommands().map((spec) => {
+    const reason = foregroundReason(spec.name, m);
+    let description: string = m.commands[spec.name as keyof Messages['commands']].summary;
+    if (spec.name === 'dashboard') description = m.watchUi.dashboardSuggestion;
+    else if (reason) description = m.watchUi.unavailableHere(reason);
+    else if (spec.name === 'init') description = m.watchUi.initSuggestion;
+    return { name: spec.name, description };
+  });
+  return [
+    ...fromRegistry,
+    { name: 'clear', description: m.watchUi.clearSuggestion },
+    { name: 'relaunch', description: m.watchUi.relaunchSuggestion },
+    { name: 'exit', description: m.watchUi.exitSuggestion },
+  ];
+}
 
 export interface Suggestion {
   kind: 'agent' | 'command';
@@ -846,6 +887,7 @@ const MAX_SUGGESTIONS_SHOWN = 8;
 export function computeSuggestions(
   input: string,
   agents: Array<AgentMeta & { name: string; status: string }>,
+  m: Messages = fr,
 ): Suggestion[] {
   if (input.startsWith('@')) {
     const partial = input.slice(1);
@@ -857,20 +899,22 @@ export function computeSuggestions(
         value: a.name,
         description:
           a.mode === 'autonomous'
-            ? '🤖 autonome — bus indisponible (Phase E non câblée)'
+            ? m.watchUi.agentAutonomous
             : a.status === 'ACTIVE'
-              ? '👤 supervisé actif'
-              : '⚪ inactif',
+              ? m.watchUi.agentSupervised
+              : m.watchUi.agentInactive,
       }));
   }
   if (input.startsWith('/')) {
     const partial = input.slice(1).toLowerCase();
     if (partial.includes(' ')) return [];
-    return STRIART_COMMANDS.filter((c) => c.name.startsWith(partial)).map((c) => ({
-      kind: 'command' as const,
-      value: c.name,
-      description: c.description,
-    }));
+    return striartCommands(m)
+      .filter((c) => c.name.startsWith(partial))
+      .map((c) => ({
+        kind: 'command' as const,
+        value: c.name,
+        description: c.description,
+      }));
   }
   return [];
 }
@@ -903,7 +947,7 @@ export function looksLikeIdleShellPrompt(lines: StyledChunk[][]): boolean {
   return false;
 }
 
-function App({ root }: AppProps) {
+function App({ root, subscribeLoop, m }: AppProps) {
   const { exit } = useApp();
   const { columns, rows } = useWindowSize();
   const [agents, setAgents] = React.useState<Array<AgentMeta & { name: string; status: string }>>(
@@ -991,6 +1035,12 @@ function App({ root }: AppProps) {
     });
   }, [selected]);
 
+  // Lignes de la boucle de watch (commit, merge, rebase…) → tab "Terminal".
+  React.useEffect(() => {
+    if (!subscribeLoop) return undefined;
+    return subscribeLoop((line) => tailManagerRef.current?.appendLine(line));
+  }, [subscribeLoop]);
+
   // Fait avancer le chronomètre des actions en cours — seulement pendant
   // qu'il y en a une, pour ne pas redessiner pour rien une fois tout réglé.
   React.useEffect(() => {
@@ -1059,9 +1109,11 @@ function App({ root }: AppProps) {
   // `process.exit` ces handles actifs garderaient le process vivant,
   // invisible, après la disparition de l'UI.
   const shutdown = React.useCallback(() => {
+    // Sortie voulue : l'UI se démonte, `runWatchUi` rend la main et la
+    // commande `watch` arrête proprement la boucle (watchers, timers)
+    // avant de sortir en 0.
     tailManagerRef.current?.releaseAll();
     exit();
-    process.exit(0);
   }, [exit]);
 
   // Partagé entre "@agent message" et le texte sans préfixe (envoyé à
@@ -1069,9 +1121,9 @@ function App({ root }: AppProps) {
   const sendAgentMessage = React.useCallback(
     (agentName: string, text: string) => {
       setSelected(agentName);
-      const activityId = pushActivity(`Envoi à "${agentName}"`);
+      const activityId = pushActivity(m.watchUi.sending(agentName));
       void resolveAgentMeta(root, agents, agentName)
-        .then((meta) => routeAgentMessage(root, agentName, text, meta))
+        .then((meta) => routeAgentMessage(root, agentName, text, meta, m))
         .then((result: MessageRouteResult) => {
           // `'reason' in result`, pas `if (result.ok)` : contourne un bug de
           // rétrécissement de union discriminée par littéral booléen dans
@@ -1085,7 +1137,7 @@ function App({ root }: AppProps) {
           }
         });
     },
-    [agents, root, pushActivity, resolveActivity],
+    [agents, root, pushActivity, resolveActivity, m],
   );
 
   /**
@@ -1127,7 +1179,7 @@ function App({ root }: AppProps) {
           resolveActivity(
             activityId,
             result.ok ? 'ok' : 'error',
-            result.ok ? undefined : 'voir l’onglet Terminal',
+            result.ok ? undefined : m.watchUi.seeTerminalTab,
           );
         });
         return;
@@ -1166,22 +1218,22 @@ function App({ root }: AppProps) {
           const argAgent = tokenizeCommand(rest)[1];
           const targetAgent = argAgent ?? (selected !== TERMINAL_TAB ? selected : null);
           const activityId = pushActivity(
-            targetAgent ? `Relance de "${targetAgent}"` : 'striart relaunch',
+            targetAgent ? m.watchUi.relaunching(targetAgent) : 'striart relaunch',
           );
           if (!targetAgent) {
-            resolveActivity(
-              activityId,
-              'error',
-              'aucun agent — "/relaunch agent-a" ou sélectionne son onglet',
-            );
+            resolveActivity(activityId, 'error', m.watchUi.relaunchNoAgent);
             return;
           }
           setSelected(targetAgent);
           void resolveAgentMeta(root, agents, targetAgent)
             .then(async (meta) => {
-              if (!meta) return { ok: false as const, reason: `Agent inconnu : "${targetAgent}".` };
+              if (!meta) return { ok: false as const, reason: m.watchUi.unknownAgent(targetAgent) };
+              // Une session autonome n'a pas d'outil à relancer dans un pty :
+              // envoyer la commande de l'outil comme prompt serait un contresens.
+              if (meta.mode === 'autonomous')
+                return { ok: false as const, reason: m.watchUi.relaunchAutonomous(targetAgent) };
               const tool = await resolveAttendedCommand(root, meta);
-              return routeAgentMessage(root, targetAgent, tool, meta);
+              return routeAgentMessage(root, targetAgent, tool, meta, m);
             })
             .then((result: MessageRouteResult) => {
               if ('reason' in result) resolveActivity(activityId, 'error', result.reason);
@@ -1197,12 +1249,12 @@ function App({ root }: AppProps) {
         // déjà côté CLI) reste donc consultable en revenant sur ce tab,
         // jamais réduite à un « échec » dans le cockpit.
         const activityId = pushActivity(`striart ${rest}`);
-        void runStriartCommand(root, tokenizeCommand(rest)).then((result) => {
+        void runStriartCommand(root, tokenizeCommand(rest), m).then((result) => {
           tailManagerRef.current!.appendCommandOutput(`❯ ${trimmed}`, result.output);
           resolveActivity(
             activityId,
             result.ok ? 'ok' : 'error',
-            result.ok ? undefined : 'voir l’onglet Terminal',
+            result.ok ? undefined : m.watchUi.seeTerminalTab,
           );
         });
         return;
@@ -1222,13 +1274,13 @@ function App({ root }: AppProps) {
       // sélectionné.
       if (selected && selected !== TERMINAL_TAB) sendAgentMessage(selected, trimmed);
     },
-    [selected, agents, root, pushActivity, resolveActivity, shutdown, sendAgentMessage],
+    [selected, agents, root, pushActivity, resolveActivity, shutdown, sendAgentMessage, m],
   );
 
   // Recalculées à chaque rendu (donc à jour dans la fermeture de useInput
   // ci-dessous) — cf. `computeSuggestions` : liste vide dès qu'on est déjà
   // dans le corps du message ou les arguments (un espace après le premier mot).
-  const suggestions = computeSuggestions(input, agents);
+  const suggestions = computeSuggestions(input, agents, m);
   const activeSuggestionIndex =
     suggestions.length > 0 ? Math.min(selectionIndex, suggestions.length - 1) : 0;
 
@@ -1412,7 +1464,7 @@ function App({ root }: AppProps) {
   const isEmptyTerminalTab =
     selected === TERMINAL_TAB && selectedLog.lines.every((chunks) => chunks.length === 0);
   const sourceLines = isEmptyTerminalTab
-    ? [[{ text: 'Aucune commande lancée pour l’instant — tape /status ou !ls pour commencer.' }]]
+    ? [[{ text: m.watchUi.terminalEmpty }]]
     : selectedLog.lines;
   // Page Up/Down (cf. useInput) — `clampedScroll` ne suit JAMAIS un nouvel
   // arrivage automatiquement (comme le scrollback d'un vrai terminal) :
@@ -1431,7 +1483,7 @@ function App({ root }: AppProps) {
   return h(
     Box,
     { flexDirection: 'column', width: columns },
-    h(Text, { bold: true, color: COLOR.cyan }, '⚡ Striart watch — pilotage interactif'),
+    h(Text, { bold: true, color: COLOR.cyan }, m.watchUi.title),
     // Principe « cockpit » : un ticket ouvert (procédure d'erreur en cours)
     // reste affiché en permanence tant qu'il n'est pas traité — jamais à
     // découvrir seulement en tapant `resolve`. Toujours UN `Text` rendu
@@ -1442,9 +1494,7 @@ function App({ root }: AppProps) {
     h(
       Text,
       { bold: true, color: COLOR.red },
-      openTickets > 0
-        ? `🎫 ${openTickets} ticket${openTickets > 1 ? 's' : ''} ouvert${openTickets > 1 ? 's' : ''} — tape "resolve" pour les traiter`
-        : ' ', // espace, pas '' — cf. visibleLines : un Text vide s'effondre à hauteur 0 dans Ink
+      openTickets > 0 ? m.watchUi.ticketsOpen(openTickets) : ' ', // espace, pas '' — cf. visibleLines : un Text vide s'effondre à hauteur 0 dans Ink
     ),
     h(
       Box,
@@ -1464,12 +1514,12 @@ function App({ root }: AppProps) {
             color: unread.has(TERMINAL_TAB) ? COLOR.violet : undefined,
             bold: unread.has(TERMINAL_TAB),
           },
-          `🖥️ Terminal${unread.has(TERMINAL_TAB) ? ' •' : ''}${selected === TERMINAL_TAB ? ' ◀' : ''}`,
+          `🖥️ ${m.watchUi.terminalTab}${unread.has(TERMINAL_TAB) ? ' •' : ''}${selected === TERMINAL_TAB ? ' ◀' : ''}`,
         ),
         !loaded
-          ? h(Text, { key: 'loading' }, '   Chargement des agents...')
+          ? h(Text, { key: 'loading' }, `   ${m.watchUi.loading}`)
           : agents.length === 0
-            ? h(Text, { key: 'none' }, '   Aucun agent.')
+            ? h(Text, { key: 'none' }, `   ${m.watchUi.noAgents}`)
             : agents.map((a) =>
                 h(
                   Text,
@@ -1496,13 +1546,11 @@ function App({ root }: AppProps) {
         Text,
         { dimColor: true },
         (selected === TERMINAL_TAB
-          ? 'Terminal — sorties de /commande et !commande'
+          ? m.watchUi.terminalHeader
           : selected
-            ? `${selected} ${!selectedLog.connected ? '🔴' : idleShell ? '🟡 outil hébergé terminé ? — "/relaunch" pour le relancer' : '🟢'}`
-            : 'Aucun agent supervisé actif à suivre.') +
-          (clampedScroll > 0
-            ? `  ↑ historique (${clampedScroll} ligne(s) — Page Down pour redescendre)`
-            : ''),
+            ? `${selected} ${!selectedLog.connected ? '🔴' : idleShell ? `🟡 ${m.watchUi.idleTool}` : '🟢'}`
+            : m.watchUi.noSupervised) +
+          (clampedScroll > 0 ? `  ${m.watchUi.scrolled(clampedScroll)}` : ''),
       ),
       ...visibleLines.map((chunks, i) => {
         const displayChunks = chunks.length > 0 ? chunks : [{ text: ' ' }];
@@ -1561,7 +1609,7 @@ function App({ root }: AppProps) {
             ? h(
                 Text,
                 { dimColor: true },
-                `… +${suggestions.length - MAX_SUGGESTIONS_SHOWN} autre(s), continue à taper pour filtrer`,
+                m.watchUi.moreSuggestions(suggestions.length - MAX_SUGGESTIONS_SHOWN),
               )
             : null,
         )
@@ -1576,16 +1624,8 @@ function App({ root }: AppProps) {
         ? h(
             Box,
             { flexDirection: 'column' },
-            h(
-              Text,
-              { dimColor: true },
-              '@ mentionne un agent · texte seul → agent sélectionné · /commande lance striart (/clear, /relaunch, /exit) · !commande lance un vrai shell · @ et / proposent une liste (↑/↓, Tab ou Entrée pour choisir).',
-            ),
-            h(
-              Text,
-              { dimColor: true },
-              '↑/↓ rappelle l’historique (champ non vide) ou change l’onglet (champ vide, • = non lu) · Page Up/Down défile · Ctrl+C quitte.',
-            ),
+            h(Text, { dimColor: true }, m.watchUi.help1),
+            h(Text, { dimColor: true }, m.watchUi.help2),
           )
         : activity.map((entry) =>
             h(
@@ -1597,7 +1637,7 @@ function App({ root }: AppProps) {
             ),
           ),
       refreshError
-        ? h(Text, { color: COLOR.red }, `⚠️ Rafraîchissement impossible : ${refreshError}`)
+        ? h(Text, { color: COLOR.red }, `⚠️ ${m.watchUi.refreshFailed(refreshError)}`)
         : null,
     ),
   );
@@ -1611,7 +1651,26 @@ function App({ root }: AppProps) {
  * documenté au-dessus de `maxVisibleLines` (pas de scrollback à faire suivre
  * dans un écran alternatif).
  */
-export async function runWatchUi(root: string): Promise<void> {
-  const instance = render(h(App, { root }), { alternateScreen: true });
-  await instance.waitUntilExit();
+export async function runWatchUi(
+  root: string,
+  {
+    subscribeLoop,
+    messages = fr,
+    signal,
+  }: {
+    subscribeLoop?: WatchLineSubscription;
+    messages?: Messages;
+    /** Arrêt demandé de l'extérieur (SIGINT/SIGTERM reçus par la CLI) : l'UI se démonte. */
+    signal?: AbortSignal;
+  } = {},
+): Promise<void> {
+  if (signal?.aborted) return;
+  const instance = render(h(App, { root, subscribeLoop, m: messages }), { alternateScreen: true });
+  const onAbort = () => instance.unmount();
+  signal?.addEventListener('abort', onAbort, { once: true });
+  try {
+    await instance.waitUntilExit();
+  } finally {
+    signal?.removeEventListener('abort', onAbort);
+  }
 }

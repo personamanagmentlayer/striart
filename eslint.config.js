@@ -18,7 +18,9 @@ import tseslint from 'typescript-eslint';
 // typecheck (vitesse), et `typescript` pointe sur `@typescript/typescript6`
 // (TS 6.0.x < 6.1.0) que typescript-eslint accepte pour parser les .ts.
 export default tseslint.config(
-  { ignores: ['node_modules/', 'coverage/', '.striart/'] },
+  // .claude/workflows : scripts du runtime Workflow de Claude Code (return de
+  // premier niveau, globals injectés) — pas des modules ESM du projet.
+  { ignores: ['node_modules/', 'coverage/', '.striart/', '.claude/workflows/'] },
   // Config JS de base — cantonnée aux fichiers JS pour ne pas parasiter le TS.
   { files: ['**/*.js', '**/*.cjs', '**/*.mjs'], ...js.configs.recommended },
   // Config TS — parser typescript-eslint sur les .ts uniquement.
@@ -47,6 +49,29 @@ export default tseslint.config(
       '@typescript-eslint/no-unused-vars': [
         'error',
         { caughtErrors: 'none', argsIgnorePattern: '^_' },
+      ],
+    },
+  },
+  {
+    // Couche CLI : toute sortie passe par Output (src/cli/output.ts), qui
+    // tient la discipline de flux (données sur stdout, le reste sur stderr),
+    // la neutralisation des textes non fiables et le format --json. Un
+    // console.* contournerait les trois.
+    files: ['src/cli/**/*.ts', 'src/cli.js'],
+    rules: { 'no-console': 'error' },
+  },
+  {
+    // Convention du projet : `fs/promises`, jamais les variantes synchrones
+    // — la CLI démarre à chaque appui sur Tab (complétion), un parcours
+    // disque bloquant s'y paie à chaque fois.
+    files: ['src/cli/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        ...['fs', 'node:fs'].map((name) => ({
+          name,
+          message: 'fs/promises uniquement (convention : jamais fs.sync).',
+        })),
       ],
     },
   },

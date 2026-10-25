@@ -215,7 +215,7 @@ describe('fusion sémantique (intégration)', () => {
     const fixed = await mergeAgentCommit({ root: repo.root, agent: 'agent-a' });
     expect(fixed.status).toBe('MERGED');
     expect(fixed.semantic).toBe(true);
-  });
+  }, 300_000); // 5 merges en conflit séquentiels : voir vitest.config.js (budget propre > défaut)
 
   it('semanticMerge désactivé en config → ticket MERGE_CONFLICT sans appel LLM', async () => {
     await setConfig(repo.root, { testCommand: GATE_OK, semanticMerge: false });

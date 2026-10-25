@@ -1,0 +1,16 @@
+{
+  "id": "striart",
+  "name": "Striart",
+  "version": "0.10.0",
+  "description": "Multi-agent Git orchestrator: each session runs your chosen ACP agent in an isolated clone, merged back under a blocking Test Gate",
+  "repository": "https://github.com/personamanagmentlayer/striart",
+  "authors": ["jumsay"],
+  "license": "MIT",
+  "license_url": "https://github.com/personamanagmentlayer/striart/blob/main/LICENSE",
+  "distribution": {
+    "npx": {
+      "package": "@jumsay/striart@0.10.0",
+      "args": ["acp"]
+    }
+  }
+}

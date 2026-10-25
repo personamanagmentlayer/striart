@@ -1,11 +1,47 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, stat, utimes, writeFile } from 'node:fs/promises';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
 import path from 'node:path';
 import { simpleGit } from 'simple-git';
 import { createTempRepo } from '../helpers/temp-repo.js';
 import { initStriart } from '../../src/init.js';
 import { withMainLock } from '../../src/lock.js';
+import { en } from '../../src/cli/i18n/en.ts';
+
+const HOLDER = fileURLToPath(new URL('../helpers/lock-holder.mjs', import.meta.url));
+
+/**
+ * Lance un détenteur du verrou dans un AUTRE process (le vrai withMainLock)
+ * et attend qu'il soit dans sa section critique.
+ */
+async function startHolder(root, holdMs, label = 'child-holder', mode = 'hold', modeArg = '') {
+  const child = execa('node', [HOLDER, root, String(holdMs), label, mode, modeArg], {
+    reject: false,
+  });
+  let out = '';
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`détenteur jamais prêt : ${out}`)), 30_000);
+    child.stdout.on('data', (chunk) => {
+      out += chunk;
+      if (out.includes('READY')) {
+        clearTimeout(timer);
+        resolve();
+      }
+    });
+    child.on('exit', () => {
+      clearTimeout(timer);
+      reject(new Error(`détenteur sorti avant READY : ${out}`));
+    });
+  });
+  return { child, output: () => out };
+}
+
+/** Process vivant qui n'est PAS un process Striart (identité étrangère). */
+function startForeignProcess() {
+  return execa('node', ['-e', 'setTimeout(() => {}, 60000)'], { reject: false });
+}
 
 describe('withMainLock — verrou inter-processus (intégration)', () => {
   let repo;
@@ -77,7 +113,9 @@ describe('withMainLock — verrou inter-processus (intégration)', () => {
     await expect(stat(lockFile)).rejects.toThrow();
   });
 
-  it('verrou plus vieux que le TTL → cassé même si le pid semble vivant', async () => {
+  it('verrou au format HÉRITÉ (sans jeton ni battement) plus vieux que le TTL → cassé même si le pid semble vivant', async () => {
+    // Un détenteur d'une version antérieure ne bat pas : pour lui seul, le TTL
+    // reste la parade à la réutilisation de PID.
     await writeFile(
       lockFile,
       JSON.stringify({
@@ -87,7 +125,6 @@ describe('withMainLock — verrou inter-processus (intégration)', () => {
       }),
     );
     // L'âge du fichier (mtime) doit aussi dépasser le TTL : on le vieillit.
-    const { utimes } = await import('node:fs/promises');
     const old = new Date(Date.now() - 60 * 60 * 1000);
     await utimes(lockFile, old, old);
 
@@ -113,5 +150,195 @@ describe('withMainLock — verrou inter-processus (intégration)', () => {
       await expect(stat(path.join(repo.root, '.git', 'MERGE_HEAD'))).rejects.toThrow();
       expect((await simpleGit(repo.root).status()).conflicted).toEqual([]);
     });
+  });
+
+  // ── L1 « intégrité de la concurrence » ─────────────────────────────────
+
+  it('deux withMainLock de premier niveau décalés dans un même process → jamais deux sections critiques à la fois', async () => {
+    // Dashboard (launchAutonomous en tâche de fond) et serveur MCP traitent
+    // des requêtes en parallèle dans UN process : la réentrance ne doit
+    // valoir que pour un appel IMBRIQUÉ, pas pour un voisin.
+    let inside = 0;
+    let maxInside = 0;
+    const op = (label) =>
+      withMainLock(repo.root, label, async () => {
+        inside += 1;
+        maxInside = Math.max(maxInside, inside);
+        await sleep(400);
+        inside -= 1;
+      });
+    await Promise.all([op('merge:a'), sleep(100).then(() => op('promote'))]);
+    expect(maxInside).toBe(1);
+  });
+
+  it('réentrance conservée pour un appel imbriqué, perdue par une tâche détachée qui survit à la libération', async () => {
+    let inside = 0;
+    let maxInside = 0;
+    const track = async () => {
+      inside += 1;
+      maxInside = Math.max(maxInside, inside);
+      await sleep(300);
+      inside -= 1;
+    };
+    let detached;
+    await withMainLock(repo.root, 'externe', async () => {
+      // Imbriqué et attendu : réentrant (sinon interblocage).
+      await withMainLock(repo.root, 'interne', async () => 'ok');
+      // Détaché : hérite du contexte, mais s'exécute APRÈS la libération —
+      // il doit reprendre réellement le verrou.
+      detached = sleep(200).then(() => withMainLock(repo.root, 'détachée', track));
+    });
+    const neighbour = sleep(150).then(() => withMainLock(repo.root, 'voisin', track));
+    await Promise.all([detached, neighbour]);
+    expect(maxInside).toBe(1);
+  });
+
+  it('main.lock antidaté au-delà du TTL mais détenteur vivant qui bat → un second process refuse (LOCK_TIMEOUT)', async () => {
+    const holder = await startHolder(repo.root, 20_000, 'merge:long');
+    try {
+      // Un merge conflictuel (LLM + Test Gate) peut dépasser 30 min : l'âge
+      // du fichier ne prouve rien tant que son détenteur vit et bat.
+      const old = new Date(Date.now() - 60 * 60 * 1000);
+      await utimes(lockFile, old, old);
+      await expect(
+        withMainLock(repo.root, 'intrus', async () => 'jamais', { timeoutMs: 2500 }),
+      ).rejects.toMatchObject({ code: 'LOCK_TIMEOUT', details: { holder: 'merge:long' } });
+      const info = JSON.parse(await readFile(lockFile, 'utf8'));
+      expect(info.label).toBe('merge:long');
+    } finally {
+      holder.child.kill();
+      await holder.child;
+    }
+  });
+
+  it('battement de cœur : le détenteur rafraîchit main.lock pendant la tenue', async () => {
+    await withMainLock(repo.root, 'long', async () => {
+      const before = (await stat(lockFile)).mtimeMs;
+      const firstBeat = JSON.parse(await readFile(lockFile, 'utf8')).heartbeatAt;
+      await sleep(6500);
+      expect((await stat(lockFile)).mtimeMs).toBeGreaterThan(before);
+      const info = JSON.parse(await readFile(lockFile, 'utf8'));
+      expect(Date.parse(info.heartbeatAt)).toBeGreaterThan(Date.parse(firstBeat));
+      // Format lisible par l'ancien code : pid/startedAt/label conservés.
+      expect(info).toMatchObject({ pid: process.pid, label: 'long' });
+      expect(typeof info.token).toBe('string');
+    });
+  });
+
+  it("libération : ne supprime jamais un verrou qui n'est plus le sien (jeton)", async () => {
+    const intruder = startForeignProcess();
+    try {
+      await withMainLock(repo.root, 'victime', async () => {
+        // Un autre process a cassé puis repris le verrou pendant la tenue.
+        await writeFile(
+          lockFile,
+          `${JSON.stringify({ pid: intruder.pid, startedAt: new Date().toISOString(), label: 'autre', token: 'jeton-autre', heartbeatAt: new Date().toISOString() })}\n`,
+        );
+      });
+      const info = JSON.parse(await readFile(lockFile, 'utf8'));
+      expect(info.token).toBe('jeton-autre');
+    } finally {
+      intruder.kill();
+      await intruder;
+    }
+  });
+
+  it('assertMainLockHeld : LOCK_LOST hors verrou, ou dès que le jeton du fichier n’est plus le nôtre', async () => {
+    const { assertMainLockHeld } = await import('../../src/lock.js');
+    await expect(assertMainLockHeld(repo.root)).rejects.toMatchObject({ code: 'LOCK_LOST' });
+    await withMainLock(repo.root, 'merge:x', async () => {
+      await assertMainLockHeld(repo.root);
+      const info = JSON.parse(await readFile(lockFile, 'utf8'));
+      await writeFile(lockFile, JSON.stringify({ ...info, token: 'vole' }));
+      await expect(assertMainLockHeld(repo.root)).rejects.toMatchObject({
+        code: 'LOCK_LOST',
+        kind: 'refusal',
+        details: { operation: 'merge:x' },
+      });
+    });
+  });
+
+  it('PID recyclé par un process étranger + battement expiré → verrou cassé sans attendre le TTL', async () => {
+    // Identité lisible : « foreign » → cassé aussitôt. Identité illisible
+    // (outil système indisponible) : jamais une preuve — cassé seulement après
+    // la fenêtre d'observation du battement figé (15 s actives).
+    const foreign = startForeignProcess();
+    try {
+      const old = new Date(Date.now() - 5 * 60 * 1000);
+      await writeFile(
+        lockFile,
+        `${JSON.stringify({ pid: foreign.pid, startedAt: old.toISOString(), label: 'merge:crash', token: 'jeton-mort', heartbeatAt: old.toISOString(), script: 'cli.js' })}\n`,
+      );
+      await utimes(lockFile, old, old);
+      const result = await withMainLock(repo.root, 'test', async () => 'récupéré', {
+        timeoutMs: 40_000,
+      });
+      expect(result).toBe('récupéré');
+    } finally {
+      foreign.kill();
+      await foreign;
+    }
+  });
+
+  it('file équitable inter-process : le ticket d’un process mort est nettoyé, le message d’attente nomme le détenteur', async () => {
+    const dead = await execa('node', ['-e', 'process.exit(0)']);
+    const queueDir = path.join(repo.root, '.striart', 'lock-queue');
+    await mkdir(queueDir, { recursive: true });
+    // Ticket fantôme EN TÊTE de file (numéro le plus bas) : sans nettoyage,
+    // personne ne serait jamais servi.
+    await writeFile(
+      path.join(queueDir, '000000000001.json'),
+      JSON.stringify({
+        pid: dead.pid,
+        token: 'fantome',
+        label: 'crash',
+        createdAt: new Date().toISOString(),
+      }),
+    );
+    expect(await withMainLock(repo.root, 'test', async () => 'servi', { timeoutMs: 5000 })).toBe(
+      'servi',
+    );
+    expect(await readdir(queueDir)).toEqual([]);
+
+    const holder = await startHolder(repo.root, 20_000, 'merge:occupant');
+    try {
+      const error = await withMainLock(repo.root, 'attente', async () => 'jamais', {
+        timeoutMs: 1500,
+      }).catch((e) => e);
+      expect(error).toMatchObject({ code: 'LOCK_TIMEOUT', details: { holder: 'merge:occupant' } });
+      expect(typeof error.details.heldForMs).toBe('number');
+      expect(en.errors('LOCK_TIMEOUT', error.details)).toMatch(/merge:occupant.*for \d/);
+      // Le ticket de l'attente abandonnée est retiré.
+      expect(await readdir(queueDir)).toEqual([]);
+    } finally {
+      holder.child.kill();
+      await holder.child;
+    }
+  });
+
+  it('file équitable inter-process : servis dans l’ordre d’arrivée', async () => {
+    // Le détenteur ne lâche le verrou que sur ordre du test : une durée fixe se
+    // faisait doubler par le démarrage des enfants (import de lock.js : plusieurs
+    // secondes sous charge) — le premier trouvait alors le verrou libre, ne
+    // posait qu'un ticket éclair, et le test attendait en vain.
+    const releaseFile = path.join(repo.root, '.striart', 'release-holder');
+    const holder = await startHolder(repo.root, 120_000, 'occupant', 'until', releaseFile);
+    const queueDir = path.join(repo.root, '.striart', 'lock-queue');
+    const waitForTickets = async (count) => {
+      const deadline = Date.now() + 60_000;
+      while ((await readdir(queueDir).catch(() => [])).length < count) {
+        if (Date.now() > deadline) throw new Error(`${count} ticket(s) jamais posé(s)`);
+        await sleep(50);
+      }
+    };
+    const first = execa('node', [HOLDER, repo.root, '200', 'premier'], { reject: false });
+    await waitForTickets(1);
+    // Déterministe : le second ne part qu'une fois le ticket du premier posé.
+    const second = execa('node', [HOLDER, repo.root, '200', 'second'], { reject: false });
+    await waitForTickets(2);
+    await writeFile(releaseFile, 'go');
+    const [a, b] = await Promise.all([first, second, holder.child]);
+    const at = (out, label) => Number(new RegExp(`ACQUIRED ${label} (\\d+)`).exec(out)?.[1]);
+    expect(at(a.stdout, 'premier')).toBeLessThan(at(b.stdout, 'second'));
   });
 });

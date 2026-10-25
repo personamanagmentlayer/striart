@@ -1,12 +1,14 @@
 import { unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { striartDir } from './paths.js';
-import { readJson, writeJsonAtomic } from './json-file.js';
+import { readJson, withTransientRetry, writeJsonAtomic } from './json-file.js';
+import { isProcessAlive } from './process-tree.js';
+import { withStateLock } from './state-lock.ts';
 
 /**
  * Session déclarée sur le REPO PRINCIPAL lui-même (pas un clone d'agent) :
  * un agent lancé directement dans son worktree (`runMainSession`), ou un
- * humain qui édite à la main sans committer (`striart lock start`).
+ * humain qui édite à la main sans committer (`striart lock --start`).
  *
  * Généralise au principal ce que `sessionPid` fait déjà par agent (décision
  * architecturale n°6.4) : tant que le PID déclaré vit, `withMainLock` refuse
@@ -35,18 +37,50 @@ export async function readMainSession(root) {
 }
 
 /**
+ * Session déclarée ET sa vitalité, calculée ici une fois pour toutes : la
+ * CLI, le MCP, `doctor` et le dashboard l'affichent tous, et chacun la
+ * recalculait de son côté — un consommateur qui oubliait `alive` traitait
+ * toute session non nulle comme « occupé ».
+ * @param {string} root
+ * @returns {Promise<{pid: number, reason: string, startedAt: string, alive: boolean} | null>}
+ */
+export async function readMainSessionStatus(root) {
+  const session = await readMainSession(root);
+  return session ? { ...session, alive: isProcessAlive(session.pid) } : null;
+}
+
+/**
  * @param {string} root @param {{pid: number|null, reason: string}} params
  * @returns {Promise<{pid: number|null, reason: string, startedAt: string}>}
  */
 export async function startMainSession(root, { pid, reason }) {
   const session = { pid, reason, startedAt: new Date().toISOString() };
-  await writeJsonAtomic(mainSessionPath(root), session);
+  // Sous le verrou d'état : une publication et un retrait conditionnel
+  // concurrents (fin de `runMainSession`) ne s'entrelacent jamais.
+  await withStateLock(striartDir(root), () => writeJsonAtomic(mainSessionPath(root), session));
   return session;
 }
 
-/** Toujours permis, y compris si le PID déclaré vit encore (c'est la sortie de secours). */
-export async function stopMainSession(root) {
-  await unlink(mainSessionPath(root)).catch((error) => {
-    if (error.code !== 'ENOENT') throw error;
+/**
+ * Retire la session déclarée.
+ *  - Sans `expectPid` : toujours permis, y compris si le PID déclaré vit
+ *    encore (c'est la sortie de secours, `striart lock --stop`).
+ *  - Avec `expectPid` : retrait CONDITIONNEL, seulement si la session
+ *    publiée porte encore ce PID — la fin de `runMainSession` ne retire
+ *    jamais une réservation posée après la sienne (un `lock --stop` puis
+ *    `lock --start` d'un humain pendant la session).
+ * Idempotent : rien à retirer n'est pas une erreur.
+ * @param {string} root @param {{expectPid?: number}} [options]
+ * @returns {Promise<void>}
+ */
+export async function stopMainSession(root, { expectPid } = {}) {
+  await withStateLock(striartDir(root), async () => {
+    if (expectPid !== undefined) {
+      const current = await readMainSession(root);
+      if (current?.pid !== expectPid) return;
+    }
+    await withTransientRetry(() => unlink(mainSessionPath(root))).catch((error) => {
+      if (error.code !== 'ENOENT') throw error;
+    });
   });
 }

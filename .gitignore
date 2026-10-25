@@ -2,6 +2,10 @@ node_modules/
 .striart/
 .env
 coverage/
+# Archives et SBOM produits par npm run pack:release
+dist/
+# Sorties de cargo (composants natifs) ; Cargo.lock, lui, est versionné.
+native/target/
 *.log
 .claude/settings.local.json
 roadmap/*

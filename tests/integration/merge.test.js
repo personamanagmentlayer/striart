@@ -135,6 +135,49 @@ describe('striart merge + test gate (intégration)', () => {
     expect(ticket).toMatchObject({ reason: 'MERGE_CONFLICT', conflictedFiles: ['README.md'] });
   });
 
+  // Régression (audit CLI 2026-10-18) : chaque re-tentative du même commit
+  // créait un ticket de plus — trois tickets identiques à trier pour un seul
+  // conflit.
+  it('re-tenter le même commit met à jour son ticket ouvert au lieu d’en créer un autre', async () => {
+    await setConfig(repo.root, { testCommand: GATE_OK, semanticMerge: false });
+    await writeFile(path.join(repo.root, 'README.md'), '# version main\n');
+    await repo.git.add(['README.md']);
+    await repo.git.commit('feat: main édite le README');
+    await commitInAgent(agent, 'README.md', '# version agent\n', 'feat: agent édite le README');
+
+    const first = await mergeAgentCommit({ root: repo.root, agent: 'agent-a' });
+    // La cible avance entre les deux tentatives : le `.ours` du ticket doit suivre.
+    await writeFile(path.join(repo.root, 'README.md'), '# version main 2\n');
+    await repo.git.add(['README.md']);
+    await repo.git.commit('feat: main réédite le README');
+    // Une résolution déjà préparée par l'humain ne doit pas être écrasée.
+    await writeFile(path.join(first.ticket.dir, 'README.md.resolved'), '# humain\n');
+
+    const second = await mergeAgentCommit({ root: repo.root, agent: 'agent-a' });
+
+    expect(second.status).toBe('CONFLICT');
+    expect(second.ticket.id).toBe(first.ticket.id);
+    expect(await listConflictTickets(repo.root)).toEqual([first.ticket.id]);
+    const ticket = JSON.parse(await readFile(path.join(first.ticket.dir, 'ticket.json'), 'utf8'));
+    expect(ticket).toMatchObject({ attempts: 2, createdAt: first.ticket.createdAt });
+    expect(ticket.updatedAt).toEqual(expect.any(String));
+    const ours = await readFile(path.join(first.ticket.dir, 'README.md.ours'), 'utf8');
+    expect(ours.replaceAll('\r\n', '\n')).toBe('# version main 2\n');
+    await expect(readFile(path.join(first.ticket.dir, 'README.md.resolved'), 'utf8')).resolves.toBe(
+      '# humain\n',
+    );
+  });
+
+  it('un nouveau commit de l’agent ouvre bien un nouveau ticket', async () => {
+    await setConfig(repo.root, { testCommand: GATE_KO });
+    await commitInAgent(agent, 'a.js', 'export const a = 1;\n', 'feat: a');
+    const first = await mergeAgentCommit({ root: repo.root, agent: 'agent-a' });
+    await commitInAgent(agent, 'b.js', 'export const b = 1;\n', 'feat: b');
+    const second = await mergeAgentCommit({ root: repo.root, agent: 'agent-a' });
+    expect(second.ticket.id).not.toBe(first.ticket.id);
+    expect(await listConflictTickets(repo.root)).toHaveLength(2);
+  });
+
   it('refuse de merger sur un working tree sale', async () => {
     await writeFile(path.join(repo.root, 'wip.txt'), 'travail en cours\n');
     await repo.git.add(['wip.txt']);
@@ -194,6 +237,48 @@ describe('striart stop (intégration)', () => {
     const result = await stopAgent({ root: repo.root, agent: 'agent-a' });
     expect((await readRegistry(repo.root))['agent-a']).toBeUndefined();
     await expect(stat(result.clonePath)).resolves.toBeTruthy(); // règle d'or n°3
+    expect(result.cloneMissing).toBe(false);
+  });
+
+  // Régression (audit CLI 2026-10-18) : un clone supprimé à la main laissait
+  // l'agent MISSING inscrit pour toujours — simple-git levait sur le dossier
+  // absent, `stop` ne pouvait jamais aboutir.
+  it('clone disparu (MISSING) : stop aboutit sans --force (plus rien à perdre)', async () => {
+    const { rm } = await import('node:fs/promises');
+    await rm(agent.path, { recursive: true, force: true, maxRetries: 5 });
+    const result = await stopAgent({ root: repo.root, agent: 'agent-a' });
+    expect(result.cloneMissing).toBe(true);
+    expect((await readRegistry(repo.root))['agent-a']).toBeUndefined();
+  });
+
+  // Seul ENOENT prouve l'absence : un clone inaccessible (EACCES) existe peut-
+  // être encore avec du travail — fail closed, jamais un retrait silencieux.
+  it.runIf(process.platform !== 'win32' && process.getuid?.() !== 0)(
+    'clone inaccessible (EACCES) : refus sans --force, l’agent reste inscrit',
+    async () => {
+      const { chmod } = await import('node:fs/promises');
+      const parent = path.dirname(agent.path);
+      await chmod(parent, 0o000);
+      try {
+        await expect(stopAgent({ root: repo.root, agent: 'agent-a' })).rejects.toMatchObject({
+          code: 'AGENT_HAS_PENDING',
+        });
+      } finally {
+        await chmod(parent, 0o755);
+      }
+      expect((await readRegistry(repo.root))['agent-a']).toBeDefined();
+    },
+  );
+
+  it('clone illisible par git (BROKEN) : refus sans --force, accepté avec', async () => {
+    const { rm } = await import('node:fs/promises');
+    await rm(path.join(agent.path, '.git'), { recursive: true, force: true, maxRetries: 5 });
+    await expect(stopAgent({ root: repo.root, agent: 'agent-a' })).rejects.toMatchObject({
+      code: 'AGENT_HAS_PENDING',
+      kind: 'refusal',
+    });
+    const forced = await stopAgent({ root: repo.root, agent: 'agent-a', force: true });
+    expect(forced.cloneMissing).toBe(false);
   });
 
   it('refuse si des commits ne sont pas mergés, sauf --force', async () => {

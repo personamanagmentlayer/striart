@@ -1,0 +1,15 @@
+# Toolchain épinglée : un binaire publié doit pouvoir être reconstruit à
+# l'identique. Monter de version = changer cette ligne ET la CI dans le même
+# commit (les deux lisent ce fichier : rustup l'applique automatiquement).
+[toolchain]
+channel = "1.99.1"
+profile = "minimal"
+components = ["rustfmt", "clippy"]
+targets = [
+  "x86_64-pc-windows-msvc",
+  "aarch64-pc-windows-msvc",
+  "x86_64-apple-darwin",
+  "aarch64-apple-darwin",
+  "x86_64-unknown-linux-musl",
+  "aarch64-unknown-linux-musl",
+]

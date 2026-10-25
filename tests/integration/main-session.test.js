@@ -7,7 +7,13 @@ import { simpleGit } from 'simple-git';
 import { createTempRepo } from '../helpers/temp-repo.js';
 import { initStriart } from '../../src/init.js';
 import { createAgent } from '../../src/clone.js';
-import { readMainSession, startMainSession, stopMainSession } from '../../src/main-session.js';
+import {
+  readMainSession,
+  readMainSessionStatus,
+  startMainSession,
+  stopMainSession,
+} from '../../src/main-session.js';
+import { reserveMainSession } from '../../src/lock.js';
 import {
   mergeAgentCommit,
   retryQueue,
@@ -37,10 +43,18 @@ async function commitInAgent(info, fileName, content, message) {
   await git.commit(message);
 }
 
-/** PID garanti mort : un process enfant déjà terminé. */
+/**
+ * PID garanti mort : un process enfant déjà terminé. Le PID se lit sur le
+ * sous-process, pas sur son résultat (absent du résultat d'execa 9 — le
+ * helper rendait `undefined`, et les tests « PID mort » passaient sans
+ * jamais exercer un vrai PID).
+ */
 async function deadPid() {
-  const dead = await execa('node', ['-e', 'process.exit(0)']);
-  return dead.pid;
+  const subprocess = execa('node', ['-e', 'process.exit(0)']);
+  const { pid } = subprocess;
+  await subprocess;
+  if (!Number.isInteger(pid)) throw new Error('PID du sous-process illisible');
+  return pid;
 }
 
 describe('session principale — main-session.js (intégration)', () => {
@@ -194,6 +208,19 @@ describe('session principale — main-session.js (intégration)', () => {
       expect(await readMainSession(repo.root)).toBeNull();
     });
 
+    it('arrêt demandé (Ctrl+C) : l’agent est tué ET la session principale dépubliée', async () => {
+      process.env.FAKE_AGENT_MODE = 'hang';
+      const controller = new AbortController();
+      const pending = run({ signal: controller.signal });
+      await vi.waitFor(async () => expect(await readMainSession(repo.root)).not.toBeNull(), {
+        timeout: 10_000,
+      });
+      controller.abort();
+      const result = await pending;
+      expect(result.status).toBe('CANCELLED');
+      expect(await readMainSession(repo.root)).toBeNull();
+    });
+
     it("régression bug 2 : profil invalide échoue avant toute réservation, ne publie ni n'efface une session existante", async () => {
       expect(await readMainSession(repo.root)).toBeNull();
 
@@ -246,16 +273,13 @@ describe('session principale — main-session.js (intégration)', () => {
       // Simule une opération DÉJÀ EN VOL sous withMainLock (mergeAgentCommit,
       // syncAgentWithMain, retryQueue...) : main.lock existe, détenteur vivant
       // (notre propre PID — isProcessAlive() le voit vivant), même format que
-      // celui écrit par `acquire` (src/lock.js). On ne passe pas par un vrai
-      // mergeAgentCommit avec Test Gate lent : `withMainLock` est réentrant
-      // PAR PROCESS (compteur `depth` module-level, voir src/lock.js) — un
-      // mergeAgentCommit lancé sans attendre dans CE MÊME process ferait
-      // passer runMainSession par la voie réentrante et court-circuiterait
-      // exactement l'exclusion qu'on veut prouver, quel que soit le
-      // correctif. Matérialiser le verrou directement isole ce process
-      // (depth=0 tout du long côté runMainSession) et exerce la vraie file
-      // d'attente de `acquire()` — le mécanisme qui protège deux VRAIS
-      // process concurrents (le scénario réel de l'incident).
+      // celui écrit par `acquire` (src/lock.js), au format hérité (sans jeton
+      // ni battement). On ne passe pas par un vrai mergeAgentCommit avec Test
+      // Gate lent : dans CE MÊME process, l'exclusion passerait par la file
+      // en mémoire de withMainLock (réentrance par contexte asynchrone), pas
+      // par le fichier. Matérialiser le verrou directement exerce la vraie
+      // attente inter-process de `acquire()` — le mécanisme qui protège deux
+      // VRAIS process concurrents (le scénario réel de l'incident).
       const lockFile = path.join(repo.root, '.striart', 'main.lock');
       await writeFile(
         lockFile,
@@ -278,6 +302,62 @@ describe('session principale — main-session.js (intégration)', () => {
       // La réservation n'a pu publier la session (et donc spawner l'agent)
       // qu'APRÈS la libération du verrou externe — pas pendant qu'il était tenu.
       expect(elapsedMs).toBeGreaterThanOrEqual(releaseAfterMs - 100);
+    });
+  });
+
+  describe('reserveMainSession — striart lock --start', () => {
+    it('PID explicite vivant : réserve, la vitalité est rapportée, une seconde réservation refuse', async () => {
+      const session = await reserveMainSession(repo.root, {
+        reason: 'édition à la main',
+        pid: process.pid,
+        explicitPid: true,
+      });
+      expect(session).toMatchObject({ pid: process.pid, reason: 'édition à la main' });
+      expect(await readMainSessionStatus(repo.root)).toMatchObject({
+        pid: process.pid,
+        alive: true,
+      });
+      await expect(
+        reserveMainSession(repo.root, { reason: 'autre', pid: process.pid, explicitPid: true }),
+      ).rejects.toMatchObject({ code: 'MAIN_SESSION_LIVE', hint: 'striart lock --stop' });
+    });
+
+    it('PID mort → LOCK_PID_DEAD (une réservation qui ne protège rien est refusée), rien publié', async () => {
+      const pid = await deadPid();
+      await expect(
+        reserveMainSession(repo.root, { reason: 'x', pid, explicitPid: true }),
+      ).rejects.toMatchObject({ code: 'LOCK_PID_DEAD', kind: 'usage' });
+      expect(await readMainSession(repo.root)).toBeNull();
+    });
+
+    it('raison vide ou PID mal formé → erreur d’usage', async () => {
+      await expect(
+        reserveMainSession(repo.root, { reason: '  ', pid: process.pid, explicitPid: true }),
+      ).rejects.toMatchObject({ code: 'LOCK_REASON_EMPTY', kind: 'usage' });
+      await expect(
+        reserveMainSession(repo.root, { reason: 'x', pid: Number.NaN, explicitPid: true }),
+      ).rejects.toMatchObject({ code: 'INVALID_PID', kind: 'usage' });
+    });
+
+    // Régression (audit CLI 2026-10-18) : sous Git Bash ou `cmd /c`, le
+    // parent de la CLI meurt avec elle ; la réservation était publiée puis
+    // désarmée dès le retour de la commande, sans aucun avertissement.
+    it('PID implicite qui n’est pas un shell interactif → LOCK_PID_EPHEMERAL, commande --pid proposée', async () => {
+      const holder = execa(process.execPath, ['-e', 'setInterval(() => {}, 1000)']);
+      try {
+        await expect(
+          reserveMainSession(repo.root, { reason: 'x', pid: holder.pid, explicitPid: false }),
+        ).rejects.toMatchObject({
+          code: 'LOCK_PID_EPHEMERAL',
+          kind: 'usage',
+          details: { reason: 'NOT_A_SHELL', image: 'node' },
+          hint: expect.stringContaining('--pid'),
+        });
+        expect(await readMainSession(repo.root)).toBeNull();
+      } finally {
+        holder.kill();
+        await holder.catch(() => {});
+      }
     });
   });
 });

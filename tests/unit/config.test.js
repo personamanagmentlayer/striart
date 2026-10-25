@@ -32,8 +32,8 @@ describe('validateConfig', () => {
     expect(() => validateConfig({ autoPush: 'yes' })).toThrow(StriartError);
   });
 
-  it('tolère les clés inconnues (réservées aux phases suivantes)', () => {
-    expect(() => validateConfig({ futureOption: 123 })).not.toThrow();
+  it('refuse les clés inconnues (faute de frappe = protection silencieusement inchangée)', () => {
+    expect(() => validateConfig({ futureOption: 123 })).toThrow(StriartError);
   });
 
   it('accepte un objet llm et rejette un llm non-objet', () => {
@@ -218,13 +218,14 @@ describe('agentProfiles (mode autonome)', () => {
       JSON.stringify({ agentProfiles: { kimi: { command: 'kimi', args: ['-p', '{{prompt}}'] } } }),
     );
     const config = await loadConfig(dir);
-    expect(Object.keys(config.agentProfiles).sort()).toEqual([
-      'aider',
-      'claude',
-      'codex',
-      'kimi',
-      'ollama',
-    ]);
+    // Les profils par défaut (presets prêts du catalogue) sont tous là,
+    // historiques compris, plus celui de l'utilisateur.
+    expect(Object.keys(config.agentProfiles).sort()).toEqual(
+      [...Object.keys(DEFAULT_CONFIG.agentProfiles), 'kimi'].sort(),
+    );
+    for (const key of ['aider', 'claude', 'codex', 'ollama']) {
+      expect(config.agentProfiles).toHaveProperty(key);
+    }
     expect(config.agentProfiles.claude).toEqual(DEFAULT_CONFIG.agentProfiles.claude);
   });
 
@@ -278,5 +279,30 @@ describe('prompts surchargeables (Router/Merger)', () => {
     const config = await loadConfig(dir);
     expect(config.prompts.router).toBe('T {{task}} F {{files}}');
     expect(config.prompts.merger).toBeNull();
+  });
+});
+
+describe('validateConfig — aucune valeur dans les détails d’erreur', () => {
+  it('CONFIG_INVALID ne porte que la clé, jamais la valeur (env de profil, URL de webhook)', () => {
+    let caught;
+    try {
+      validateConfig({
+        agentProfiles: {
+          claude2: {
+            command: 'claude',
+            args: ['{{prompt}}'],
+            env: { ANTHROPIC_API_KEY: 'sk-ant-LEAK' },
+            timeout: 10,
+          },
+        },
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(StriartError);
+    expect(caught.code).toBe('CONFIG_INVALID');
+    // La clé et la raison stable seulement (contrat --json, traductions).
+    expect(caught.details).toEqual({ reason: 'INVALID_VALUE', key: 'agentProfiles' });
+    expect(JSON.stringify(caught.details)).not.toContain('sk-ant-LEAK');
   });
 });

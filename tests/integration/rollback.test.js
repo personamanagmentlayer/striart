@@ -97,6 +97,28 @@ describe('striart rollback (intégration)', () => {
     }
   });
 
+  it('origin existe mais le merge n’y est PAS poussé → reset (pas de revert à tort)', async () => {
+    // Régression : `merge-base --is-ancestor` rendait « poussé » dès que la
+    // ref distante existait (simple-git ne voit pas son code de sortie 1).
+    const remoteDir = await mkdtemp(path.join(os.tmpdir(), 'striart-remote-'));
+    await simpleGit(remoteDir).init(['--bare', '-b', 'main']);
+    await repo.git.addRemote('origin', remoteDir);
+    await repo.git.push('origin', 'main');
+    await repo.git.fetch('origin');
+    try {
+      const preMergeHead = (await repo.git.revparse(['HEAD'])).trim();
+      await commitInAgent(agent, 'feature.js', 'export const f = 1;\n', 'feat: f');
+      expect((await mergeAgentCommit({ root: repo.root, agent: 'agent-a' })).status).toBe('MERGED');
+
+      const result = await rollbackLastMerge({ root: repo.root });
+
+      expect(result).toMatchObject({ status: 'ROLLED_BACK', mode: 'reset' });
+      expect((await repo.git.revparse(['HEAD'])).trim()).toBe(preMergeHead);
+    } finally {
+      await rm(remoteDir, { recursive: true, force: true, maxRetries: 5 });
+    }
+  });
+
   it("refuse si le dernier commit n'est pas un merge Striart", async () => {
     await writeFile(path.join(repo.root, 'human.js'), 'const h = 1;\n');
     await repo.git.add(['human.js']);

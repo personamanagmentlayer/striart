@@ -113,7 +113,7 @@ describe('Réutilisation de clone (start --reuse)', () => {
     expect((await simpleGit(info.path).status()).isClean()).toBe(true);
   });
 
-  it("refuse HISTORICAL_SECRETS_FOUND si l'historique du repo principal contient un secret, --force passe outre", async () => {
+  it("refuse HISTORICAL_SECRETS_FOUND si l'historique du repo principal contient un secret ; seul allowHistoricalSecrets passe outre", async () => {
     const archive = await makeArchive();
 
     // Le main gagne un secret historique APRÈS l'archivage, puis le retire —
@@ -129,13 +129,19 @@ describe('Réutilisation de clone (start --reuse)', () => {
       reuseAgent({ root: repo.root, name: 'agent-a', secretPatterns: ['.env'] }),
     ).rejects.toMatchObject({ code: 'HISTORICAL_SECRETS_FOUND' });
 
-    const forced = await reuseAgent({
+    // `force` consent à perdre du travail, pas à exposer un secret : il ne
+    // lève plus ce contrôle (il le levait en même temps avant la 0.11).
+    await expect(
+      reuseAgent({ root: repo.root, name: 'agent-a', secretPatterns: ['.env'], force: true }),
+    ).rejects.toMatchObject({ code: 'HISTORICAL_SECRETS_FOUND' });
+
+    const allowed = await reuseAgent({
       root: repo.root,
       name: 'agent-a',
       secretPatterns: ['.env'],
-      force: true,
+      allowHistoricalSecrets: true,
     });
-    expect(forced.reused).toBe(true);
+    expect(allowed.reused).toBe(true);
   });
 
   it('runTask --reuse : exige un nom d’agent explicite (REUSE_NEEDS_AGENT), et la file mémorise reuse', async () => {

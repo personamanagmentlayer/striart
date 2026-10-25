@@ -1,32 +1,20 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
+import { describe, expect, it } from 'vitest';
 import xtermHeadless from '@xterm/headless';
-import { stopPtyHost } from '../../src/pty-host.ts';
 import {
   computeSuggestions,
   looksLikeIdleShellPrompt,
   LogTailManager,
   parseAgentMessage,
   readTerminalLines,
-  routeAgentMessage,
   TERMINAL_TAB,
   tokenizeCommand,
   writeToTerminal,
 } from '../../src/watch-ui.ts';
-import {
-  connectWithRetry,
-  seedAgentRegistry,
-  waitFor,
-  withRealPtySlot,
-} from '../helpers/pty-test-utils.js';
+import { waitFor } from '../helpers/pty-test-utils.js';
 
 // Cf. le même commentaire dans watch-ui.ts : import CJS par défaut puis
 // déstructuration à l'exécution, `@xterm/headless` n'a pas d'export ESM nommé.
 const { Terminal: HeadlessTerminal } = xtermHeadless;
-
-const ECHO_EOL = process.platform === 'win32' ? '\r\n' : '\n';
 
 describe('tokenizeCommand', () => {
   it('découpe une ligne simple sur les espaces', () => {
@@ -266,7 +254,7 @@ describe('looksLikeIdleShellPrompt', () => {
 /**
  * Seul membre de `LogTailManager` qui ne touche ni pty ni socket (le reste
  * dépend de `ensurePtyHost`/`connectAttachClient` réels — testés via
- * `routeAgentMessage` ci-dessous) : `root` n'a donc pas besoin d'exister sur
+ * `routeAgentMessage`, testé en intégration : watch-ui-route.test.js) : `root` n'a donc pas besoin d'exister sur
  * le disque pour ce test.
  */
 describe('LogTailManager.appendCommandOutput', () => {
@@ -318,67 +306,4 @@ describe('LogTailManager.appendCommandOutput', () => {
     await waitFor(() => manager.get(TERMINAL_TAB).lines.length > 0);
     expect(linesText(manager.get(TERMINAL_TAB).lines)).toContain('❯ /profiles');
   });
-});
-
-describe('routeAgentMessage', () => {
-  let root;
-  const agent = 'agent-route';
-
-  beforeEach(async () => {
-    root = await mkdtemp(path.join(os.tmpdir(), 'striart-watch-ui-'));
-  });
-
-  afterEach(async () => {
-    await stopPtyHost(root, agent).catch(() => {});
-    await rm(root, { recursive: true, force: true }).catch(() => {});
-    await new Promise((resolve) => setTimeout(resolve, 400)); // cf. pty-attach.test.js
-  });
-
-  it('refuse un agent inconnu (meta absente)', async () => {
-    const result = await routeAgentMessage(root, 'fantome', 'salut', undefined);
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toContain('inconnu');
-  });
-
-  it('refuse explicitement un agent en mode autonome (Phase E non câblée)', async () => {
-    const result = await routeAgentMessage(root, agent, 'salut', {
-      mode: 'autonomous',
-      path: root,
-      command: null,
-    });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.reason).toContain('autonome');
-      expect(result.reason).toContain('Phase E');
-    }
-  });
-
-  it(
-    "démarre l'hôte au besoin et livre le message à un agent supervisé (vérifié via un attach client)",
-    () =>
-      withRealPtySlot(async () => {
-        // ensurePtyHost (appelé par routeAgentMessage) exige désormais un agent
-        // réellement inscrit au registre (défense en profondeur) — seedé ici,
-        // séparément du 4e argument (agentMeta) passé directement à la fonction.
-        await seedAgentRegistry(root, agent);
-        // `command` est l'OUTIL de l'agent (résolu par resolveAttendedCommand),
-        // pas le shell hébergeant le pty (celui-là est toujours defaultShell() —
-        // fixé par routeAgentMessage) : lui passer SHELL relancerait un second
-        // shell imbriqué comme "commande initiale", pas ce que ce test vérifie.
-        const result = await routeAgentMessage(root, agent, 'echo ROUTE-MARQUEUR', {
-          mode: 'attended',
-          path: root,
-          command: 'echo COMMANDE-INITIALE-IGNOREE',
-        });
-        expect(result.ok).toBe(true);
-
-        // Grâce au tampon de rejeu (pty-attach.ts), un client qui se connecte
-        // APRÈS l'envoi voit quand même la sortie déjà produite.
-        let buffer = '';
-        const conn = await connectWithRetry(root, agent, { onData: (t) => (buffer += t) });
-        await waitFor(() => buffer.includes(`ROUTE-MARQUEUR${ECHO_EOL}`));
-        conn.close();
-      }),
-    45000,
-  );
 });
