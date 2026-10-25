@@ -275,8 +275,11 @@ export async function restrictToCurrentUser(file: string): Promise<void> {
       await execa(windowsTool('icacls.exe'), [file, '/inheritance:r', '/grant:r', `*${sid}:(F)`], {
         windowsHide: true,
       });
-      if (!sddlRestrictedTo(await readSddl(file), sid))
-        throw new Error('ACL still grants other accounts');
+      const sddl = await readSddl(file);
+      // La DACL (SDDL : SID et droits, aucun secret) accompagne le refus : sans elle,
+      // un compte dont l'écriture SDDL est inattendue est indiagnostiquable.
+      if (!sddlRestrictedTo(sddl, sid))
+        throw new Error(`ACL still grants other accounts (${sddl})`);
     } catch (error) {
       throw unprotected(file, 'icacls', error);
     }

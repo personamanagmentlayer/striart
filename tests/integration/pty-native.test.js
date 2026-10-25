@@ -84,7 +84,7 @@ describe('hôte de pty natif', () => {
           args: ['flood-on-go', '4000000'],
           cwd: root,
           replayBytes: 4_096,
-          clientQueueBytes: 65_536,
+          clientQueueBytes: 1_048_576, // 1 Mio : le lecteur ne doit pas être évincé par un simple retard de CI (flot : 4 Mo)
         });
         const slow = rawClient(root, agent);
         await waitFor(() => slow.frames.some((f) => f.type === 'hello'), REAL_PTY_WAIT_MS);

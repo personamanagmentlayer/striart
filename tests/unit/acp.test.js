@@ -142,7 +142,7 @@ describe('acp — session supervisée (faux agent ACP)', () => {
   it('end_turn → COMPLETED, et le log raconte le déroulé (handshake, plan, messages)', async () => {
     process.env.FAKE_ACP_MODE = 'message';
     const result = await run();
-    expect(result.status).toBe('COMPLETED');
+    expect(result.status, `${result.errorCode}: ${result.error}`).toBe('COMPLETED');
     expect(result.stopReason).toBe('end_turn');
     expect(result.error).toBeNull();
 
@@ -195,7 +195,7 @@ describe('acp — session supervisée (faux agent ACP)', () => {
   it('fs via le client : lecture/écriture servies DANS le clone', async () => {
     process.env.FAKE_ACP_MODE = 'fs';
     const result = await run();
-    expect(result.status).toBe('COMPLETED');
+    expect(result.status, `${result.errorCode}: ${result.error}`).toBe('COMPLETED');
     await expect(readFile(path.join(clone, 'via-client.txt'), 'utf8')).resolves.toContain(
       'écrit via le client ACP',
     );
@@ -207,7 +207,7 @@ describe('acp — session supervisée (faux agent ACP)', () => {
     process.env.FAKE_ACP_MODE = 'fs-escape';
     const result = await run();
     // end_turn seulement si le faux agent a bien REÇU le refus (voir helper).
-    expect(result.status).toBe('COMPLETED');
+    expect(result.status, `${result.errorCode}: ${result.error}`).toBe('COMPLETED');
     expect(await exists(path.join(root, '..', 'evasion.txt'))).toBe(false);
     await expect(readFile(result.logPath, 'utf8')).resolves.toContain('REFUSÉE');
   });
@@ -216,14 +216,14 @@ describe('acp — session supervisée (faux agent ACP)', () => {
     process.env.FAKE_ACP_MODE = 'fs-read-cap';
     await writeFile(path.join(clone, 'gros.txt'), 'x'.repeat(5_000));
     const result = await run(profile({ acp: { fsReadMaxBytes: 1_024 } }));
-    expect(result.status).toBe('COMPLETED');
+    expect(result.status, `${result.errorCode}: ${result.error}`).toBe('COMPLETED');
     await expect(readFile(result.logPath, 'utf8')).resolves.toContain('lecture REFUSÉE');
   });
 
   it('permission accordée par la politique allow, tracée au log', async () => {
     process.env.FAKE_ACP_MODE = 'permission';
     const result = await run();
-    expect(result.status).toBe('COMPLETED');
+    expect(result.status, `${result.errorCode}: ${result.error}`).toBe('COMPLETED');
     await expect(readFile(result.logPath, 'utf8')).resolves.toContain('[permission]');
   });
 
@@ -249,7 +249,7 @@ describe('acp — session supervisée (faux agent ACP)', () => {
       prompt: 'fais le travail',
       timeoutMs: 15_000,
     });
-    expect(result.status).toBe('COMPLETED');
+    expect(result.status, `${result.errorCode}: ${result.error}`).toBe('COMPLETED');
     expect(result.stopReason).toBe('end_turn');
   });
 });
@@ -334,7 +334,7 @@ describe('acp — semi-autonome (politique ask, Phase F)', () => {
 
     await answerPermissionRequest(root, request.id, 'ok');
     const result = await session;
-    expect(result.status).toBe('COMPLETED');
+    expect(result.status, `${result.errorCode}: ${result.error}`).toBe('COMPLETED');
     const log = await readFile(result.logPath, 'utf8');
     expect(log).toContain("en attente d'arbitrage humain");
     expect(log).toContain('(humain)');

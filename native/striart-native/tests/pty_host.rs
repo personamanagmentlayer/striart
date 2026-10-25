@@ -486,11 +486,11 @@ fn client_lent_evince_puis_rejeu_sans_coupure_de_sequence() {
     let program: Vec<&str> = program.iter().map(String::as_str).collect();
     let mut host = spawn_host(
         "slow",
-        // File de 256 Kio : le client lent (4 Mo de flot, il ne lit rien) est
+        // File de 1 Mio : le client lent (4 Mo de flot, il ne lit rien) est
         // évincé sans ambiguïté, alors que le pilote — qui lit sans cesse — ne
-        // l'est que s'il a plus de 256 Kio de retard, ce qu'une machine
+        // l'est que s'il a plus de 1 Mio de retard, ce qu'une machine
         // chargée (CI partagée) ne provoque pas.
-        &["--replay-bytes", "4096", "--client-queue-bytes", "262144"],
+        &["--replay-bytes", "4096", "--client-queue-bytes", "1048576"],
         &program,
     );
     // Journal de l'hôte lu au fil de l'eau : l'éviction y est un événement.
@@ -531,13 +531,15 @@ fn client_lent_evince_puis_rejeu_sans_coupure_de_sequence() {
         );
         let _ = driver.next(Duration::from_millis(100));
     }
-    // Le driver finit de lire le flot AVANT toute autre étape : s'il cessait de
-    // lire pendant que le programme écrit encore, sa file (256 Kio) déborderait
+    // Le client lent reprend sa lecture TOUT DE SUITE : frames déjà dans les
+    // tampons, puis `evicted`, puis fermeture. L'hôte ne lui laisse que
+    // EVICTION_FORCE_CLOSE (30 s) pour lire cette frame ; l'attendre après la
+    // fin du flot (lente sur une CI chargée) la ferait perdre.
+    let frames = start_reader(Arc::clone(&slow));
+    // Le driver finit de lire le flot avant toute autre étape : s'il cessait de
+    // lire pendant que le programme écrit encore, sa file (1 Mio) déborderait
     // et il serait évincé à son tour (constaté en CI musl : « Broken pipe »).
     driver.until_output("FLOOD-DONE");
-    // Le client lent reprend sa lecture : frames déjà dans les tampons, puis
-    // `evicted`, puis fermeture.
-    let frames = start_reader(Arc::clone(&slow));
     let deadline = Instant::now() + WAIT;
     let mut evicted = false;
     loop {
