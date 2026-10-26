@@ -236,7 +236,10 @@ setTimeout(() => { process.stdout.write('done\\n'); }, 2000);
     killLater(grandchild);
     const report = await job.report;
     expect(report.timedOut).toBe(true);
-    expect(report.killedOnTimeout).toBeGreaterThanOrEqual(2);
+    // Le rapport complet accompagne l'échec : le décompte seul ne dit pas QUI a été tué.
+    expect(report.killedOnTimeout, JSON.stringify({ report, grandchild })).toBeGreaterThanOrEqual(
+      2,
+    );
     expect(Date.now() - started).toBeLessThan(30_000);
     expect(await dead(grandchild)).toBe(true);
   });
