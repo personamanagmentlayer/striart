@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import os from 'node:os';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { isProcessAlive } from '../../src/process-tree.js';
@@ -14,6 +13,7 @@ import {
   withRealPtySlot,
   ECHO_EOL,
 } from '../helpers/pty-test-utils.js';
+import { createSocketSafeTempDir } from '../helpers/temp-repo.js';
 
 // Shell SANS profil : ces tests portent sur l'hôte, pas sur le démarrage du
 // profil PowerShell (cf. quietShell). Le démarrage du shell par défaut du
@@ -25,7 +25,7 @@ describe('pty-host', () => {
   const agent = 'agent-host';
 
   beforeEach(async () => {
-    root = await mkdtemp(path.join(os.tmpdir(), 'striart-pty-host-'));
+    root = await createSocketSafeTempDir('sph-');
     await seedAgentRegistry(root, agent);
   });
 

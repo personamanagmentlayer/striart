@@ -1,7 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtemp, rm, stat } from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
+import { rm, stat } from 'node:fs/promises';
 import { StriartError } from '../../src/errors.js';
 import {
   attachSocketPath,
@@ -18,6 +16,7 @@ import {
   withRealPtySlot,
   ECHO_EOL,
 } from '../helpers/pty-test-utils.js';
+import { createSocketSafeTempDir } from '../helpers/temp-repo.js';
 
 // Un vrai shell interactif — pas `node -e` : node-pty (ConPTY) plante
 // (« AttachConsole failed », interne à node-pty) quand le process hébergé
@@ -36,7 +35,7 @@ describe('pty-attach', () => {
   const agent = 'agent-a';
 
   beforeEach(async () => {
-    root = await mkdtemp(path.join(os.tmpdir(), 'striart-pty-'));
+    root = await createSocketSafeTempDir('spa-');
   });
 
   afterEach(async () => {

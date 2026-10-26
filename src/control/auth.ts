@@ -83,6 +83,10 @@ export class SignInVerifier {
     if (!match) return 'invalid';
     const [, nonce, exp, signature] = match;
     const expected = mac(this.token, this.port, nonce, exp);
+    // Forme canonique exigée : 43 car. base64url = 258 bits pour 256 utiles, les 2 bits de
+    // bourrage du dernier caractère sont ignorés au décodage — sans ce contrôle, plusieurs
+    // chaînes distinctes seraient acceptées pour la même signature (malléabilité).
+    if (signature !== expected.toString('base64url')) return 'invalid';
     const given = Buffer.from(signature, 'base64url');
     // Temps constant : longueur fixée par le motif (43 car. = 32 octets).
     if (given.length !== expected.length || !timingSafeEqual(given, expected)) return 'invalid';

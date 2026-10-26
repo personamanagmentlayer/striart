@@ -32,7 +32,13 @@ describe.skipIf(!nativeAvailable)('Test Gate à orphelin (conteneur natif réel)
       "const { spawn } = require('node:child_process');\n" +
         "const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { detached: true, stdio: 'ignore' });\n" +
         "require('node:fs').writeFileSync(process.argv[2], String(child.pid));\n" +
-        'child.unref();\n',
+        'child.unref();\n' +
+        // Sous macOS (pas de subreaper), le conteneur ÉCHANTILLONNE les descendants
+        // toutes les 100 ms : un parent qui meurt avant le premier échantillon laisse
+        // un orphelin jamais observé (limite documentée de src/job/unix.rs). On
+        // garde donc le parent vivant plus longtemps que la cadence d'échantillonnage ;
+        // l'orphelin n'en reste pas moins vivant APRÈS la fin du programme.
+        'setTimeout(() => {}, 400);\n',
     );
     await writeFile(
       path.join(repo.root, '.striartrc.json'),

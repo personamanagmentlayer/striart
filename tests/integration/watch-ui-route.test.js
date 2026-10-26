@@ -1,7 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
+import { rm } from 'node:fs/promises';
 import { stopPtyHost } from '../../src/pty-host.ts';
 import { routeAgentMessage } from '../../src/watch-ui.ts';
 import {
@@ -13,6 +11,7 @@ import {
   writeQuietPtyConfig,
   ECHO_EOL,
 } from '../helpers/pty-test-utils.js';
+import { createSocketSafeTempDir } from '../helpers/temp-repo.js';
 
 // Rangé en intégration (et non avec le reste de watch-ui) : ce bloc démarre un
 // VRAI hôte de pty et un shell — process, disque, temps réel. Dans la suite
@@ -24,7 +23,7 @@ describe('routeAgentMessage', () => {
   const agent = 'agent-route';
 
   beforeEach(async () => {
-    root = await mkdtemp(path.join(os.tmpdir(), 'striart-watch-ui-'));
+    root = await createSocketSafeTempDir('swu-');
   });
 
   afterEach(async () => {

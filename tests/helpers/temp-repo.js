@@ -55,3 +55,16 @@ export async function createTempRepo() {
 
   return { root, git, cleanup };
 }
+
+/**
+ * Racine temporaire dont le chemin tient dans `sockaddr_un.sun_path` (104
+ * octets sous macOS, NUL compris) une fois `.striart/pty/<agent>/attach.sock`
+ * ajouté. Le TMPDIR d'un runner macOS (`/private/var/folders/xx/…/T`) en
+ * consomme à lui seul plus de 60 : le garde `PTY_ENDPOINT_TOO_LONG` du produit
+ * est voulu, ce sont les tests d'hôte de pty qui doivent partir d'un préfixe
+ * court. Sous Windows (named pipes) le TMPDIR habituel convient.
+ */
+export async function createSocketSafeTempDir(prefix) {
+  const base = process.platform === 'win32' ? os.tmpdir() : '/tmp';
+  return mkdtemp(path.join(await realpath(base), prefix));
+}

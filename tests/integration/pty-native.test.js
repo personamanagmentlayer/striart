@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { readFile, rm, stat, writeFile } from 'node:fs/promises';
 import net from 'node:net';
-import os from 'node:os';
 import path from 'node:path';
 import { isProcessAlive } from '../../src/process-tree.js';
 import { attachSocketPath, connectAttachClient } from '../../src/pty-attach.ts';
@@ -18,6 +17,7 @@ import {
   withRealPtySlot,
 } from '../helpers/pty-test-utils.js';
 import { REPO_ROOT, nativeFixturePath } from '../helpers/native.js';
+import { createSocketSafeTempDir } from '../helpers/temp-repo.js';
 
 // Lot R2 : hôte de pty natif. Ces tests portent sur ce que l'hôte Node ne
 // faisait pas (contre-pression, rejeu sans coupure, arrêt propre mesuré,
@@ -61,7 +61,7 @@ describe('hôte de pty natif', () => {
   const agent = 'agent-native';
 
   beforeEach(async () => {
-    root = await mkdtemp(path.join(os.tmpdir(), 'striart-pty-native-'));
+    root = await createSocketSafeTempDir('spn-');
     await seedAgentRegistry(root, agent);
     openedTerminals.length = 0;
   });
