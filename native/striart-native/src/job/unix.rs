@@ -109,11 +109,15 @@ impl Container {
             if targets.is_empty() {
                 break;
             }
-            for target in &targets {
+            // Descendants AVANT leurs ancêtres : tuer le parent d'un descendant
+            // arrêté (SIGSTOP) orpheline son groupe, et le noyau lui envoie alors
+            // SIGHUP+SIGCONT (règle POSIX des groupes orphelins) — il meurt avant
+            // notre SIGKILL, répond `Gone` et n'est jamais compté (observé sous macOS).
+            for target in targets.iter().rev() {
                 unix::stop_verified(target.pid, target.start_ms);
             }
             let mut progressed = false;
-            for target in &targets {
+            for target in targets.iter().rev() {
                 if sys::kill_verified(target.pid, target.start_ms) == KillOutcome::Killed {
                     killed.push(target.pid);
                     progressed = true;
