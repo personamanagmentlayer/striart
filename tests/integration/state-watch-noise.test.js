@@ -61,7 +61,8 @@ describe('watchers de .striart/ — le bruit des verrous ne rafraîchit rien (in
     await settle(600);
     await makeNoise(repo.root);
     await settle(1200);
-    expect(batches).toHaveLength(0);
+    // Les lots reçus accompagnent l'échec : quel chemin a déclenché le rafraîchissement ?
+    expect(batches, JSON.stringify(batches)).toHaveLength(0);
     await writeFile(path.join(striartDir(repo.root), 'state.json'), '{"manualMode":true}');
     await settle(1200);
     expect(batches.length).toBeGreaterThan(0);
