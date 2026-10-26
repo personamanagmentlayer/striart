@@ -2,8 +2,9 @@
 //! tests/integration/pty-native.test.js) : comportements déterministes,
 //! indépendants du shell de la machine.
 //!
-//! - `flood-on-go <octets>` : attend une ligne « go » sur l'entrée, puis
-//!   écrit <octets> octets d'unités mêlant séquences ANSI (CSI, OSC, DCS) et
+//! - `flood-on-go <octets> [pause-ms]` : attend une ligne « go » sur l'entrée, puis
+//!   écrit <octets> octets (par blocs de 32 Kio, `pause-ms` ms entre deux blocs :
+//!   un flot CADENCÉ laisse un lecteur JS suivre sur une machine chargée) d'unités mêlant séquences ANSI (CSI, OSC, DCS) et
 //!   caractères UTF-8 multi-octets, puis `FLOOD-DONE`, puis attend la fin de
 //!   l'entrée ;
 //! - `echo-lines` : réécrit chaque ligne lue préfixée de `ECHO:` ;
@@ -69,10 +70,18 @@ fn main() {
                 }
             }
             let _ = out.write_all(TITLE.as_bytes());
+            let pause_ms: u64 = args.get(2).and_then(|n| n.parse().ok()).unwrap_or(0);
             let mut written = 0usize;
+            let mut since_pause = 0usize;
             while written < total {
                 let _ = out.write_all(UNIT.as_bytes());
                 written += UNIT.len();
+                since_pause += UNIT.len();
+                if pause_ms > 0 && since_pause >= 32 * 1024 {
+                    let _ = out.flush();
+                    std::thread::sleep(std::time::Duration::from_millis(pause_ms));
+                    since_pause = 0;
+                }
             }
             let _ = writeln!(out, "FLOOD-DONE");
             let _ = out.flush();

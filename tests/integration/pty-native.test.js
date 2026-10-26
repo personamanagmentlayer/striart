@@ -81,7 +81,9 @@ describe('hôte de pty natif', () => {
       withRealPtySlot(async () => {
         await ensurePtyHost(root, agent, {
           shell: FIXTURE,
-          args: ['flood-on-go', '4000000'],
+          // 1 ms entre blocs de 32 Kio : le lecteur JS suit même sur un runner chargé ; le client
+          // en pause, lui, atteint quand même 1 Mio et est évincé.
+          args: ['flood-on-go', '4000000', '1'],
           cwd: root,
           replayBytes: 4_096,
           clientQueueBytes: 1_048_576, // 1 Mio : le lecteur ne doit pas être évincé par un simple retard de CI (flot : 4 Mo)

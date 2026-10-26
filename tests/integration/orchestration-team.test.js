@@ -173,7 +173,10 @@ describe(
         root: repo.root,
         planText: teamPlan({ cadence: 'parallel' }),
       });
-      expect(nodes[0], JSON.stringify(nodes[0])).toMatchObject({
+      expect(
+        nodes[0],
+        JSON.stringify({ node: nodes[0], stamps: await script.stamps() }),
+      ).toMatchObject({
         status: 'TEAM_COMMIT_FORBIDDEN',
         kept: true,
       });

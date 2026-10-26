@@ -51,7 +51,29 @@ if (spec.promptLog) appendFileSync(spec.promptLog, `\n=== invocation ${n} ===\n$
 
 const turns = spec.turns ?? [{}];
 const turn = turns[Math.min(n, turns.length - 1)] ?? {};
-const git = (args) => execFileSync('git', args, { stdio: 'pipe' });
+// Plusieurs sessions partagent un clone (mode team) : un verrou d'index tenu un instant
+// par un autre git (l'orchestrateur, un autre rôle) ne doit pas tuer le faux agent.
+// Toute autre erreur, ou un verrou durable, reste fatale — et sa trace est consignée.
+const git = (args) => {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return execFileSync('git', args, { stdio: 'pipe' });
+    } catch (error) {
+      const text = String(error.stderr ?? error.message);
+      if (attempt < 20 && /\.lock/.test(text)) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+        continue;
+      }
+      if (spec.stampLog)
+        appendFileSync(
+          spec.stampLog,
+          `${turn.stamp ?? 'agent'}-git-error:${text.trim()}
+`,
+        );
+      throw error;
+    }
+  }
+};
 
 const stamp = (phase) => {
   if (turn.stamp && spec.stampLog) appendFileSync(spec.stampLog, `${turn.stamp}-${phase}\n`);
