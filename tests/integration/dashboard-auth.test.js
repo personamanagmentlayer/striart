@@ -164,7 +164,10 @@ describe('dashboard — authentification par jeton (intégration)', () => {
       expect(sddl).toMatch(/^D:P/);
       const aces = [...sddl.matchAll(/\(([^)]*)\)/g)].map((m) => m[1].split(';'));
       expect(aces.length).toBe(1);
-      expect(aces[0][5]).toBe(sid);
+      // Le formateur SDDL substitue un alias au SID de l'administrateur local (RID 500,
+      // ex. `runneradmin` en CI → `LA`) : le MÊME compte, jamais un autre.
+      const aliases = /^S-1-5-21-\d+-\d+-\d+-500$/.test(sid) ? [sid, 'LA'] : [sid];
+      expect(aliases).toContain(aces[0][5]);
     } else {
       expect((await stat(file)).mode & 0o777).toBe(0o600);
       expect((await stat(path.dirname(file))).mode & 0o077).toBe(0);
