@@ -39,6 +39,11 @@ export async function createTempRepo() {
   await git.init(['-b', 'main']);
   await git.addConfig('user.name', 'Striart Test');
   await git.addConfig('user.email', 'striart-test@example.com');
+  // Pas de maintenance en arrière-plan : un `gc --auto` / repack concurrent d'un
+  // clone local (objets hardlinkés) peut retirer un objet pendant la copie
+  // (« failed to copy file … No such file or directory », vu en CI Linux).
+  await git.addConfig('gc.auto', '0');
+  await git.addConfig('maintenance.auto', 'false');
   await writeFile(path.join(root, 'README.md'), '# test\n');
   await git.add(['README.md']);
   await git.commit('chore: initial commit');
