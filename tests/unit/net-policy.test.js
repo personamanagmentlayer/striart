@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ProxyAgent } from 'undici';
 import {
   hostMatches,
   isLoopbackHost,
@@ -277,39 +278,29 @@ describe('net — TLS', () => {
   });
 });
 
-describe('net — proxy : capacités de Node', () => {
+describe('net — proxy : dispatcher undici par requête (indépendant de la version de Node)', () => {
   const proxyEnv = { HTTPS_PROXY: 'http://proxy.corp.example:3128' };
 
-  it('proxy posé mais ni API runtime ni NODE_USE_ENV_PROXY → NET_PROXY_UNSUPPORTED actionnable', async () => {
-    const transport = vi.fn(async () => ok());
-    const error = await netFetch(
-      'https://api.openai.com/v1',
-      { purpose: 'llm' },
-      {
-        env: proxyEnv,
-        userConfig: userWith(),
-        transport,
-        capabilities: { runtimeProxyApi: false, startupProxyFlag: false },
-      },
-    ).catch((e) => e);
-    expect(error.code).toBe('NET_PROXY_UNSUPPORTED');
-    expect(error.hint).toMatch(/NODE_USE_ENV_PROXY=1/);
-    expect(transport).not.toHaveBeenCalled();
-  });
-
-  it('NO_PROXY qui couvre la cible : aucune erreur même sans mécanisme de proxy', async () => {
+  it('proxy HTTPS configuré : le transport reçoit un dispatcher ProxyAgent', async () => {
     const transport = vi.fn(async () => ok());
     await netFetch(
       'https://api.openai.com/v1',
       { purpose: 'llm' },
-      {
-        env: { ...proxyEnv, NO_PROXY: '.openai.com' },
-        userConfig: userWith(),
-        transport,
-        capabilities: { runtimeProxyApi: false, startupProxyFlag: false },
-      },
+      { env: proxyEnv, userConfig: userWith(), transport },
     );
     expect(transport).toHaveBeenCalledTimes(1);
+    expect(transport.mock.calls[0][1].dispatcher).toBeInstanceOf(ProxyAgent);
+  });
+
+  it('NO_PROXY qui couvre la cible : aucun dispatcher, aucune erreur', async () => {
+    const transport = vi.fn(async () => ok());
+    await netFetch(
+      'https://api.openai.com/v1',
+      { purpose: 'llm' },
+      { env: { ...proxyEnv, NO_PROXY: '.openai.com' }, userConfig: userWith(), transport },
+    );
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect(transport.mock.calls[0][1].dispatcher).toBeUndefined();
   });
 
   it('boucle locale : jamais concernée par le proxy', async () => {
@@ -317,57 +308,36 @@ describe('net — proxy : capacités de Node', () => {
     await netFetch(
       'http://localhost:11434/api/tags',
       { purpose: 'probe' },
-      {
-        env: proxyEnv,
-        userConfig: userWith(),
-        transport,
-        capabilities: { runtimeProxyApi: false, startupProxyFlag: false },
-      },
+      { env: proxyEnv, userConfig: userWith(), transport },
     );
     expect(transport).toHaveBeenCalledTimes(1);
+    expect(transport.mock.calls[0][1].dispatcher).toBeUndefined();
   });
 
-  it('NODE_USE_ENV_PROXY=1 posé au démarrage : proxy actif via Node, rien à faire', async () => {
+  it('proxy de la config utilisateur : fonctionne sans condition de version de Node', async () => {
     const transport = vi.fn(async () => ok());
     await netFetch(
       'https://api.openai.com/v1',
       { purpose: 'llm' },
       {
-        env: proxyEnv,
-        userConfig: userWith(),
+        env: {},
+        userConfig: userWith({ proxy: 'http://proxy.corp.example:3128' }),
         transport,
-        capabilities: { runtimeProxyApi: false, startupProxyFlag: true },
       },
     );
     expect(transport).toHaveBeenCalledTimes(1);
-  });
-
-  it('proxy de la config utilisateur sans API runtime : refusé (le flag de démarrage ne lit que l’environnement)', async () => {
-    const error = await netFetch(
-      'https://api.openai.com/v1',
-      { purpose: 'llm' },
-      {
-        env: {},
-        userConfig: userWith({ proxy: 'http://proxy.corp.example:3128' }),
-        transport: vi.fn(async () => ok()),
-        capabilities: { runtimeProxyApi: false, startupProxyFlag: true },
-      },
-    ).catch((e) => e);
-    expect(error.code).toBe('NET_PROXY_UNSUPPORTED');
+    expect(transport.mock.calls[0][1].dispatcher).toBeInstanceOf(ProxyAgent);
   });
 
   it('schéma de proxy non supporté (socks5) : NET_PROXY_UNSUPPORTED', async () => {
+    const transport = vi.fn(async () => ok());
     const error = await netFetch(
       'https://api.openai.com/v1',
       { purpose: 'llm' },
-      {
-        env: { HTTPS_PROXY: 'socks5://proxy:1080' },
-        userConfig: userWith(),
-        transport: vi.fn(async () => ok()),
-        capabilities: { runtimeProxyApi: true, startupProxyFlag: false },
-      },
+      { env: { HTTPS_PROXY: 'socks5://proxy:1080' }, userConfig: userWith(), transport },
     ).catch((e) => e);
     expect(error.code).toBe('NET_PROXY_UNSUPPORTED');
+    expect(transport).not.toHaveBeenCalled();
   });
 });
 

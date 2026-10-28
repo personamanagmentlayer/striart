@@ -327,21 +327,16 @@ async function addNetworkCheck(add) {
       source: policy.proxy.source,
       proxy: shown,
       noProxy: policy.proxy.noProxy,
-      mechanism: proxy.mechanism,
       problem: proxy.problem,
     };
     if (proxy.active) {
-      const how =
-        proxy.mechanism === 'runtime'
-          ? 'appliqué à l’exécution'
-          : 'NODE_USE_ENV_PROXY au démarrage';
       const bypass = policy.proxy.noProxy ? ` ; hors proxy : ${policy.proxy.noProxy}` : '';
       add(
         'network',
         'ok',
         'network.proxyActive',
         params,
-        `proxy actif (${policy.proxy.source}, ${how}) : ${shown}${bypass}`,
+        `proxy actif (${policy.proxy.source}, dispatcher undici par requête) : ${shown}${bypass}`,
       );
     } else {
       add(
@@ -349,10 +344,8 @@ async function addNetworkCheck(add) {
         'warn',
         'network.proxyInactive',
         params,
-        `proxy configuré (${shown}) mais INACTIF sur Node ${report.nodeVersion} (${proxy.problem}) : les appels distants sont refusés (NET_PROXY_UNSUPPORTED)`,
-        proxy.problem === 'SCHEME'
-          ? 'utilise une URL de proxy http:// ou https://'
-          : 'démarre striart avec NODE_USE_ENV_PROXY=1 (Node >= 22.21 / 24.5) ou passe à Node >= 24.14 / 25.4',
+        `proxy configuré (${shown}) mais INACTIF (${proxy.problem}) : les appels distants sont refusés (NET_PROXY_UNSUPPORTED)`,
+        'utilise une URL de proxy http:// ou https:// (les proxys SOCKS ne sont pas supportés)',
       );
     }
   }

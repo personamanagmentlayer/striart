@@ -607,12 +607,16 @@ the ACP registry and its archives. Invariant **checked by a test**
 valid `http(s)` URL, offline mode, the host allow-list, **HTTPS required** (API
 key or not), TLS verification never switched off, **no redirect followed**
 (bounded, hop-by-hop rechecked following for the ACP registry archives only) —
-then applies to the process, idempotently and all-or-nothing, the corporate
-proxy (`http.setGlobalProxyFromEnv`, or the environment proxy enabled at
-startup), the corporate CA (`tls.setDefaultCACertificates`, **added** to the
-default authorities) and the minimum TLS version. A proxy that is configured but
-cannot be applied on this Node **refuses** the call (`NET_PROXY_UNSUPPORTED`)
-rather than letting it go out directly.
+then builds, **per request** (never a global process effect), an `undici`
+dispatcher (`ProxyAgent`) for the corporate proxy; the corporate CA
+(`tls.setDefaultCACertificates`, **added** to the default authorities) and the
+minimum TLS version remain applied to the process, idempotently and
+all-or-nothing. Decision of 2026-10-28 (incident found in CI): Node's native
+mechanism (`http.setGlobalProxyFromEnv` / `NODE_USE_ENV_PROXY`) tunnels EVERY
+request via CONNECT, including `http://` targets — broken for a standard
+forward proxy on Node 22/24/25 as of this date, so it is never used. A proxy
+with a scheme other than `http:`/`https:` (SOCKS included) **refuses** the call
+(`NET_PROXY_UNSUPPORTED`) rather than letting it go out directly.
 
 The policy is a **user decision**: shell environment and **user config**
 (`network`, `src/user-config.ts`) — never the repository config, never the

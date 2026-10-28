@@ -7,7 +7,6 @@ import tls from 'node:tls';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
   applyNetworkSettings,
-  currentProxyCapabilities,
   readCaFile,
   resetNetState,
   resolveNetworkPolicy,
@@ -105,7 +104,7 @@ describe('net — CA d’entreprise et TLS minimal', () => {
         const untrusted = await fetch(url).catch((e) => e);
         expect(untrusted.cause?.code).toMatch(/SELF_SIGNED|UNABLE_TO_VERIFY|UNABLE_TO_GET_ISSUER/);
 
-        await applyNetworkSettings(policyWith({ caFile: pki.caFile }), currentProxyCapabilities());
+        await applyNetworkSettings(policyWith({ caFile: pki.caFile }));
         expect(await (await fetch(url)).text()).toBe('ok');
 
         resetNetState();
@@ -119,10 +118,7 @@ describe('net — CA d’entreprise et TLS minimal', () => {
 
   it('tlsMinVersion est appliqué au défaut du processus, puis restauré', async () => {
     const before = tls.DEFAULT_MIN_VERSION;
-    await applyNetworkSettings(
-      policyWith({ tlsMinVersion: 'TLSv1.3' }),
-      currentProxyCapabilities(),
-    );
+    await applyNetworkSettings(policyWith({ tlsMinVersion: 'TLSv1.3' }));
     expect(tls.DEFAULT_MIN_VERSION).toBe('TLSv1.3');
     resetNetState();
     expect(tls.DEFAULT_MIN_VERSION).toBe(before);
@@ -134,9 +130,9 @@ describe('net — CA d’entreprise et TLS minimal', () => {
     for (const file of [path.join(dir, 'absent.pem'), empty, dir]) {
       await expect(readCaFile(file)).rejects.toMatchObject({ code: 'NET_CA_INVALID' });
     }
-    await expect(
-      applyNetworkSettings(policyWith({ caFile: empty }), currentProxyCapabilities()),
-    ).rejects.toMatchObject({ code: 'NET_CA_INVALID' });
+    await expect(applyNetworkSettings(policyWith({ caFile: empty }))).rejects.toMatchObject({
+      code: 'NET_CA_INVALID',
+    });
   });
 
   it('un échec de CA ne laisse rien d’appliqué (tout ou rien)', async () => {
@@ -144,7 +140,6 @@ describe('net — CA d’entreprise et TLS minimal', () => {
     await expect(
       applyNetworkSettings(
         policyWith({ caFile: path.join(dir, 'absent.pem'), tlsMinVersion: 'TLSv1.3' }),
-        currentProxyCapabilities(),
       ),
     ).rejects.toMatchObject({ code: 'NET_CA_INVALID' });
     expect(tls.DEFAULT_MIN_VERSION).toBe(before);

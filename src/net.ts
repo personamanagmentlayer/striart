@@ -1,6 +1,6 @@
-import http from 'node:http';
 import tls from 'node:tls';
 import { readFile, stat } from 'node:fs/promises';
+import { ProxyAgent, fetch as undiciFetch } from 'undici';
 import { StriartError } from './errors.js';
 import { logger } from './logger.js';
 import { readUserConfig, type NetworkConfig, type UserConfig } from './user-config.ts';
@@ -20,9 +20,13 @@ import { readUserConfig, type NetworkConfig, type UserConfig } from './user-conf
  *  5. vérification TLS jamais coupée (NODE_TLS_REJECT_UNAUTHORIZED=0 refusé) ;
  *  6. aucune redirection suivie (`redirect: 'error'`), sauf un suivi BORNÉ
  *     explicitement demandé (`maxRedirects`) dont chaque saut repasse par 2–5 ;
- *  7. proxy d'entreprise, CA d'entreprise et version TLS minimale appliqués au
- *     processus avant l'envoi.
+ *  7. proxy d'entreprise appliqué PAR REQUÊTE (dispatcher `undici` propre,
+ *     jamais le mécanisme natif de Node : `http.setGlobalProxyFromEnv` /
+ *     `NODE_USE_ENV_PROXY` tunnelle tout en CONNECT, y compris les cibles
+ *     http:// — cassé pour un forward-proxy standard sur Node 22/24/25 à ce
+ *     jour) ; CA d'entreprise et version TLS minimale appliqués au processus.
  *
+
  * SOURCES — décision de l'utilisateur, jamais d'un dépôt : l'environnement du
  * shell (HTTP(S)_PROXY, NO_PROXY, STRIART_OFFLINE, STRIART_ALLOWED_HOSTS,
  * STRIART_TLS_MIN_VERSION, STRIART_PROXY_AUTH, NODE_EXTRA_CA_CERTS…) et la
@@ -49,34 +53,11 @@ export interface NetFetchInit extends RequestInit {
   maxRedirects?: number;
 }
 
-/** Capacités de CE Node pour le proxy d'environnement (injectables pour les tests). */
-export interface ProxyCapabilities {
-  /** `http.setGlobalProxyFromEnv` existe (Node >= 24.14 / 25.4). */
-  runtimeProxyApi: boolean;
-  /** Proxy d'environnement activé AU DÉMARRAGE (NODE_USE_ENV_PROXY=1 / --use-env-proxy, Node >= 22.21 / 24.5). */
-  startupProxyFlag: boolean;
-}
-
 export interface NetDeps {
   env?: NodeJS.ProcessEnv;
   userConfig?: () => Promise<UserConfig>;
-  /** Transport sous-jacent ; défaut : `globalThis.fetch` lu à l'appel. */
+  /** Transport sous-jacent ; défaut : `fetch` d'`undici` (seul compatible avec `ProxyAgent` ci-dessous). */
   transport?: typeof fetch;
-  capabilities?: ProxyCapabilities;
-}
-
-export function currentProxyCapabilities(
-  env: NodeJS.ProcessEnv = process.env,
-  execArgv: readonly string[] = process.execArgv,
-): ProxyCapabilities {
-  return {
-    runtimeProxyApi:
-      typeof (http as { setGlobalProxyFromEnv?: unknown }).setGlobalProxyFromEnv === 'function',
-    startupProxyFlag:
-      env.NODE_USE_ENV_PROXY === '1' ||
-      execArgv.includes('--use-env-proxy') ||
-      /(?:^|\s)--use-env-proxy(?:\s|$)/.test(env.NODE_OPTIONS ?? ''),
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -244,21 +225,23 @@ export function resolveNetworkPolicy(
   };
 }
 
-export type ProxyProblem =
-  'SCHEME' | 'USER_CONFIG_NEEDS_RUNTIME_API' | 'NEEDS_STARTUP_FLAG' | 'AUTH_NEEDS_RUNTIME_API';
+export type ProxyProblem = 'SCHEME';
 
 export interface ProxyStatus {
   configured: boolean;
   active: boolean;
-  mechanism: 'runtime' | 'startup-flag' | 'none';
   problem: ProxyProblem | null;
 }
 
-/** Le proxy configuré est-il réellement applicable par CE Node ? (pur) */
-export function describeProxy(policy: NetworkPolicy, caps: ProxyCapabilities): ProxyStatus {
+/**
+ * Le proxy configuré a-t-il un schéma supporté ? (pur) Striart implémente
+ * lui-même le forward-proxy (dispatcher `undici`, cf. `buildProxyDispatcher`) :
+ * aucun mécanisme natif de Node n'intervient plus, donc aucune dépendance à
+ * sa version — seul un schéma non http(s) (SOCKS…) reste refusé.
+ */
+export function describeProxy(policy: NetworkPolicy): ProxyStatus {
   const { proxy } = policy;
-  if (!proxy.configured)
-    return { configured: false, active: false, mechanism: 'none', problem: null };
+  if (!proxy.configured) return { configured: false, active: false, problem: null };
   for (const raw of [proxy.http, proxy.https]) {
     if (!raw) continue;
     let protocol = '';
@@ -268,53 +251,18 @@ export function describeProxy(policy: NetworkPolicy, caps: ProxyCapabilities): P
       /* URL invalide : refusée ci-dessous comme schéma non supporté */
     }
     if (protocol !== 'http:' && protocol !== 'https:') {
-      return { configured: true, active: false, mechanism: 'none', problem: 'SCHEME' };
+      return { configured: true, active: false, problem: 'SCHEME' };
     }
   }
-  if (caps.runtimeProxyApi)
-    return { configured: true, active: true, mechanism: 'runtime', problem: null };
-  if (!caps.startupProxyFlag) {
-    return { configured: true, active: false, mechanism: 'none', problem: 'NEEDS_STARTUP_FLAG' };
-  }
-  // Mécanisme de démarrage : Node lit l'environnement lui-même, ni config utilisateur ni STRIART_PROXY_AUTH.
-  if (proxy.source === 'user-config') {
-    return {
-      configured: true,
-      active: false,
-      mechanism: 'startup-flag',
-      problem: 'USER_CONFIG_NEEDS_RUNTIME_API',
-    };
-  }
-  if (proxy.auth) {
-    return {
-      configured: true,
-      active: false,
-      mechanism: 'startup-flag',
-      problem: 'AUTH_NEEDS_RUNTIME_API',
-    };
-  }
-  return { configured: true, active: true, mechanism: 'startup-flag', problem: null };
+  return { configured: true, active: true, problem: null };
 }
 
 function proxyUnsupported(problem: ProxyProblem, host: string): StriartError {
-  const hints: Record<ProxyProblem, string> = {
-    SCHEME:
-      'Le proxy doit être une URL http:// ou https:// (les proxys SOCKS ne sont pas supportés).',
-    NEEDS_STARTUP_FLAG:
-      'Ce Node ne sait pas lire HTTP(S)_PROXY seul : démarre striart avec NODE_USE_ENV_PROXY=1 (Node >= 22.21 / 24.5) ou passe à Node >= 24.14 / 25.4.',
-    USER_CONFIG_NEEDS_RUNTIME_API:
-      'network.proxy (config utilisateur) exige Node >= 24.14 / 25.4 ; sur ce Node, pose HTTPS_PROXY et NODE_USE_ENV_PROXY=1 dans le shell.',
-    AUTH_NEEDS_RUNTIME_API:
-      'STRIART_PROXY_AUTH exige Node >= 24.14 / 25.4 ; sur ce Node, mets les identifiants dans l’URL de HTTPS_PROXY (shell).',
-  };
-  return new StriartError(
-    `Un proxy d'entreprise est configuré mais inactif sur ce Node : l'appel vers ${host} est refusé plutôt que de contourner le proxy.`,
-    {
-      code: 'NET_PROXY_UNSUPPORTED',
-      hint: hints[problem],
-      details: { host, reason: problem },
-    },
-  );
+  return new StriartError(`Le proxy configuré pour ${host} a un schéma non supporté.`, {
+    code: 'NET_PROXY_UNSUPPORTED',
+    hint: 'Le proxy doit être une URL http:// ou https:// (les proxys SOCKS ne sont pas supportés).',
+    details: { host, reason: problem },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -395,34 +343,30 @@ function assertPolicy(url: URL, policy: NetworkPolicy, purpose: NetPurpose): voi
 }
 
 // ---------------------------------------------------------------------------
-// Application au processus : proxy, CA, TLS minimal (effet de bord, idempotent)
+// Application au processus : CA, TLS minimal (effet de bord, idempotent)
 // ---------------------------------------------------------------------------
 
 const CA_FILE_MAX_BYTES = 4 * 1024 * 1024;
 
 interface AppliedState {
   fingerprint: string | null;
-  restoreProxy: (() => void) | null;
   originalMinVersion: string | null;
   originalCa: string[] | null;
 }
 
 const applied: AppliedState = {
   fingerprint: null,
-  restoreProxy: null,
   originalMinVersion: null,
   originalCa: null,
 };
 
-/** Restaure l'état du processus (tests) : proxy global, CA par défaut, TLS minimal. */
+/** Restaure l'état du processus (tests) : CA par défaut, TLS minimal (le proxy n'est plus global). */
 export function resetNetState(): void {
-  applied.restoreProxy?.();
   if (applied.originalCa) tls.setDefaultCACertificates(applied.originalCa);
   if (applied.originalMinVersion) {
     tls.DEFAULT_MIN_VERSION = applied.originalMinVersion as typeof tls.DEFAULT_MIN_VERSION;
   }
   applied.fingerprint = null;
-  applied.restoreProxy = null;
   applied.originalMinVersion = null;
   applied.originalCa = null;
   warnedInsecure.clear();
@@ -462,46 +406,18 @@ export async function readCaFile(file: string): Promise<string[]> {
   return certs;
 }
 
-/** Applique proxy, CA d'entreprise et TLS minimal au processus (idempotent, tout ou rien). */
-export async function applyNetworkSettings(
-  policy: NetworkPolicy,
-  caps: ProxyCapabilities,
-): Promise<void> {
-  const status = describeProxy(policy, caps);
-  const proxyEnv =
-    status.mechanism === 'runtime'
-      ? {
-          ...(policy.proxy.http
-            ? { HTTP_PROXY: withAuth(policy.proxy.http, policy.proxy.auth)! }
-            : {}),
-          ...(policy.proxy.https
-            ? { HTTPS_PROXY: withAuth(policy.proxy.https, policy.proxy.auth)! }
-            : {}),
-          // La boucle locale (Ollama) ne passe jamais par le proxy d'entreprise.
-          NO_PROXY: [policy.proxy.noProxy, 'localhost', '127.0.0.1', '[::1]']
-            .filter(Boolean)
-            .join(','),
-        }
-      : null;
-  const fingerprint = JSON.stringify({
-    proxyEnv,
-    ca: policy.caFile,
-    tls: policy.tlsMinVersion,
-  });
+/**
+ * Applique CA d'entreprise et TLS minimal au processus (idempotent, tout ou
+ * rien). Le proxy n'est PAS appliqué ici : il est désormais construit PAR
+ * REQUÊTE (`buildProxyDispatcher`, dispatcher `undici`), jamais globalement.
+ */
+export async function applyNetworkSettings(policy: NetworkPolicy): Promise<void> {
+  const fingerprint = JSON.stringify({ ca: policy.caFile, tls: policy.tlsMinVersion });
   if (applied.fingerprint === fingerprint) return;
 
   let ca: string[] | null = null;
   if (policy.caFile) ca = await readCaFile(policy.caFile);
 
-  // Rien n'est modifié avant que tout soit validé.
-  applied.restoreProxy?.();
-  applied.restoreProxy = null;
-  if (proxyEnv) {
-    applied.restoreProxy =
-      (
-        http as unknown as { setGlobalProxyFromEnv: (env: NodeJS.ProcessEnv) => () => void }
-      ).setGlobalProxyFromEnv(proxyEnv) ?? null;
-  }
   if (policy.tlsMinVersion) {
     applied.originalMinVersion ??= tls.DEFAULT_MIN_VERSION;
     tls.DEFAULT_MIN_VERSION = policy.tlsMinVersion;
@@ -579,22 +495,34 @@ function mapTransportError(error: unknown, url: URL, purpose: NetPurpose): unkno
 // Appel
 // ---------------------------------------------------------------------------
 
-async function prepare(url: URL, purpose: NetPurpose, deps: NetDeps): Promise<void> {
-  if (isLoopbackHost(url.hostname)) return;
+async function prepare(
+  url: URL,
+  purpose: NetPurpose,
+  deps: NetDeps,
+): Promise<NetworkPolicy | null> {
+  if (isLoopbackHost(url.hostname)) return null;
   const env = deps.env ?? process.env;
   const user = await (deps.userConfig ?? readUserConfig)();
   const policy = resolveNetworkPolicy(user.network, env);
   assertPolicy(url, policy, purpose);
-  const caps = deps.capabilities ?? currentProxyCapabilities(env);
-  const status = describeProxy(policy, caps);
-  const bypass = noProxyMatches(url.hostname, policy.proxy.noProxy);
-  const needsProxy =
-    status.configured &&
-    !bypass &&
-    (url.protocol === 'https:' ? policy.proxy.https : policy.proxy.http) !== null;
-  if (needsProxy && !status.active)
-    throw proxyUnsupported(status.problem ?? 'NEEDS_STARTUP_FLAG', normalizeHost(url.hostname));
-  await applyNetworkSettings(policy, caps);
+  await applyNetworkSettings(policy);
+  return policy;
+}
+
+/**
+ * Dispatcher `undici` propre à CETTE requête, ou `null` si aucun proxy ne
+ * s'applique (boucle locale déjà écartée par `prepare`, NO_PROXY, ou schéma
+ * sans proxy configuré). Jamais de mutation globale : un hop de redirection
+ * vers un hôte couvert par NO_PROXY n'hérite pas du dispatcher du hop précédent.
+ */
+function buildProxyDispatcher(url: URL, policy: NetworkPolicy): ProxyAgent | null {
+  if (noProxyMatches(url.hostname, policy.proxy.noProxy)) return null;
+  const raw = url.protocol === 'https:' ? policy.proxy.https : policy.proxy.http;
+  if (!raw) return null;
+  const status = describeProxy(policy);
+  if (!status.active)
+    throw proxyUnsupported(status.problem ?? 'SCHEME', normalizeHost(url.hostname));
+  return new ProxyAgent(withAuth(raw, policy.proxy.auth)!);
 }
 
 export async function netFetch(
@@ -604,15 +532,26 @@ export async function netFetch(
 ): Promise<Response> {
   const { purpose, maxRedirects = 0, ...rest } = init;
   let url = parseUrl(input);
-  const transport = () => deps.transport ?? globalThis.fetch;
   for (let hop = 0; ; hop += 1) {
-    await prepare(url, purpose, deps);
+    const policy = await prepare(url, purpose, deps);
+    const dispatcher = policy ? buildProxyDispatcher(url, policy) : null;
+    // `undici` a ses propres types Response/RequestInit (légèrement différents
+    // de ceux de lib.dom, p. ex. l'itérateur de Headers) : compatibles à
+    // l'exécution (même implémentation que le fetch natif de Node). Mais
+    // mélanger le `fetch` natif de Node avec un dispatcher construit par le
+    // paquet `undici` externe plante (`UND_ERR_INVALID_ARG`, versions internes
+    // différentes) : le `fetch` d'`undici` n'est donc utilisé QUE quand un
+    // dispatcher est effectivement nécessaire (proxy) — sinon le transport par
+    // défaut reste le `fetch` natif, inchangé pour tous les appels sans proxy.
+    const transport =
+      deps.transport ?? (dispatcher ? (undiciFetch as unknown as typeof fetch) : globalThis.fetch);
     let response: Response;
     try {
-      response = await transport()(url.href, {
+      response = await transport(url.href, {
         ...rest,
         redirect: maxRedirects > 0 ? 'manual' : 'error',
-      });
+        ...(dispatcher ? { dispatcher } : {}),
+      } as RequestInit);
     } catch (error) {
       throw mapTransportError(error, url, purpose);
     }
@@ -637,7 +576,6 @@ export async function netFetch(
 export interface NetworkReport {
   policy: NetworkPolicy;
   proxy: ProxyStatus;
-  caps: ProxyCapabilities;
   /** NODE_EXTRA_CA_CERTS / --use-system-ca, tels que Node les a reçus au démarrage. */
   extraCaCerts: string | null;
   systemCa: boolean;
@@ -648,12 +586,10 @@ export function inspectNetwork(
   user: NetworkConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): NetworkReport {
-  const caps = currentProxyCapabilities(env);
   const policy = resolveNetworkPolicy(user, env);
   return {
     policy,
-    proxy: describeProxy(policy, caps),
-    caps,
+    proxy: describeProxy(policy),
     extraCaCerts: env.NODE_EXTRA_CA_CERTS?.trim() || null,
     systemCa:
       env.NODE_USE_SYSTEM_CA === '1' ||

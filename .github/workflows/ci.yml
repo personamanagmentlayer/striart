@@ -159,8 +159,9 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        # 22 = plancher supporté (22.21+ : type stripping natif actif par défaut, et NODE_USE_ENV_PROXY=1
-        # honore HTTP(S)_PROXY — les modules .ts s'exécutent sans build) ; 24 = LTS courante.
+        # 22 = plancher supporté (22.21+ : type stripping natif actif par défaut, les modules .ts
+        # s'exécutent sans build) ; 24 = LTS courante. Le proxy d'entreprise (src/net.ts) passe
+        # par un dispatcher `undici` propre à chaque requête, indépendant de la version de Node.
         node: [22, 24]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

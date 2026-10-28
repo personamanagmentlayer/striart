@@ -701,7 +701,7 @@ const ERRORS: Record<string, (d: Record<string, unknown>) => string> = {
       ? `scheme ${str(d.protocol)} refused for an outbound call (http and https only).`
       : 'invalid outbound URL.',
   NET_PROXY_UNSUPPORTED: (d) =>
-    `a corporate proxy is configured but inactive on this Node (${str(d.reason)}): the call to ${str(d.host)} is refused rather than bypassing the proxy. Start striart with NODE_USE_ENV_PROXY=1 (Node >= 22.21 / 24.5) or use Node >= 24.14 / 25.4.`,
+    `the proxy configured for ${str(d.host)} has an unsupported scheme: it must be an http:// or https:// URL (SOCKS proxies are not supported).`,
   NET_TLS_UNTRUSTED: (d) =>
     `untrusted certificate for ${str(d.host)} (${str(d.certCode)}). Add the corporate CA: NODE_EXTRA_CA_CERTS=<file.pem> (read at startup), node --use-system-ca / NODE_USE_SYSTEM_CA=1, or network.caFile (user config). Never NODE_TLS_REJECT_UNAUTHORIZED=0.`,
   NET_CA_INVALID: (d) =>
@@ -863,9 +863,9 @@ const DOCTOR_DETAILS: Record<string, (p: Record<string, unknown>) => string> = {
       .join('; '),
   'network.direct': () => 'no proxy configured: direct connections',
   'network.proxyActive': (p) =>
-    `proxy active (${str(p.source)}, ${p.mechanism === 'runtime' ? 'applied at runtime' : 'NODE_USE_ENV_PROXY at startup'}): ${str(p.proxy)}${p.noProxy ? `; bypass: ${str(p.noProxy)}` : ''}`,
+    `proxy active (${str(p.source)}, per-request undici dispatcher): ${str(p.proxy)}${p.noProxy ? `; bypass: ${str(p.noProxy)}` : ''}`,
   'network.proxyInactive': (p) =>
-    `proxy configured (${str(p.proxy)}) but INACTIVE on this Node (${str(p.problem)}): remote calls are refused (NET_PROXY_UNSUPPORTED)`,
+    `proxy configured (${str(p.proxy)}) but INACTIVE (${str(p.problem)}): remote calls are refused (NET_PROXY_UNSUPPORTED)`,
   'network.tls': (p) =>
     [
       p.tlsMinVersion ? `minimum version ${str(p.tlsMinVersion)}` : null,

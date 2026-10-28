@@ -623,12 +623,17 @@ registre ACP et ses archives. Invariant **vérifié par un test**
 l'ordre : URL `http(s)` valide, mode hors ligne, liste blanche d'hôtes, **HTTPS
 exigé** (clé d'API ou non), vérification TLS jamais coupée, **aucune redirection
 suivie** (suivi borné et revérifié saut par saut pour les seules archives du
-registre ACP) — puis applique au process, de façon idempotente et « tout ou
-rien », le proxy d'entreprise (`http.setGlobalProxyFromEnv`, ou le proxy
-d'environnement activé au démarrage), la CA d'entreprise
-(`tls.setDefaultCACertificates`, **ajoutée** aux autorités par défaut) et la
-version TLS minimale. Un proxy configuré mais inapplicable sur ce Node **refuse**
-l'appel (`NET_PROXY_UNSUPPORTED`) plutôt que de le laisser sortir en direct.
+registre ACP) — puis construit, **par requête** (jamais un effet global sur le
+process), un dispatcher `undici` (`ProxyAgent`) pour le proxy d'entreprise ; CA
+d'entreprise (`tls.setDefaultCACertificates`, **ajoutée** aux autorités par
+défaut) et version TLS minimale restent appliquées au process, de façon
+idempotente et « tout ou rien ». Décision du 2026-10-28 (incident découvert en
+CI) : le mécanisme natif de Node (`http.setGlobalProxyFromEnv` /
+`NODE_USE_ENV_PROXY`) tunnelle TOUTE requête en CONNECT, y compris les cibles
+`http://` — cassé pour un forward-proxy standard sur Node 22/24/25 à cette date,
+donc jamais utilisé. Un proxy d'un schéma autre que `http:`/`https:` (SOCKS
+compris) **refuse** l'appel (`NET_PROXY_UNSUPPORTED`) plutôt que de le laisser
+sortir en direct.
 
 La politique est une **décision de l'utilisateur** : environnement du shell et
 **config utilisateur** (`network`, `src/user-config.ts`) — jamais la config du

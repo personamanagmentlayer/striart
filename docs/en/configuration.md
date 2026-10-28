@@ -1181,19 +1181,14 @@ Matching **shell** environment variables:
 is on if either asks for it; the allow-list is the **intersection** (a host must
 appear in every defined list); for TLS the **strictest** wins.
 
-**The proxy, by Node version.** Node only reads `HTTP(S)_PROXY` from certain
-versions on, and Striart refuses to bypass a proxy it cannot apply:
-
-- Node **≥ 24.14 / 25.4**: `http.setGlobalProxyFromEnv`, applied at runtime —
-  `network.proxy` and `STRIART_PROXY_AUTH` work;
-- Node **≥ 22.21 / 24.5**: start Striart with `NODE_USE_ENV_PROXY=1` (or
-  `--use-env-proxy`) — Node then reads `HTTP(S)_PROXY` itself; `network.proxy`
-  and `STRIART_PROXY_AUTH` are **not** applicable (put the credentials in the
-  `HTTPS_PROXY` URL);
-- otherwise (or a scheme other than `http:`/`https:`, SOCKS included): the proxy
-  is *configured but inactive*, and every call that should go through it is
-  refused (`NET_PROXY_UNSUPPORTED`, reasons `SCHEME`, `NEEDS_STARTUP_FLAG`,
-  `USER_CONFIG_NEEDS_RUNTIME_API`, `AUTH_NEEDS_RUNTIME_API`).
+**The proxy, independent of Node version.** Striart builds its own `undici`
+dispatcher (`ProxyAgent`) for every outgoing request — `network.proxy` and
+`STRIART_PROXY_AUTH` work on any supported Node version. Decision of
+2026-10-28: Node's native mechanism (`http.setGlobalProxyFromEnv` /
+`NODE_USE_ENV_PROXY`) tunnels EVERY request via CONNECT, including `http://`
+targets — broken for a standard forward proxy on Node 22/24/25 as of this
+date, so it is never used. Only a proxy scheme other than `http:`/`https:`
+(SOCKS included) is refused (`NET_PROXY_UNSUPPORTED`, reason `SCHEME`).
 
 **Not supported**: `ALL_PROXY` (not read) and SOCKS proxies.
 

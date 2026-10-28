@@ -181,7 +181,7 @@ changera rien :
 | `PTY_SHELL_INVALID` | `pty.shell` désigne un shell inutilisable : chemin relatif, introuvable dans les dossiers absolus du `PATH`, ou non exécutable. Aucun repli sur `auto`. | Corriger `pty.shell` dans la config, ou le remettre à `auto`. |
 | `ACP_AGENT_UNKNOWN` | `profiles --import-acp` : identifiant invalide ou absent du registre ACP. | Choisir un identifiant listé dans `error.details.known` (`--json`). |
 | `NET_URL_INVALID` | URL sortante non analysable ou schéma autre que `http(s)` (`details.reason` : `UNPARSEABLE`, `SCHEME`). | Corriger `llm.baseUrl`, `ollamaHost`, l'URL du webhook ou du registre. |
-| `NET_PROXY_UNSUPPORTED` | Un proxy d'entreprise est configuré mais **inactif** sur ce Node (`details.reason` : `SCHEME` — SOCKS non supporté —, `NEEDS_STARTUP_FLAG`, `USER_CONFIG_NEEDS_RUNTIME_API`, `AUTH_NEEDS_RUNTIME_API`) : l'appel est refusé plutôt que de contourner le proxy. | Suivre la piste (`NODE_USE_ENV_PROXY=1` sur Node ≥ 22.21 / 24.5, ou Node ≥ 24.14 / 25.4) — voir [Réseau d'entreprise](configuration.md#réseau-dentreprise-network) ; `striart doctor`. |
+| `NET_PROXY_UNSUPPORTED` | Le proxy configuré a un schéma non supporté (`details.reason : SCHEME`) : les proxys SOCKS ne sont pas supportés. | Utiliser une URL de proxy `http://` ou `https://` — voir [Réseau d'entreprise](configuration.md#réseau-dentreprise-network) ; `striart doctor`. |
 | `NET_TLS_UNTRUSTED` | La chaîne de certificats n'aboutit pas à une autorité connue (`details.certCode`). | Ajouter la CA d'entreprise (`NODE_EXTRA_CA_CERTS`, `node --use-system-ca`, `network.caFile`) ; jamais `NODE_TLS_REJECT_UNAUTHORIZED=0`. |
 | `NET_CA_INVALID` | `network.caFile` inutilisable (`details.reason` : code système, `NOT_A_FILE`, `TOO_LARGE`, `NO_CERTIFICATE`, `REJECTED_BY_NODE`). | Un fichier PEM d'au plus 4 Mio contenant « BEGIN CERTIFICATE » ; `striart doctor`. |
 | `COMMIT_HOOK_REJECTED` | Un hook de la cible (`pre-commit`, `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`) ou la signature a **rejeté**, ou **bloqué au-delà de `commitTimeoutMs`** (arbre de process tué), le commit de merge : le merge est annulé, le principal est propre. Un **ticket** `COMMIT_HOOK_REJECTED` garde la sortie du hook (la fin, 16 Kio au plus, secrets caviardés) ; il se ferme de lui-même au prochain merge réussi de l'agent. Le même code peut venir du `revert` d'un `rollback` publié (aucun ticket, `HEAD` inchangé). Un hook n'est jamais contourné, et ce n'est pas un échec du LLM : le compteur du mode manuel n'est pas touché. | Corriger ce que le hook reproche (sortie : ticket ou message), puis relancer le merge. |
@@ -617,10 +617,9 @@ registre ACP) peut être refusé par la politique réseau de Striart — c'est v
 (fail closed). Démarche : `striart doctor`, ligne « Réseau » (politique effective,
 proxy actif ou inactif, CA, TLS) ; puis le code :
 
-- `NET_PROXY_UNSUPPORTED` : le proxy est configuré mais ce Node ne sait pas
-  l'appliquer — `NODE_USE_ENV_PROXY=1` (Node ≥ 22.21 / 24.5, `HTTPS_PROXY` du
-  shell) ou Node ≥ 24.14 / 25.4 (`network.proxy`) ; les proxys SOCKS et
-  `ALL_PROXY` ne sont pas supportés ;
+- `NET_PROXY_UNSUPPORTED` : l'URL du proxy a un schéma non supporté — utiliser
+  `http://` ou `https://` ; les proxys SOCKS et `ALL_PROXY` ne sont pas
+  supportés ;
 - `NET_TLS_UNTRUSTED` : un proxy qui inspecte le TLS présente sa propre CA —
   l'ajouter (`NODE_EXTRA_CA_CERTS`, `node --use-system-ca`, `network.caFile`),
   jamais couper la vérification ;
