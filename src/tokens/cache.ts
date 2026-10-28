@@ -17,10 +17,11 @@
  *    manque (miss) et est journalisée, jamais une erreur de l'appel.
  */
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, readdir, rm, stat } from 'node:fs/promises';
+import { readFile, readdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { writeFileAtomic } from '../json-file.js';
 import { logger } from '../logger.js';
+import { mkdirPrivate } from '../private-fs.ts';
 import { usageDir } from './ledger.ts';
 
 const KEY_RE = /^[0-9a-f]{64}$/;
@@ -115,7 +116,7 @@ export async function cachePut(
   if (!KEY_RE.test(key)) return;
   const dir = cacheDir(root);
   try {
-    await mkdir(dir, { recursive: true });
+    await mkdirPrivate(dir);
     const entry: Entry = { v: 1, role, createdAt: now, expiresAt: now + ttlMs, response };
     await writeFileAtomic(path.join(dir, `${key}.json`), JSON.stringify(entry));
     await enforceLimit(dir, maxEntries);

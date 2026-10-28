@@ -17,13 +17,14 @@
  * consomment déjà, aucune raison de les faire migrer vers l'API générique.
  */
 import { spawn } from 'node:child_process';
-import { mkdir, open, rm } from 'node:fs/promises';
+import { open, rm } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { striartDir } from './paths.js';
 import { StriartError } from './errors.js';
 import { readJson, writeJsonAtomic } from './json-file.js';
+import { mkdirPrivate } from './private-fs.ts';
 import { withFileLock } from './state-lock.ts';
 import { loadConfig } from './config.js';
 import { DAEMON_LOG_ENV, logger } from './logger.js';
@@ -122,7 +123,7 @@ const PID_LOCK_SLOW_WARN_MS = 15_000;
  */
 async function withPidLock(root, name, fn, timeoutMs = PID_LOCK_TIMEOUT_MS) {
   const lock = pidLockPath(root, name);
-  await mkdir(path.dirname(lock), { recursive: true });
+  await mkdirPrivate(path.dirname(lock));
   try {
     return await withFileLock(lock, fn, { timeoutMs, slowHoldWarnMs: PID_LOCK_SLOW_WARN_MS });
   } catch (error) {
@@ -272,7 +273,7 @@ async function startDaemonLocked({ root, name, label, args, extraMeta = {} }) {
   await rm(stopFilePath(root, name), { force: true });
 
   const logPath = logFilePath(root, name);
-  await mkdir(path.dirname(logPath), { recursive: true });
+  await mkdirPrivate(path.dirname(logPath));
   const rotation = await daemonLogRotation(root);
   // Un journal hérité déjà trop gros est tourné AVANT d'être rouvert ; le
   // daemon tourne ensuite lui-même son journal (logger.js, DAEMON_LOG_ENV).

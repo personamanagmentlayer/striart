@@ -198,6 +198,21 @@ export function sddlGrantsOnly(sddl: string, sid: string): boolean {
  * VÉRIFIE (fail closed : `STATE_UNPROTECTED`). Dossier : l'ACE est héritable,
  * les enfants existants et futurs la reçoivent.
  */
+/**
+ * Crée `dir` (récursif) et le réserve à l'utilisateur, SI fraîchement créé.
+ * L'héritage Windows depuis `.striart/` (ACE `(OI)(CI)` restreinte à
+ * l'utilisateur, posée par le resserrement initial) n'est pas fiable pour un
+ * sous-dossier créé après coup par `fs.mkdir` — observé en CI (ACL héritée du
+ * dossier temporaire du système, pas de `.striart/`) : la restriction est donc
+ * posée explicitement ici, jamais supposée. Un dossier déjà existant n'est pas
+ * retouché (coût d'un `icacls` par appel évité ; le resserrement initial de
+ * `.striart/` couvre l'arborescence préexistante).
+ */
+export async function mkdirPrivate(dir: string): Promise<void> {
+  const created = await mkdir(dir, { recursive: true, mode: 0o700 });
+  if (created !== undefined) await restrictToCurrentUser(dir);
+}
+
 export async function restrictToCurrentUser(target: string): Promise<void> {
   if (IS_WINDOWS()) {
     try {

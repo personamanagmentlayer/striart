@@ -1,8 +1,9 @@
 import net from 'node:net';
-import { chmod, mkdir, readFile, rm } from 'node:fs/promises';
+import { chmod, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { writeJsonAtomic } from '../json-file.js';
 import { logger } from '../logger.js';
+import { mkdirPrivate } from '../private-fs.ts';
 import { isProcessAlive } from '../process-tree.js';
 import { clearStopRequest, watchStopRequest } from '../stop-request.ts';
 import {
@@ -258,7 +259,7 @@ export async function runAcpHost(spec: AcpHostRunSpec): Promise<void> {
   const socketPath = acpHostSocketPath(root, agent);
   if (process.platform !== 'win32') {
     await assertSocketDirPrivate(socketPath, { create: true });
-    await mkdir(path.dirname(socketPath), { recursive: true });
+    await mkdirPrivate(path.dirname(socketPath));
     await rm(socketPath, { force: true });
   }
   await new Promise<void>((resolve, reject) => {

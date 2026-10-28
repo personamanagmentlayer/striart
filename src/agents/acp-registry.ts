@@ -1,11 +1,12 @@
 import { execa } from 'execa';
 import { createHash } from 'node:crypto';
-import { lstat, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
+import { lstat, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { StriartError } from '../errors.js';
 import { logger } from '../logger.js';
 import { netFetch } from '../net.ts';
 import { striartDir } from '../paths.js';
+import { mkdirPrivate } from '../private-fs.ts';
 import type { AcpRegistryConfig, AgentProfile } from '../types.js';
 import { isForbiddenRegistryEnvName } from './profile-schema.ts';
 
@@ -514,7 +515,7 @@ export async function downloadBinaryAgent({
   }
 
   await rm(dest, { recursive: true, force: true });
-  await mkdir(dest, { recursive: true });
+  await mkdirPrivate(dest);
   const archiveName = (
     path.posix.basename(new URL(target.archive).pathname).replace(/[^A-Za-z0-9._-]/g, '_') ||
     'archive'
@@ -563,7 +564,7 @@ export async function downloadBinaryAgent({
     } else {
       // Binaire nu : l'archive EST l'exécutable désigné par `cmd`.
       const exe = path.join(dest, ...cmd.split('/'));
-      await mkdir(path.dirname(exe), { recursive: true });
+      await mkdirPrivate(path.dirname(exe));
       await writeFile(exe, bytes, { mode: 0o755 });
     }
     await assertSafeTree(dest);

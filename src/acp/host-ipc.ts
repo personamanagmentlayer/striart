@@ -31,7 +31,8 @@ export const MAX_FRAME_BYTES = 1_000_000;
 export const MAX_BUS_TEXT_CHARS = 64_000;
 
 /** Longueur maximale sûre d'un chemin de socket Unix (macOS : 104 octets). */
-const MAX_UNIX_SOCKET_PATH = 100;
+/** Marge sous la limite OS la plus stricte (104 octets, macOS) : voir `privateTmpDir`. */
+export const MAX_UNIX_SOCKET_PATH = 100;
 
 export function acpHostDir(root: string, agent: string): string {
   validateAgentName(agent);
@@ -69,8 +70,12 @@ export function acpHostSocketPath(root: string, agent: string): string {
   return path.join(privateTmpDir(), `acp-${hash.slice(0, 24)}.sock`);
 }
 
-/** Dossier privé de l'utilisateur courant dans le dossier temporaire (POSIX). */
-function privateTmpDir(): string {
+/**
+ * Dossier privé de l'utilisateur courant dans le dossier temporaire (POSIX) —
+ * repli commun à tout socket Unix dont le chemin naturel sous `.striart/`
+ * dépasserait `MAX_UNIX_SOCKET_PATH` (hôte ACP, hôte de pty).
+ */
+export function privateTmpDir(): string {
   const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
   return path.join(os.tmpdir(), `striart-${uid}`);
 }

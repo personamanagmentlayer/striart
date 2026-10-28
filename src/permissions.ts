@@ -1,8 +1,9 @@
-import { mkdir, readFile, readdir, rm } from 'node:fs/promises';
+import { readFile, readdir, rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { writeJsonAtomic } from './json-file.js';
 import { striartDir } from './paths.js';
+import { mkdirPrivate } from './private-fs.ts';
 import { StriartError } from './errors.js';
 import { logger } from './logger.js';
 import { sanitizeAgentText } from './collab/message.ts';
@@ -227,7 +228,7 @@ export async function createPermissionRequest(
     answeredAt: null,
     expiresAt: new Date(Date.now() + timeoutMs).toISOString(),
   };
-  await mkdir(permissionsDir(root), { recursive: true });
+  await mkdirPrivate(permissionsDir(root));
   await writeJsonAtomic(permissionPath(root, request.id), request);
   return request;
 }
@@ -389,7 +390,7 @@ export async function createElicitationRequest(
     answeredAt: null,
     expiresAt: new Date(Date.now() + timeoutMs).toISOString(),
   };
-  await mkdir(permissionsDir(root), { recursive: true });
+  await mkdirPrivate(permissionsDir(root));
   await writeJsonAtomic(permissionPath(root, request.id), request);
   return request;
 }

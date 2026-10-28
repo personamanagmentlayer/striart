@@ -10,6 +10,7 @@ import { logger } from './logger.js';
 import { ptyDir } from './paths.js';
 import { validateAgentName } from './agent-name.ts';
 import { nativePtyHostCommand, PTY_HOST_EXIT_ALREADY_RUNNING } from './native.ts';
+import { MAX_UNIX_SOCKET_PATH, assertSocketDirPrivate, privateTmpDir } from './acp/host-ipc.ts';
 import {
   ptyHostStateDir,
   ptyHostStatus,
@@ -106,7 +107,11 @@ type ClientFrame = InputFrame | MessageFrame | ResizeFrame;
  * Chemin d'attache d'un agent. Sous Windows, les named pipes vivent dans un
  * espace de noms global (pas le filesystem) : le nom est dérivé de la racine
  * du repo + de l'agent par hash, pour rester stable et sans collision entre
- * deux repos qui utiliseraient le même nom d'agent.
+ * deux repos qui utiliseraient le même nom d'agent. POSIX : sous
+ * `.striart/pty/<agent>/`, ou dans le dossier temporaire privé si ce chemin
+ * dépasse la limite des sockets Unix (104 octets macOS / 108 Linux, le
+ * binaire natif refuse sinon : PTY_ENDPOINT_TOO_LONG — observé en CI sur un
+ * chemin de dépôt temporaire profondément imbriqué).
  */
 export function attachSocketPath(root: string, agent: string): string {
   validateAgentName(agent);
@@ -114,7 +119,12 @@ export function attachSocketPath(root: string, agent: string): string {
     const hash = createHash('sha1').update(path.resolve(root)).digest('hex').slice(0, 12);
     return `\\\\.\\pipe\\striart-${hash}-${agent}`;
   }
-  return path.join(ptyDir(root), agent, 'attach.sock');
+  const inRepo = path.join(ptyDir(root), agent, 'attach.sock');
+  if (Buffer.byteLength(inRepo) <= MAX_UNIX_SOCKET_PATH) return inRepo;
+  const hash = createHash('sha256')
+    .update(`${path.resolve(root)}\0${agent}`)
+    .digest('hex');
+  return path.join(privateTmpDir(), `pty-${hash.slice(0, 24)}.sock`);
 }
 
 function writeFrame(socket: net.Socket, frame: ClientFrame): void {
@@ -160,10 +170,12 @@ export async function launchPtyHost(
   options: LaunchPtyHostOptions,
 ): Promise<ChildProcess> {
   validateAgentName(agent);
+  const endpoint = attachSocketPath(root, agent);
+  if (process.platform !== 'win32') await assertSocketDirPrivate(endpoint, { create: true });
   const { file, args } = await nativePtyHostCommand({
     agent,
     stateDir: path.resolve(ptyHostStateDir(root, agent)),
-    endpoint: attachSocketPath(root, agent),
+    endpoint,
     cwd: path.resolve(options.cwd),
     program: options.shell,
     args: options.args ?? [],

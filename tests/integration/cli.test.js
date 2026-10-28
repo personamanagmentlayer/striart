@@ -492,11 +492,12 @@ describe('CLI — dépôt initialisé', () => {
         env: { ...process.env, STRIART_LANG: 'fr' },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
-      let stdout = '';
-      child.stdout.on('data', (d) => (stdout += d));
+      // La bannière de démarrage est une ligne de statut, pas une donnée : stderr (Output.notice).
+      let stderr = '';
+      child.stderr.on('data', (d) => (stderr += d));
       await new Promise((resolve) => {
         const timer = setInterval(() => {
-          if (stdout.includes('watcher actif')) {
+          if (stderr.includes('watcher actif')) {
             clearInterval(timer);
             resolve();
           }

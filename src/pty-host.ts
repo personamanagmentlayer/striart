@@ -1,16 +1,10 @@
 import { closeSync, openSync } from 'node:fs';
 import os from 'node:os';
-import {
-  access,
-  constants as fsConstants,
-  mkdir,
-  open as openFile,
-  rm,
-  stat,
-} from 'node:fs/promises';
+import { access, constants as fsConstants, open as openFile, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { StriartError } from './errors.js';
+import { mkdirPrivate } from './private-fs.ts';
 import { DEFAULT_CONFIG, loadConfig } from './config.js';
 import { attendedCommandOf } from './agents/catalog.ts';
 import { striartDir } from './paths.js';
@@ -324,7 +318,7 @@ export async function ensurePtyHost(
       ? await resolvePtyShell(root)
       : { shell: options.shell, args: [] as string[] };
   const logPath = logFilePath(root, agent);
-  await mkdir(path.dirname(logPath), { recursive: true });
+  await mkdirPrivate(path.dirname(logPath));
   const logFd = openSync(logPath, 'a');
   let child: Awaited<ReturnType<typeof launchPtyHost>>;
   try {

@@ -15,11 +15,12 @@
  * tranchée — et une seule fois.
  */
 import { randomBytes } from 'node:crypto';
-import { mkdir, readdir, rm } from 'node:fs/promises';
+import { readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { StriartError } from '../errors.js';
 import { UNCHANGED, readJson, updateJsonLocked } from '../json-file.js';
 import { striartDir } from '../paths.js';
+import { mkdirPrivate } from '../private-fs.ts';
 import { isProcessAlive } from '../process-tree.js';
 import type { HumanReviewRequest, ReviewVerdict } from '../types.js';
 import { parseVerdict } from './verdict.ts';
@@ -46,7 +47,7 @@ export async function createHumanReview(
   >,
   { timeoutMs, keep }: { timeoutMs: number; keep: number },
 ): Promise<HumanReviewRequest> {
-  await mkdir(reviewsDir(root), { recursive: true });
+  await mkdirPrivate(reviewsDir(root));
   await pruneAnswered(root, keep);
   const created = Date.now();
   const request: HumanReviewRequest = {

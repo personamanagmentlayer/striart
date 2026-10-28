@@ -14,11 +14,12 @@
  * rétention bornée (`orchestration.keepRuns`).
  */
 import { randomBytes } from 'node:crypto';
-import { mkdir, readdir, rm } from 'node:fs/promises';
+import { readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { UNCHANGED, readJson, updateJsonLocked } from '../json-file.js';
 import { logger } from '../logger.js';
 import { striartDir } from '../paths.js';
+import { mkdirPrivate } from '../private-fs.ts';
 import { isProcessAlive } from '../process-tree.js';
 import type {
   OrchestrationGroupState,
@@ -51,7 +52,7 @@ export async function createRunState(
   init: Pick<OrchestrationRunState, 'mode' | 'concurrency' | 'nodes'>,
   keep: number,
 ): Promise<OrchestrationRunState> {
-  await mkdir(runsDir(root), { recursive: true });
+  await mkdirPrivate(runsDir(root));
   await pruneFinished(runsDir(root), RUN_ID_RE, keep);
   const state: OrchestrationRunState = {
     id: `run-${randomBytes(6).toString('hex')}`,
@@ -111,7 +112,7 @@ export async function createGroupState(
   keep: number,
 ): Promise<void> {
   try {
-    await mkdir(groupsDir(root), { recursive: true });
+    await mkdirPrivate(groupsDir(root));
     await pruneFinished(groupsDir(root), GROUP_ID_RE, keep);
     const state: OrchestrationGroupState = {
       ...init,
