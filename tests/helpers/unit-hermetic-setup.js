@@ -4,9 +4,15 @@
  */
 import { afterAll, beforeAll } from 'vitest';
 import { fileURLToPath } from 'node:url';
+import os from 'node:os';
+import path from 'node:path';
 import { diffSnapshots, snapshotUsageTree } from './hermetic-striart.js';
 
 const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
+
+// Hermétique aussi vis-à-vis de la config UTILISATEUR de la machine (réseau : proxy, hôtes
+// autorisés, offline…) : un dossier inexistant = défauts. Un test qui en veut une la fournit.
+process.env.STRIART_CONFIG_HOME = path.join(os.tmpdir(), 'striart-unit-no-user-config');
 
 /** @type {Map<string, string>} */
 let before = new Map();

@@ -433,6 +433,64 @@ fn arret_propre_par_host_stop_avec_accuse() {
 }
 
 #[test]
+fn derniere_sortie_publiee_liee_au_pid_puis_retiree() {
+    let program = fixture_program(&["echo-lines"]);
+    let program: Vec<&str> = program.iter().map(String::as_str).collect();
+    let mut host = spawn_host("beat", &[], &program);
+    wait_ready(&mut host);
+    let mut client = Client::connect(&host.endpoint);
+    client.until_type("hello");
+    client.until_output("ECHO-READY");
+    let output = host.state.join("host.output");
+    let read = || -> Option<(u64, String)> {
+        let text = std::fs::read_to_string(&output).ok()?;
+        let doc = json::parse(text.trim()).ok()?;
+        Some((
+            doc.get("pid")?.as_u64()?,
+            doc.get("lastOutputAt")?.as_str()?.to_string(),
+        ))
+    };
+    let deadline = Instant::now() + WAIT;
+    let first = loop {
+        if let Some(value) = read() {
+            break value;
+        }
+        assert!(Instant::now() < deadline, "host.output never written");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    // Lié au PID de l'hôte, horodatage ISO 8601 UTC à la milliseconde.
+    assert_eq!(first.0, u64::from(host.child.id()));
+    assert!(first.1.ends_with('Z') && first.1.len() == 24, "{}", first.1);
+    // Nouvelle sortie après la période de battement : l'horodatage avance.
+    std::thread::sleep(Duration::from_millis(1_300));
+    client.message("again");
+    client.until_output("ECHO:again");
+    let deadline = Instant::now() + WAIT;
+    loop {
+        if read().is_some_and(|(_, at)| at > first.1) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "lastOutputAt never advanced");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // Aucun temporaire laissé, et le fichier part avec l'hôte.
+    assert!(
+        std::fs::read_dir(&host.state)
+            .expect("state dir")
+            .filter_map(Result::ok)
+            .all(|e| !e.file_name().to_string_lossy().ends_with(".tmp"))
+    );
+    let stop = host.state.join("host.stop");
+    std::fs::write(
+        &stop,
+        format!(r#"{{"pid":{},"requestedAt":"x"}}"#, host.child.id()),
+    )
+    .expect("write");
+    wait_exit(&mut host, Duration::from_secs(10)).expect("host must stop");
+    assert!(!output.exists(), "host.output removed with the host");
+}
+
+#[test]
 fn fin_naturelle_du_programme_rend_son_code() {
     // `exit-after-line` laisse au client le temps de se connecter : la frame
     // `exit` qu'il reçoit porte le code RÉEL du programme (7), pas seulement

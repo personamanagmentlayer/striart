@@ -125,11 +125,14 @@ describe('nature des erreurs : cohérence des familles de codes', () => {
       'AGENT_UNKNOWN',
       'REVIEW_UNKNOWN',
       'PROFILE_UNKNOWN',
-      'HOOK_TOOL_UNKNOWN',
       'ACP_AGENT_UNKNOWN',
     ]) {
       expect(errorKindOf(code), code).toBe('failure');
     }
+  });
+
+  it('un outil de hook inconnu est un ensemble fermé de la CLI : usage, sortie 2 (comme les autres valeurs invalides)', () => {
+    expect(errorKindOf('HOOK_TOOL_UNKNOWN')).toBe('usage');
   });
 
   it('--after : la file refuse la dépendance, qu’elle soit inconnue ou cyclique', () => {

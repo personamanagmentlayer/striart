@@ -9,8 +9,8 @@ commands in detail, by functional group. Every mutating operation (`run`,
 retry) goes through the [inter-process lock](architecture.md#inter-process-lock)
 — two concurrent CLIs never trample each other.
 
-**30 public commands**, grouped in the help (`striart --help`) as below
-(counted on 2026-10-24 from `node src/cli.js --help`, `help` excluded). A
+**31 public commands**, grouped in the help (`striart --help`) as below
+(counted on 2026-10-27 from `node src/cli.js --help`, `help` excluded). A
 single hidden internal command is never meant for a human: `__complete`
 (dynamic values for the completion scripts). `pty-host-run`, the former
 internal command that launched the pty host, was removed: the host is now
@@ -54,6 +54,7 @@ the native binary `striart-native pty-host` (see
 | `striart clean [agent] [--stopped \| --all] [--force]` | Frees disk space (two-level guards). |
 | `striart reconcile` | Idempotent reconciliation of the whole state (dead sessions, queue, locks). |
 | `striart prune [--days <n>] [--dry-run]` | Retention of idle stopped clones and resolved tickets. |
+| `striart gc [agent] [--close] [--dry-run]` | Idle garbage collector: detects forgotten agents, warns them and, with the user's authorization, cleanly closes their session (never their clone). |
 | **Integration** | |
 | `striart promote [--rollback]` | staging → main promotion (global Test Gate + fast-forward). |
 | `striart mcp [--root <path>] [--agent <a>] [--read-only [--collab]]` | MCP stdio server (agent → Striart plane: 10 tools, 4 resource kinds), bound to the calling clone. |
@@ -71,12 +72,16 @@ Valid on every command, before or after the command name:
 
 | Option | Effect |
 |---|---|
-| `-v`, `--version` | Prints the version (`-V`, the historical alias, is only recognized at the head of the line, before the command). |
+| `-v`, `--version` | Prints the version (`-V`, the historical alias, is only recognized at the head of the line, before the command). With `--json`: the contract's `{command: "version", data: {version}}` document, never the bare version. |
 | `--json` | Machine output: one JSON document on stdout (ndjson stream for `watch` and `dashboard`) — see below. |
 | `--plain` | Plain text: no color, glyph or link (CI logs, screen readers, legacy consoles). |
 | `--no-color` | Disables color (like `NO_COLOR`). |
 | `-q`, `--quiet` | Suppresses progress messages — never errors or data. |
 | `-h`, `--help` | Command help, with examples. |
+
+`striart help` and `striart help <command>` print the help and exit **0**;
+`striart help <unknown>` is a usage error (`UNKNOWN_COMMAND`, exit 2), as is
+`striart hook install <unknown tool>` (`HOOK_TOOL_UNKNOWN`, exit 2).
 
 Anything after `--` is data: a prompt may contain "--json" without turning
 machine output on. Likewise, a global option only affects the command being
@@ -173,7 +178,8 @@ document** to **stdout** — errors included:
   should test it, not the text):
   - `PLAN_INVALID`: `YAML`, `NOT_AN_OBJECT`, `UNSUPPORTED_VERSION` (only
     versions 1 and 2 exist), `TASKS_EMPTY`, `TASK_NOT_AN_OBJECT`,
-    `PROMPT_MISSING`, `FIELD_NOT_STRING`, `AUTONOMOUS_NOT_BOOLEAN`,
+    `VERSION_MISSING` (no `version:` line — `version: 1` or `version: 2`
+    expected), `PROMPT_MISSING`, `FIELD_NOT_STRING`, `AUTONOMOUS_NOT_BOOLEAN`,
     `TIMEOUT_INVALID`, `DUPLICATE_ID`, `AFTER_FORWARD`,
     `COMMAND_NOT_AN_EXECUTABLE_NAME` (the `command` of a supervised task must
     be an **executable name** — `[A-Za-z0-9][A-Za-z0-9._+-]{0,63}`, no path,
@@ -236,7 +242,9 @@ The document's `schemaVersion` stays **1**: no field changed meaning since
 0.11. The additions of the 2026-10-24 wave are additive (`status --json`
 gains `orchestration` and `tokens`, `doctor` gains the `native`, `gate`, `pty`,
 `state-lock`, `protected`, `mcp`, `profiles`, `tokens`, `orchestration`,
-`dashboard` and `relaxations` checks). The published schemas
+`dashboard` and `relaxations` checks, then, on 2026-10-26, `network`,
+`state-privacy` and `gate-env`, then, on 2026-10-27, `idle`, `delivery` and
+`performance`: 29 checks). The published schemas
 (`schemas/striart-document-v1.schema.json` for this document,
 `schemas/striart-control-v1.openrpc.json` for the Control Protocol) ship in
 the package and are printed by `striart api --schema`. The `$id` of the
@@ -269,7 +277,12 @@ instead of the root.
 
 stdout carries only the command's **data** (human result, `--json` document,
 MCP protocol); progress, warnings, errors (outside `--json`) and pino logs go
-to **stderr**. `striart status | grep agent-a` or `striart merge a --json |
+to **stderr**. That includes what precedes the result of a long command: the
+`watch` **banner** ("watcher running…" and its mode) and the **introduction** of
+`run --autonomous` / `run --on-main` are status lines, hence on stderr (silent
+under `--json`, where the document or stream carries the information). The pino
+logs themselves are in French whatever `STRIART_LANG` says: they do not go
+through the i18n catalog (help, error and rendering messages only). `striart status | grep agent-a` or `striart merge a --json |
 jq` never see a progress line. `STRIART_LOG_LEVEL=debug` details the logs on
 stderr (`trace`, `debug`, `info` by default, `warn`, `error`, `fatal`,
 `silent`). Under `watch --ui` the screen belongs to the panel: logs go to
@@ -281,8 +294,8 @@ stderr (`trace`, `debug`, `info` by default, `warn`, `error`, `fatal`,
 |---|---|
 | `STRIART_LANG=fr\|en` | Language of messages and help. Without it: `LC_ALL`, `LC_MESSAGES`, `LANG`, then the system locale; any language other than French shows English. |
 | `STRIART_THEME=default\|colorblind\|mono` | Palette: `colorblind` never pits red against green (blue/magenta), `mono` only uses bold, dim and underline. |
-| `NO_COLOR`, `FORCE_COLOR` | Color ([no-color.org](https://no-color.org)); `TERM=dumb` disables it too. stdout and stderr are decided separately. |
-| `STRIART_ASCII=1` | ASCII glyphs instead of ✓ ✗ → … (automatic on the legacy Windows console and `TERM=linux`). |
+| `NO_COLOR`, `FORCE_COLOR` | Color ([no-color.org](https://no-color.org)). **Precedence: `NO_COLOR` (non-empty) > `FORCE_COLOR` (`0`/`false` disables) > `TERM=dumb` > interactive terminal.** `TERM=dumb` forces `plain` mode (no glyph, link or animation) but does not forbid an explicitly forced color: `FORCE_COLOR=1 TERM=dumb` colors, without glyphs. stdout and stderr are decided separately. |
+| `STRIART_ASCII=1` | ASCII glyphs instead of ✓ ✗ → … (automatic on the legacy Windows console and `TERM=linux`) — **help included** (typographic arrows, dashes and quotes of `--help` and static texts; never data: file names, commit messages). |
 | `STRIART_NO_ANIMATION=1` | No animated progress indicator (also off in CI and outside a terminal). |
 | `FORCE_HYPERLINK=0\|1` | OSC 8 clickable links on paths (tickets, clones), otherwise detected (Windows Terminal, VS Code, iTerm2, WezTerm, kitty, ghostty, recent VTE). |
 
@@ -314,9 +327,12 @@ striart completion fish > ~/.config/fish/completions/striart.fish
 striart completion powershell >> $PROFILE
 ```
 
-Commands, options and dynamic values are completed: agent names (`<agent>`,
+The script carries a header in the CLI's language (`STRIART_LANG`). Commands,
+options and dynamic values are completed: agent names (`<agent>`,
 `--agent`, `--after`), ticket ids (`--close`, `--prepare`, `--apply`),
-profiles (`--profile`), files (`plan`). Dynamic values come from the
+profiles (`--profile`), files (`plan`), and commander's **closed
+enumerations** (`.choices()`: for instance the `<mode>` of `orchestrate`,
+`--pick`, `--framing`), read from the same source as validation. Dynamic values come from the
 internal command `striart __complete agents|tickets|profiles`, which reads
 `.striart/` on every Tab, without git or lock; it only offers values that
 match their pattern, and only from an initialized repository (`.git` **and**
@@ -347,7 +363,7 @@ failure. Idempotent. Details: [Getting started](getting-started.md#striart-init)
 
 ### `striart doctor`
 
-Full diagnosis — 23 checks: git version, **native component** (the
+Full diagnosis — 29 checks: git version, **native component** (the
 `striart-native` binary: selected source, signature verified or not,
 version, the pinned key and the user's trusted keys `native.trustedKeyIds` —
 never a silent fallback), **Test Gate container** (`gateContainer`: native, or
@@ -356,7 +372,12 @@ effective shell, `pty.shell`), repository and first commit, initialization,
 config loaded and validated, **target branch** (missing → error: merge,
 sync, watch and rollback would fail; current branch different → warning:
 merge and watch will refuse), reachable LLM (Ollama ping or API key
-present), historical secrets, **main lock** (free / operation running with
+present), **network** (offline / allow-list policy, proxy active or inactive
+and its mechanism, corporate CA, minimum TLS; as warnings
+`network.allowInsecureHosts` and `NODE_TLS_REJECT_UNAUTHORIZED=0` — **user**
+config and shell only, see
+[Enterprise network](configuration.md#enterprise-network-network)), historical
+secrets, **main lock** (free / operation running with
 its age and last heartbeat / live but frozen holder, never broken / orphan /
 third-party merge open), **state lock**, **main session** (free / busy —
 see `striart lock`), agents (including clones being removed or broken), open
@@ -365,21 +386,35 @@ relaxations), **MCP server** (clone-bound scope, or `orchestrator`),
 **agent profiles** (verified presets, experimental ones, ACP download,
 instructions), **tokens and cost** (accounting, ceilings, stale prices,
 instructions footprint, LLM circuit breaker disabled), **orchestration**,
-**dashboard** (hosts accepted besides the loopback) and a **relaxed
-protections** summary that gathers in one place everything the config
+**dashboard** (hosts accepted besides the loopback), **local data**
+(`.striart/` reserved to the user: number of items inspected, or what is still
+readable by other accounts — the fix is `striart init`), **Test Gate
+environment** (variables filtered, repository requests not allowed by
+`gate.envAllow`), **idle GC** (the `idle.action` policy; with `close`, whether the
+user config authorizes closing or the repository is missing from
+`idle.closeRoots`), **delivery** (`delivery`, `pushTimeoutMs`, `commitTimeoutMs`:
+information, not a relaxation), **performance** (real latency of the state lock,
+main-repository `git status`, size of `.striart/`, number of agents, age of the
+oldest held lock — each measurement is time-bounded and a slowness finding is a
+warning, never an error) and a **relaxed protections** summary that gathers in one place everything the config
 lowered (`hooks.trustedRoots` of the user config, `mcp.scope`, ACP
 relaxations, `acpRegistry.allowBinaryDownload`, `dashboardAllowedHosts`,
 `dashboardHostname: 'localhost'`, `protectedAgentPaths.allow`/`matchCase`,
 `lock.breakFrozenHolderAfterMs`, `tokens.*`, `orchestration.*`, experimental
-profiles, the user config's `env.allow`, `acpRegistry.allowEnv`,
+profiles, the user config's `env.allow`, `gate.envAllow` and
+`network.allowInsecureHosts`, `idle.enabled: false`, `idle.closePty: true`,
+`overlap.enabled: false`, `acpRegistry.allowEnv`,
 `llm.allowAnyApiKeyEnv` / `llm.allowInsecureTransport`,
-`gateContainer: 'process'`, `unknownConfigKeys: 'warn'` and the three
+`gateContainer: 'process'`, `gateEnv: 'inherit'`, `privateStateDir: false`,
+`NODE_TLS_REJECT_UNAUTHORIZED=0`, `unknownConfigKeys: 'warn'` and the three
 config-as-code relaxations `secretPatterns: []`, `pty.shell` other than
 `auto`, and `terminal.launcher: 'custom'`). An unknown top-level key (with
 `unknownConfigKeys: 'warn'`) is also a warning of the "configuration" check;
 `secretPatterns: []` is one of the "historical secrets" check (secret
 exclusion and history scan switched off). Each finding separates the fact
-from the action, and the list of actions follows the table.
+from the action, and the list of actions follows the table. Active policies
+that are not relaxations (`delivery: 'branch'`, `idle.action: 'warn'` or
+`'close'`) are reported separately.
 
 Severity: `error` = the next command will fail; `warning` = Striart works
 but a capability is degraded or a human action is expected; `skipped` = not
@@ -495,7 +530,11 @@ Intersection → the task is **queued** instead of heading into a conflict
 the name is derived from the prompt (e.g. `refactor-the-auth-module`).
 `--prompt <p>` is the scriptable equivalent of the positional (both at once
 and different: `OPTION_CONFLICT`). The target branch is checked **before**
-the LLM call (`UNKNOWN_BRANCH`).
+the LLM call (`UNKNOWN_BRANCH`). The prediction is a **coarse filter**, not a
+guarantee: on this repository's real history the measured recall is around half
+of the touched files
+([2026-10-26 measurements](architecture.md#what-the-router-and-the-semantic-merge-are-worth--measurements-of-2026-10-26));
+what it misses, the semantic merge and the Test Gate catch.
 
 `--allow-historical-secrets` is a conscious decision against
 `HISTORICAL_SECRETS_FOUND`; if the task is queued, the decision is stored
@@ -676,6 +715,15 @@ does not pick up a commit made before it started: a merge deferred this way
 is rerun by hand. As a daemon, the same stop is triggered by `--stop` (see
 below).
 
+**Idle GC.** As long as `idle.enabled` is true (the default), `watch` runs a
+[GC](#striart-gc-agent---close---dry-run) sweep every `idle.sweepIntervalMs`
+(5 min) — **outside the merge chain** (a closure does not wait for a long merge)
+and never under the main lock. With the default action (`report`) it only
+detects; with `warn` or `close` it warns and then, with the user's
+authorization, closes the session after the grace period. The ndjson stream
+carries `idle-warned`, `idle-closed`, `idle-refused` and `idle-error`; Ctrl+C
+waits for a sweep in flight to finish.
+
 ### `striart watch --daemon | --status | --stop`
 
 The same watcher, as a native detached process: PID file
@@ -779,7 +827,11 @@ Manual merge of an agent's latest commit — same pipeline as the watcher
 (`MAIN_DIRTY`), on the wrong branch (`TARGET_BRANCH_MISMATCH`), if untracked
 files would be overwritten (`UNTRACKED_COLLISION`) or if the agent's
 autonomous session is alive (`SESSION_LIVE`) — see
-[Branches and pipeline](branches.md). Exit 0 on `MERGED`/`UP_TO_DATE`,
+[Branches and pipeline](branches.md). A target branch with no commit at all is
+refused up front (`UNKNOWN_BRANCH`), and a `HEAD` pointing to another **unborn**
+branch gives `TARGET_BRANCH_MISMATCH` (hint `git switch <targetBranch>`), never a
+raw git message — the same goes for `rollback`, `promote` and
+`resolve --apply`. Exit 0 on `MERGED`/`UP_TO_DATE`,
 **3 on `CONFLICT` or `GATE_FAILED`** (ticket created). The `--json` document
 of a successful merge distinguishes `sha` (the agent's commit) from
 `mergeSha` (the merge commit created on the target branch — the one
@@ -792,6 +844,27 @@ and so is the main repository's state — if someone acted on `HEAD` or opened
 a merge during the operation, nothing is committed (`MERGE_STATE_CHANGED`,
 exit 3). An agent commit already present in the target returns `UP_TO_DATE`
 (no merge commit created).
+
+**Merge commit and the target's hooks.** The commit that concludes the merge
+runs the repository's hooks (`pre-commit`, `pre-merge-commit`,
+`prepare-commit-msg`, `commit-msg`) and signing, under the hard
+`commitTimeoutMs` timeout (process tree killed beyond it). A hook is **never
+bypassed**: a rejection or a timeout cancels the merge (the main repo is clean),
+opens a `COMMIT_HOOK_REJECTED` ticket that keeps the hook's output (16 KiB at
+most, **secrets redacted** — same rule as the Test Gate log — in the ticket, the
+error message and the `--json`) and exits 1. It is not an LLM failure: the
+manual-mode counter is untouched, and the ticket closes at the agent's next
+successful merge. Other git refusals (missing identity, signing impossible) give
+`MERGE_COMMIT_FAILED`.
+
+**Delivery (`autoPush`).** The push to `origin` is a deferred effect, after the
+lock is released, of the exact tested SHA (see
+[Configuration](configuration.md#delivery-to-origin-autopush-delivery-timeouts)).
+The result carries `delivery` (mode, branch, SHA, `pushed`, `code`, hint) and
+`pushError` (`[CODE] message`); in `delivery: 'branch'` mode the human output
+adds the line "delivered on origin/striart/… (sha): approve it from the forge (PR/MR), the target branch was not pushed.". A
+failed push changes neither the status nor the exit of the merge (the local work
+is valid).
 
 ### `striart sync [agent]`
 
@@ -905,6 +978,14 @@ including those waiting for a verdict) and `tokens` (accounting on, today's
 consumption, ceilings and their level, relaxations; `available: false` if
 the config or the ledger is unreadable, without breaking the view).
 
+The view also carries the additive fields `overlaps` (overlaps
+[observed](configuration.md#overlap--the-runtime-overlap-net) at runtime between
+agents, or between an agent and the target) and `idle`: the
+[idle GC](#striart-gc-agent---close---dry-run) verdict for each agent, computed
+by a `--dry-run` sweep (nothing is written or closed; `available: false` if the
+sweep is impossible). Live sessions whose signals are all past the threshold
+appear in the "things to handle", with the `striart gc --dry-run` hint.
+
 ### `striart queue [--retry]`
 
 The scheduler: `RUNNING` / `WAITING` tasks and what blocks each one
@@ -965,6 +1046,49 @@ page speaks JSON-RPC 2.0 (`POST /rpc`) and receives changes through
 (3456); an invalid port is refused before anything starts, a busy port
 returns `PORT_IN_USE` with a suggestion.
 
+**The page.** It is served in the instance's language (`STRIART_LANG`, then the
+locale — same rule as the CLI; French and English, a single embedded catalog),
+in a **light or dark** theme following the system preference
+(`prefers-color-scheme`). Reading and tab order: a skip link ("Skip to main
+content"), then the **"Needs your attention"** zone (conflict tickets to resolve, `BROKEN`/
+`MISSING` agents, no watcher, reserved main session, manual mode, permissions,
+agent questions, reviews), the task form, maintenance, then the data (agents,
+queue, contended files, tickets, orchestration, history). A piece of
+information's level is always carried by a word, never by color alone.
+Destructive actions ask for a confirmation that names the consequence;
+**"Force stop…"** lives in each agent's "More actions" menu (`<details>`, out of
+reach of a careless click) and says what it does: it **removes the agent from
+the registry without merging its pending commits** — the clone stays on disk,
+but Striart will no longer integrate it —, with no Test Gate. When the real-time
+stream is cut, an **"Offline"** state shows the data **time-stamped** ("last
+update at …") and flags that they may be stale; reconnection is automatic. The
+page does **not** show token usage (the Control Protocol does not expose it:
+`striart usage`). It is **not declared WCAG 2.2 AA compliant**: the automated
+audit (axe) is green according to the maintainer's reading (not rerun by the
+documentation pass) and a manual review remains to be done; no real screen
+reader has been tested. The page is served under a strict CSP whose script and
+style sheet are identified **by hash, one per language** (no `unsafe-inline`, no
+external source); `/favicon.ico` answers 204 with no data, even without a
+session.
+
+**Agent list.** Agents are grouped by state: **"Needs attention"** (`BROKEN` /
+`MISSING`, commits waiting to be merged, a conflict ticket, a pending permission
+request, question or review), **"Running"** (live session or recent activity, ACP
+host running) and **"Idle"** (the rest, including a clone being removed). From
+four agents on, a filter by group and a search by name appear; a click opens the
+agent's detail (branch, tool, mode, session, clone size, pending commits, locked
+files, open conflicts, tasks it blocks, inactivity). This "Idle" group is a
+**display classification**: it says nothing about the GC decision below, which
+rests on the activity signals.
+**Inactivity (GC).** An agent whose session is alive but that the
+[idle GC](#striart-gc-agent---close---dry-run) judges idle carries an **"Idle
+for …"** badge (information, then warning once it has been warned or is
+closable), an "Inactivity" row in its detail, and a card in the **"Needs your
+attention"** zone that says where it stands (warned, closable after such a time,
+clone and work kept) with a **"Run gc --dry-run"** button for that agent. The
+dashboard **never** closes a session itself: the button previews (`workspace.gc`
+in `dryRun`); closing stays `striart gc` or the `striart watch` sweep.
+
 **Sign-in through a one-time link** (a 0.11 break: the dashboard is no longer
 open to anyone who reaches the loopback). At startup Striart prints a
 **sign-in link** (`http://<random-id>.localhost:<port>/auth?code=…` — a name
@@ -1011,7 +1135,11 @@ Undoes the **last Striart merge**: local reset (recoverable via reflog) if
 the merge isn't pushed, revert otherwise (published history is kept).
 Refuses if the target branch's last commit isn't a Striart merge
 (`NOT_A_STRIART_MERGE`) — merges produced by `resolve --apply` are now
-recognized too.
+recognized too — or if the target branch has no commit (`UNKNOWN_BRANCH`) or is
+not the current branch (`TARGET_BRANCH_MISMATCH`). A `revert` (already published
+merge) also runs the target's hooks under `commitTimeoutMs`: rejection or
+timeout → `COMMIT_HOOK_REJECTED`, `HEAD` unchanged, no ticket. Deliveries in
+flight in this process are awaited before deciding "published?".
 
 ### `striart resolve [--unlock | --close <id> | --prepare <id> [--accept-theirs <path>…] | --apply <id>] [--all]`
 
@@ -1019,7 +1147,9 @@ Conflict tickets (`.striart/conflicts/<ticket>/`: BASE/OURS/THEIRS versions,
 LLM attempt, Test Gate log). With no option: lists open tickets — `--all`
 adds the already resolved ones. `--close <id>` marks a ticket resolved
 **without going back through the Test Gate** (by hand, once the conflict was
-fixed outside Striart); `--unlock` re-enables semantic merging after the
+fixed outside Striart) — on an already resolved ticket it is a refusal
+(`TICKET_ALREADY_RESOLVED`, exit 3), like `--apply`, so that a script chaining
+commands does not believe it acted; `--unlock` re-enables semantic merging after the
 switch to manual mode (3 failures in a row). The four actions are mutually
 exclusive.
 
@@ -1063,7 +1193,9 @@ a real incident: a collision with an active `striart watch`).
   resolution), the ticket is closed (along with its duplicates on the same
   files of the same agent), the semantic failure counter is reset. Red →
   exit 3, the ticket stays open, **nothing** is touched on the counter or
-  manual mode (a failed manual resolution isn't an LLM failure). Refused
+  manual mode (a failed manual resolution isn't an LLM failure). A target hook
+  that rejects the commit (`COMMIT_HOOK_REJECTED`) likewise leaves the original
+  ticket open and intact. Refused
   without changing anything if: the ticket is already resolved
   (`TICKET_ALREADY_RESOLVED`), the conflict isn't file-by-file
   (`TICKET_NOT_APPLICABLE`), the resolution is incomplete
@@ -1158,6 +1290,114 @@ reported in `failed`, never swallowed. `--dry-run` previews. An invalid retentio
 `INVALID_RETENTION_DAYS` at the API level) instead of deleting everything. A
 periodic `striart prune` (cron/scheduled task) keeps `.striart/` healthy.
 
+### `striart gc [agent] [--close] [--dry-run]`
+
+**Idle garbage collector** (`src/idle/`). A forgotten agent — a terminal left
+open, an ACP or autonomous session that no longer produces anything — keeps a
+process, a host and a clone alive indefinitely. `gc` detects these agents and,
+according to `idle.action`, **reports** them, **warns** them and closes **their
+session**. It **never** touches the clone or the uncommitted work, does not
+merge, does not rebase, removes nothing from the registry: it is the only
+exception to "a clone whose session is alive is untouchable", and it concerns
+the session only. Settings: the
+[`idle` block](configuration.md#idle--the-gc-of-idle-agents-and-sessions);
+threat model: [SECURITY.md](../../SECURITY.md).
+
+**What "idle" means.** An agent is idle only if **all** its signals are older
+than `idle.warnAfterMs` (30 min by default): activity is the *maximum* of the
+timestamps, never a single signal.
+
+| Signal | Source |
+|---|---|
+| `sessionStart` | clone creation, start of the last session, start of the ACP or terminal host — a session that has just been born is not idle |
+| `sessionOutput` | last output of the agent: `.striart/idle/beats/<agent>.beat` heartbeat (argv autonomous session, touched by the supervising process at most every 10 s); session log (ACP); terminal: `host.output`, published by the native pty host |
+| `worktree` | last real write in the clone's worktree |
+| `refs` | `HEAD` reflog and the clone's branch references |
+| `messages` | the clone's collaboration mailboxes (`.striart-inbox.md`, `.striart-outbox.json`) |
+
+**Fail closed.** An unreadable signal, a file clock more than 5 s ahead, or the
+absence of any signal makes the agent **active**, never idle. As soon as one
+fresh signal is known, the worktree walk is skipped. An "unobservable" signal
+(this kind of host does not publish it) counts neither for nor against. A
+terminal whose last output is not observed (older native host that does not
+publish `host.output`, program still silent) can only be closed under
+`idle.closePty: true` (`PTY_OUTPUT_UNOBSERVABLE` in `closeBlockedBy`).
+
+**Gradation.** Detect → warn → grace period → close:
+
+- `idle.action: 'report'` (default): detection and report only (status,
+  `idle:detected` event once per idle period).
+- `'warn'`: also a warning (log, webhooks, `idle:warned` event). It only holds
+  for the current idle period: any activity makes it stale.
+- `'close'`: also the session is closed if the warning is at least
+  `idle.graceMs` (5 min) old, if the inactivity reaches `idle.closeAfterMs`
+  (2 h) and if **the user has authorized it** for this repository
+  (`idle.closeRoots` in the
+  [user configuration](configuration.md#user-configuration-outside-the-repository));
+  a fresh re-check, just before acting, cancels the close if a signal appeared
+  in the meantime. Without authorization, `close` degrades to a warning and the
+  report says so (`closeAuthorized: false`).
+
+**Guards.** Whatever the inactivity, an agent is *protected* (never touched) if
+it has a pending human request (permission, question), an open conflict ticket,
+a live orchestration plan or group (or membership of a collaboration group), a
+merge/stop/sync/start/reuse in progress, a removal in progress, a main-repository
+session or a config exclusion (`idle.excludeAgents`, `idle.excludeProfiles`). If
+a **context source is unreadable** (human requests, tickets, orchestration, lock,
+main session, GC state), the sweep stays cautious: no closure.
+
+**How the session is closed** (never a blind kill):
+
+- **ACP**: a stop request read by the host (`session/cancel`, agent shutdown);
+  falls back to the tree kill only if the host is identified.
+- **Terminal** (native pty host): the same host stop protocol.
+- **Autonomous argv session**: the process that supervises it receives a stop
+  request on disk, acknowledges it, then cancels it through its normal path
+  (`CANCELLED`, clone kept). Supervisor alive but mute: **no kill**
+  (`IDLE_CLOSE_NOT_ACKNOWLEDGED`). With no known supervisor, the agent cannot be
+  identified (`IDLE_CLOSE_UNVERIFIED`, detail `NO_SUPERVISOR_RECORD`); *orphan*
+  agent (dead supervisor): SIGTERM (POSIX) then tree kill, after its identity is
+  checked against its creation time.
+
+At most `idle.maxClosuresPerSweep` (4) sessions are closed per sweep. Never the
+main repository's session, never Striart itself.
+
+**Options.**
+
+- `[agent]`: restrict the sweep to this agent (unknown: `AGENT_UNKNOWN`).
+- `--dry-run`: writes nothing (no state, no event) and closes nothing; shows what
+  would be warned or closed.
+- `--close`: a *human request* to close. Replaces `idle.action` and the
+  `idle.closeRoots` authorization, but **not** the prior warning, the grace
+  period, the `closeAfterMs` threshold or the guards.
+
+**Output and codes.** `0`: sweep done. `3`: at least one closure was **refused**
+by a guard (`IDLE_CLOSE_BLOCKED`, `IDLE_CLOSE_UNVERIFIED`,
+`IDLE_CLOSE_NOT_ACKNOWLEDGED`) — the session is intact, rerunning as is will not
+change anything. `1`: a stop failed (`IDLE_CLOSE_FAILED`). These codes are
+carried by the report (`refused[].code`), not thrown: a recalcitrant agent does
+not stop the sweep. `--json` renders the full report (thresholds, agents, signals
+read, `plan`, `closeBlockedBy`, `warned`, `closed`, `refused`).
+
+**Where it runs.**
+
+- **By hand**: `striart gc`, then `striart gc --dry-run` to preview.
+- **In `striart watch`**: a sweep every `idle.sweepIntervalMs` (5 min), **outside
+  the merge chain** and never under the main lock; one at a time. Waking up from
+  sleep (the timer fires very late) neutralizes that round — agents frozen with
+  the machine have not had time to resume. Stream events: `idle-warned`,
+  `idle-closed`, `idle-refused`, `idle-error`.
+- **Read-only**: `striart status` ("live idle sessions" line with the
+  `striart gc --dry-run` hint), `striart_status` (MCP) and the Control Protocol
+  state carry an additive `idle` field; `watch --ui` and `watch --plain` show
+  "idle for N min"; the dashboard a badge, a card and a button (see the
+  dashboard section above). The agent plane (MCP) exposes **no** GC tool.
+- **Human plane**: the Control Protocol `workspace.gc` method (`dryRun`,
+  `close`, `agent`).
+
+The persistent state (warning instants, claimed closure) lives in
+`.striart/idle/state.json`, under the state lock; the inactivity itself is never
+stored, it is recomputed at every sweep.
 ## Integration
 
 ### `striart promote [--rollback]`
@@ -1167,13 +1407,21 @@ global Test Gate (`promoteTestCommand`) then fast-forward of `mainBranch`.
 Exit 3 if the gate is red (`PROMOTION_GATE_FAILED` ticket); `--rollback`
 then resets staging to main (destructive, opt-in). Refusals:
 `PROMOTION_DISABLED` (no `mainBranch`), `MAIN_DIVERGED` (`mainBranch` has
-commits outside the pipeline), `UNKNOWN_BRANCH`.
+commits outside the pipeline, or moved during the gate: the update is a
+compare-and-swap on the old SHA, never a `git push .` that would run the
+target's hooks under the lock), `UNKNOWN_BRANCH` (target branch or `mainBranch`
+missing or with no commit), `TARGET_BRANCH_MISMATCH`. With `autoPush`,
+`mainBranch` is delivered to `origin` outside the lock — or, in
+`delivery: 'branch'`, a `striart/promote/<date>-<sha8>` branch is delivered
+instead and the remote `mainBranch` does not advance.
 
 ### `striart mcp [--root <path>] [--agent <agent>] [--read-only [--collab]]`
 
 MCP stdio server — the **agent → Striart plane**; see [MCP server](mcp.md).
 Logs go to stderr: stdout is reserved for the protocol. No `--json` (the
-protocol is the output). The server is **bound to its caller**:
+protocol is the output). Started in a **non-initialized** repo it refuses to
+start (`NOT_INITIALIZED`, exit 1, empty stdout, hint `striart init`) rather than
+expose tools that would fail one by one. The server is **bound to its caller**:
 
 - started from an agent's clone (or with `--agent`), it only acts on that
   agent: its merge, its tickets;
@@ -1193,10 +1441,14 @@ protocol is the output). The server is **bound to its caller**:
 ### `striart api --stdio [--framing <f>]` and `striart api --schema [openrpc|json-schema]`
 
 The **Striart Control Protocol v1** on stdio: the **human plane** for IDE
-extensions (VS Code, JetBrains) and any local JSON-RPC 2.0 client. Zero
+extensions (VS Code, JetBrains) and any local JSON-RPC 2.0 client. Only the
+VS Code extension exists so far (`extensions/vscode/`, delivered but **not
+published**: see [VS Code and Cursor](integrations/vscode-cursor.md#vs-code-extension));
+the JetBrains plugin is not delivered. Zero
 network surface: the extension launches the CLI as a subprocess, which works
 as is over Remote SSH, devcontainers and Codespaces. stdout is the protocol
-(logs go to stderr). Framing is the client's choice: `ndjson` (one message
+(logs go to stderr). Like `mcp`, it refuses a non-initialized repo
+(`NOT_INITIALIZED`, exit 1). Framing is the client's choice: `ndjson` (one message
 per line, default) or `content-length` (LSP style, that of `vscode-jsonrpc`
 and `lsp4j`); a message over 1 MB is dropped and reported without closing
 the stream. The requests of one connection run in parallel (bounded),
@@ -1208,14 +1460,15 @@ response `id` `null`). `session.log` returns the **tail** of the session log
 (64,000 bytes at most, read from the end of the file, never loaded whole: a
 log can weigh hundreds of MB), realigned on a UTF-8 character boundary.
 
-The 28 methods (negotiation `control.initialize`, `rpc.discover`) cover the
+The 29 methods (negotiation `control.initialize`, `rpc.discover`) cover the
 state (`state.get`, `state.subscribe` — current state then `state.changed`
 and `control.notice` notifications, with a sequence number and a monotonic
 revision, coalescing if the client reads too slowly —, `ticket.get`,
 `session.log`, `doctor.run`, `orchestration.state`), the actions
 (`task.run`, `agent.merge`, `agent.sync`, `agent.stop`, `queue.retry`,
 `reconcile.run`, `staging.promote`, `merge.rollback`, `ticket.prepare`,
-`ticket.apply`, `clones.clean`, `workspace.prune`) and the gestures
+`ticket.apply`, `clones.clean`, `workspace.prune`, `workspace.gc` — the
+[idle GC](#striart-gc-agent---close---dry-run)) and the gestures
 **reserved to the human**: `ticket.close`, `permission.answer`,
 `elicitation.answer`, `review.answer`, `mainSession.release`,
 `semantic.unlock`. Every result is a `--json` document
@@ -1292,7 +1545,7 @@ refuse on any non-zero code.
   never rewritten (`HOOK_CONFIG_UNREADABLE`).
 - `--dry-run` shows the files that would change without writing anything. A
   missing or doubled scope: `HOOK_SCOPE_REQUIRED`; unknown tool:
-  `HOOK_TOOL_UNKNOWN`.
+  `HOOK_TOOL_UNKNOWN` (usage: exit 2).
 - The `hooks.collisions` and `hooks.notifySessionEnd` settings
   ([Configuration](configuration.md#hooks--advisory-hooks)) each turn off one
   of the two notices. A hook installed for the user only reads the

@@ -102,3 +102,47 @@ export function truncate(text: string, max: number, ellipsis: string): string {
 export function padEnd(text: string, width: number): string {
   return text + ' '.repeat(Math.max(0, width - displayWidth(text)));
 }
+
+/**
+ * Équivalents ASCII des glyphes typographiques de NOS textes statiques (aide,
+ * catalogue) pour `STRIART_ASCII=1` / `--plain` / `TERM=dumb` : flèches,
+ * points de suspension, tirets, guillemets, coches. Les lettres accentuées
+ * restent (ce sont des lettres, pas des glyphes). Jamais appliqué à des
+ * DONNÉES (noms de fichiers, messages de commit) : elles seraient altérées.
+ */
+export function asciiGlyphs(text: string): string {
+  return text
+    .replace(/[→⟶]/g, '->')
+    .replace(/←/g, '<-')
+    .replace(/…/g, '...')
+    .replace(/[–—]/g, '-')
+    .replace(/[‘’‚‛]/g, "'")
+    .replace(/[“”«»]/g, '"')
+    .replace(/[  ]/g, ' ')
+    .replace(/[✓✔]/g, 'ok')
+    .replace(/[✗✘]/g, 'x');
+}
+
+/**
+ * Coupe un texte SANS séquences de style en lignes d'au plus `width` colonnes,
+ * aux espaces (algorithme glouton). Un mot plus long que la largeur n'est
+ * jamais coupé : mieux vaut un chemin entier qui déborde qu'un chemin
+ * illisible. `width` ≤ 0 : une seule ligne.
+ */
+export function wrapWords(text: string, width: number): string[] {
+  if (width <= 0 || displayWidth(text) <= width) return [text];
+  const lines: string[] = [];
+  let current = '';
+  for (const word of text.split(' ')) {
+    if (current === '') {
+      current = word;
+    } else if (displayWidth(current) + 1 + displayWidth(word) <= width) {
+      current += ` ${word}`;
+    } else {
+      lines.push(current);
+      current = word;
+    }
+  }
+  lines.push(current);
+  return lines;
+}

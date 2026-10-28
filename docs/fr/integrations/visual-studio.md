@@ -60,7 +60,8 @@ Si `striart` n'est pas trouvé, visez `node` avec le chemin absolu de
 
 - Pas de répertoire de travail configurable documenté (voir plus haut).
 - Une intégration native (extension) n'est pas prévue pour Visual Studio à
-  ce stade ; l'extension à venir (sans date annoncée) vise VS Code et Open VSX.
+  ce stade ; l'extension VS Code (livrée, non publiée) vise VS Code et, une fois
+  publiée, Open VSX.
 
 ## Sécurité
 

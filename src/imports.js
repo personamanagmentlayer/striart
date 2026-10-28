@@ -17,9 +17,10 @@
  * positif coûterait la confiance dans le signal. Les langages compilés
  * restent couverts par le Test Gate.
  */
-import { readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
-import { normalizeFilePath } from './router.js';
+import { normalizeFilePath } from './project-path.ts';
+import { fsSources, mapLimit } from './router-sources.ts';
 
 const JS_EXTENSIONS = ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'];
 /** Au-delà : fichier généré/bundle, sans valeur pour le graphe. */
@@ -138,30 +139,79 @@ function languageFor(file) {
 /**
  * Construit le graphe d'imports : fichier → fichiers du projet qu'il importe.
  * Lecture best effort (fichier illisible ou trop gros : ignoré).
+ * `sources` (facultatif) remplace la lecture du disque : le Router le fournit
+ * pour analyser un arbre qui n'est pas celui du disque (banc sur historique).
  * @param {string} root
  * @param {string[]} files fichiers du projet (chemins relatifs)
+ * @param {import('./router-sources.ts').ProjectSources | null} [sources]
  * @returns {Promise<Map<string, Set<string>>>}
  */
-export async function buildImportGraph(root, files) {
+export async function buildImportGraph(root, files, sources = null) {
   const normalized = files.map(normalizeFilePath);
   const projectFiles = new Set(normalized);
+  const reader = sources ?? fsSources(root);
   const graph = new Map();
 
-  for (const file of normalized) {
-    const language = languageFor(file);
-    if (!language) continue;
-    let source;
-    try {
-      source = await readFile(path.join(root, file), 'utf8');
-      if (source.length > MAX_SOURCE_BYTES) continue;
-    } catch {
-      continue;
+  // Avec des sources explicites (le Router), l'analyse de chaque fichier est
+  // mémorisée par (ensemble de fichiers, chemin, version) : un long processus ne
+  // relit que ce qui a changé. Sans sources (appel historique), aucune mémoire.
+  const fingerprint = sources
+    ? createHash('sha256')
+        .update(normalized.join(String.fromCharCode(10)))
+        .digest('hex')
+        .slice(0, 16)
+    : null;
+  const candidates = normalized.filter((file) => languageFor(file) !== null);
+  const extracted = await mapLimit(candidates, 32, async (file) => {
+    let key = null;
+    if (fingerprint) {
+      const version = await reader.version(file);
+      if (version !== null) {
+        key = `${fingerprint}|${file}|${version}`;
+        const hit = GRAPH_CACHE.get(key);
+        if (hit !== undefined) return hit;
+      }
     }
-    const imports = language.extract(file, source, projectFiles);
-    imports.delete(file);
-    if (imports.size > 0) graph.set(file, imports);
-  }
+    const source = await reader.read(file);
+    let result = null;
+    if (source !== null && source.length <= MAX_SOURCE_BYTES) {
+      const imports = languageFor(file).extract(file, source, projectFiles);
+      imports.delete(file);
+      if (imports.size > 0) result = [file, imports];
+    }
+    if (key) {
+      if (GRAPH_CACHE.size >= GRAPH_CACHE_MAX) GRAPH_CACHE.clear();
+      GRAPH_CACHE.set(key, result);
+    }
+    return result;
+  });
+  for (const entry of extracted) if (entry) graph.set(entry[0], entry[1]);
   return graph;
+}
+
+const GRAPH_CACHE = new Map();
+const GRAPH_CACHE_MAX = 30_000;
+
+/** Pour les tests. */
+export function resetImportGraphCache() {
+  GRAPH_CACHE.clear();
+}
+
+/**
+ * Graphe inversé : fichier → fichiers du projet qui l'importent.
+ * @param {Map<string, Set<string>>} graph
+ * @returns {Map<string, Set<string>>}
+ */
+export function invertImportGraph(graph) {
+  const inverse = new Map();
+  for (const [importer, deps] of graph) {
+    for (const dep of deps) {
+      let set = inverse.get(dep);
+      if (!set) inverse.set(dep, (set = new Set()));
+      set.add(importer);
+    }
+  }
+  return inverse;
 }
 
 /**

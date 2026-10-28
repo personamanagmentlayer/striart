@@ -1,5 +1,5 @@
 import { execa } from 'execa';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { runAcpSession } from './acp.ts';
 import {
@@ -16,10 +16,17 @@ import {
 } from './agents/profile-schema.ts';
 import { transcribeStructuredOutput } from './agents/transcript.ts';
 import { loadConfig } from './config.js';
+import { startOutputBeat } from './idle/heartbeat.ts';
+import { closeRequestPath } from './idle/paths.ts';
 import { StriartError } from './errors.js';
 import { logger } from './logger.js';
 import { striartDir } from './paths.js';
+import { writePrivateFile } from './private-fs.ts';
 import { killProcessTree, normalizeExitCode } from './process-tree.js';
+import { redactSecrets, secretValuesFromEnv } from './redact-secrets.ts';
+import { buildSessionEnv } from './session-env.ts';
+import { ensureStateProtection } from './state-protection.ts';
+import { clearStopRequest, watchStopRequest } from './stop-request.ts';
 import { SessionMeter } from './tokens/session-meter.ts';
 
 /**
@@ -42,6 +49,9 @@ function describeFailure(result, command) {
       : '';
   return `Command failed${how} (${command})${detail}`;
 }
+
+/** Délai entre le SIGTERM de la fermeture d'inactivité et le kill d'arbre (POSIX). */
+const IDLE_CLOSE_TERM_GRACE_MS = 5_000;
 
 /** Marqueur substitué par le prompt de la tâche dans les args d'un profil. */
 export { PROMPT_PLACEHOLDER };
@@ -275,6 +285,13 @@ export async function runAgentSession({
   profileKey = null,
   onMain = undefined,
 }) {
+  // Valeurs à caviarder : celles de l'environnement D'ORIGINE (STRIART_PROXY_AUTH
+  // comprise), même si la session ne la reçoit pas.
+  const redactionEnv = env;
+  // Environnement réseau de la session (une seule fois pour les trois
+  // transports : argv, ACP en process, hôte ACP persistant) : network.caFile
+  // de la config UTILISATEUR → NODE_EXTRA_CA_CERTS ; STRIART_PROXY_AUTH jamais.
+  env = await buildSessionEnv(env);
   // Transport ACP : même contrat SessionResult, même supervision (PID publié,
   // timeout, log hors du clone) — seule la frontière avec l'outil change :
   // un protocole au lieu d'un argv. L'orchestrateur ne voit pas la différence.
@@ -349,7 +366,10 @@ export async function runAgentSession({
       { ...plan.slots, testCommand: cfg.testCommand },
       [...settingsArgs, ...plan.appendArgs],
     ));
-    await mkdir(path.dirname(logPath), { recursive: true });
+    // Journaux = code et sorties d'outils : `.striart/` réservé à l'utilisateur
+    // (migration de l'existant comprise) avant d'y écrire quoi que ce soit.
+    await ensureStateProtection(root, cfg);
+    await mkdir(path.dirname(logPath), { recursive: true, mode: 0o700 });
   } catch (error) {
     await meter?.close().catch(() => undefined);
     throw error;
@@ -373,9 +393,25 @@ export async function runAgentSession({
       String(arg),
     );
   const describedArgs = args.map((a) => redact(a));
+  // Valeurs à retirer de tout ce qui est écrit ou rendu : clés d'API de
+  // l'environnement hérité et variables propres au profil (un outil qui
+  // s'« affiche » lui-même, une trace d'erreur HTTP, un `env` verbeux).
+  const secretValues = [
+    ...secretValuesFromEnv(redactionEnv),
+    ...Object.values(profile.env ?? {}).filter((v) => typeof v === 'string'),
+  ];
+  const scrub = (/** @type {unknown} */ text) => redactSecrets(text, { values: secretValues });
 
   const startedAt = Date.now();
   logger.info({ agent, command, cwd, timeoutMs }, 'Session autonome démarrée');
+
+  // GC d'inactivité (src/idle/) : le journal de cette session n'est écrit qu'à sa FIN, donc un
+  // battement de sortie (au plus un toutes les 10 s) dit si l'agent parle encore ; et une demande
+  // de fermeture propre déposée sur disque est lue par CE process, qui tient le handle du
+  // sous-process (aucun PID n'est deviné par le demandeur). Les deux sont best effort.
+  const closeFile = closeRequestPath(root, agent);
+  await clearStopRequest(closeFile).catch(() => undefined);
+  const beat = await startOutputBeat(root, agent).catch(() => null);
 
   const subprocess = execa(command, args, {
     cwd,
@@ -397,7 +433,10 @@ export async function runAgentSession({
     env: { ...env, ...(profile.env ?? {}), STRIART_SESSION: '1' },
   });
 
-  subprocess.all?.on('data', (chunk) => meter?.feedChunk(chunk));
+  subprocess.all?.on('data', (chunk) => {
+    meter?.feedChunk(chunk);
+    beat?.note();
+  });
 
   // Publication du PID au plus tôt : c'est lui qui rend la session visible au
   // reste de l'orchestrateur (qui doit alors s'abstenir de toucher au clone).
@@ -425,12 +464,40 @@ export async function runAgentSession({
   if (signal?.aborted) onAbort();
   else signal?.addEventListener('abort', onAbort, { once: true });
 
+  // Fermeture demandée par le GC d'inactivité (accusée avant d'agir, voir watchStopRequest) : arrêt
+  // doux d'abord (SIGTERM, POSIX), kill d'arbre si l'agent est encore là après la grâce. Statut
+  // CANCELLED comme un Ctrl+C : le clone et son travail sont conservés par la fin de cycle.
+  let idleClosed = false;
+  const onIdleClose = () => {
+    if (timedOut || cancelled) return;
+    cancelled = true;
+    idleClosed = true;
+    if (process.platform === 'win32') {
+      void killProcessTree(subprocess);
+      return;
+    }
+    try {
+      subprocess.kill('SIGTERM');
+    } catch {
+      // Déjà sorti : rien à interrompre.
+    }
+    setTimeout(() => {
+      if (subprocess.exitCode === null) void killProcessTree(subprocess);
+    }, IDLE_CLOSE_TERM_GRACE_MS).unref();
+  };
+  const stopCloseWatch = subprocess.pid
+    ? watchStopRequest(closeFile, { pid: subprocess.pid, onStop: onIdleClose })
+    : () => undefined;
+
   let result;
   try {
     result = await subprocess;
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener('abort', onAbort);
+    stopCloseWatch();
+    await clearStopRequest(closeFile, subprocess.pid ?? null).catch(() => undefined);
+    await beat?.stop();
   }
 
   const durationMs = Date.now() - startedAt;
@@ -438,24 +505,28 @@ export async function runAgentSession({
   const raw = result.all ?? '';
   const structured = profile.structuredOutput ?? 'none';
   if (structured !== 'none') {
-    await writeFile(sessionRawLogPath(root, agent, taskId), raw, 'utf8').catch((error) => {
+    await writePrivateFile(sessionRawLogPath(root, agent, taskId), scrub(raw)).catch((error) => {
       logger.warn({ err: error, agent }, 'Écriture du flux brut de session impossible');
     });
   }
   // Transcription lisible du flux structuré (messages, outils, commandes,
   // issue) ; sortie texte inchangée pour un profil sans format déclaré.
-  const output = transcribeStructuredOutput(structured, raw);
+  const output = scrub(transcribeStructuredOutput(structured, raw));
   const log = timedOut
     ? `${output}\n[Striart] Session interrompue : délai de ${timeoutMs}ms dépassé.`
     : cancelled
-      ? `${output}\n[Striart] Session interrompue : arrêt demandé.`
+      ? `${output}\n[Striart] Session interrompue : ${
+          idleClosed
+            ? "fermée par le GC d'inactivité (aucune activité), clone conservé"
+            : 'arrêt demandé'
+        }.`
       : budgetStopped
         ? `${output}\n[Striart] Session interrompue : budget de tokens dépassé (${meter?.breach?.scope}, ${meter?.breach?.metric}).`
         : output;
 
   // Le log est écrit même en cas d'échec de spawn : c'est précisément là
   // qu'on en a besoin (binaire introuvable, profil mal configuré).
-  await writeFile(logPath, log, 'utf8').catch((error) => {
+  await writePrivateFile(logPath, log).catch((error) => {
     logger.warn({ err: error, logPath }, 'Écriture du log de session impossible');
   });
 
@@ -487,7 +558,7 @@ export async function runAgentSession({
     durationMs,
     timedOut,
     logPath,
-    command: `${command} ${describedArgs.join(' ')}`,
+    command: scrub(`${command} ${describedArgs.join(' ')}`),
     // Porte notamment le cas « binaire introuvable » : le message cite la
     // commande (sans le prompt), ce qui suffit à diagnostiquer un profil mal
     // configuré. `shortMessage` d'execa recopie la ligne de commande COMPLÈTE,
@@ -498,7 +569,7 @@ export async function runAgentSession({
         ? `Token budget exceeded (${meter?.breach?.scope}, ${meter?.breach?.metric}): session stopped, clone kept. Raise tokens.budgets or review the work before merging.`
         : status === 'COMPLETED'
           ? null
-          : describeFailure(result, command),
+          : scrub(describeFailure(result, command)),
     ...(usage ? { usage } : {}),
     ...(budgetStopped && meter?.breach ? { budget: meter.breach } : {}),
   };

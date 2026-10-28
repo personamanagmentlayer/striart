@@ -12,6 +12,7 @@
  * des seuils absolus documentés (warn seulement, jamais bloquants).
  */
 import { globPatternProblem } from '../glob-lite.ts';
+import { DEFAULT_SHARED_PATTERNS } from '../router-shared.ts';
 import type { BudgetScope } from '../types.js';
 
 type Rec = Record<string, unknown>;
@@ -104,6 +105,64 @@ export interface TokensSettings {
       /** Étend les candidats par le graphe d'imports quand l'arbre déborde. */
       importExpansion: boolean;
     };
+    /**
+     * Réglage d'ensemble : 'balanced' (défaut, mesuré par `bench:router`), 'recall' (rappel
+     * maximal : plus d'expansion, plus de sérialisation) ou 'legacy' (comportement d'avant
+     * le lot de fiabilité du Router, à l'identique). Les clés explicites priment sur le préréglage.
+     */
+    preset: 'balanced' | 'recall' | 'legacy';
+    /**
+     * Gabarit de prompt : 'legacy' = consignes historiques (liste de chemins, 1 à 5) ;
+     * 'v3' = demande de confiance par fichier, d'exhaustivité (tests, types, contrats) et de portée.
+     */
+    prompt: 'legacy' | 'v3';
+    /** Carte du dépôt (symboles + première ligne de doc) des fichiers les plus proches de la tâche. */
+    map: {
+      /** 'off' ou 'candidates' (carte des `candidates` meilleurs candidats lexicaux, ajoutée à la demande). */
+      mode: 'off' | 'candidates';
+      candidates: number;
+    };
+    /** Récupération lexicale déterministe (BM25 sur chemins + symboles + docs ; pont français → anglais). */
+    retrieval: { enabled: boolean; bilingual: boolean };
+    /** Expansion déterministe après le LLM (tests, imports, jumeaux, historique). */
+    expansion: {
+      imports: 'off' | 'importees' | 'importers' | 'both';
+      depth: 1 | 2;
+      tests: boolean;
+      siblings: boolean;
+      contracts: boolean;
+      coChange: boolean;
+      /** Nombre maximal de fichiers ajoutés par l'expansion. */
+      maxAdded: number;
+    };
+    /** Fichiers du LLM de confiance inférieure à ce seuil : écartés (0 = tous gardés). */
+    minFileConfidence: number;
+    /** Au plus ce nombre de fichiers retenus parmi ceux du LLM (les plus sûrs d'abord). */
+    maxFiles: number;
+    /** Détection des tâches vagues/transverses → sérialisation prudente (sentinelle « tout le dépôt »). */
+    vague: {
+      enabled: boolean;
+      /** Confiance globale du LLM en dessous de laquelle la tâche est jugée vague. */
+      minConfidence: number;
+      /** Plus de fichiers que cela retenus par le LLM : tâche transverse. null = pas de seuil. */
+      maxFiles: number | null;
+      /** Verbes/expressions transverses (refactor, renommer, migrer, partout…) — signal faible. */
+      verbs: boolean;
+    };
+    /** Fichiers de tenue de livre (CHANGELOG, README, docs, manifestes, verrous). */
+    sharedFiles: {
+      /** 'exclude' : retirés de la prédiction de collision (conservés dans les détails) ; 'keep' : historique. */
+      mode: 'exclude' | 'keep';
+      patterns: string[];
+    };
+    /** Historique de co-modification : nombre de commits récents relus. */
+    history: { limit: number };
+    /**
+     * Au-delà de ce nombre de fichiers suivis, le contenu n'est PAS lu (carte, symboles,
+     * graphe d'imports) : la récupération lexicale et l'appariement par nom restent
+     * disponibles sur les seuls chemins. Borne le coût du premier passage sur un très gros dépôt.
+     */
+    maxScanFiles: number;
   };
   merger: {
     /** 'auto' : par hunk au-delà de hunkThresholdChars ; 'full' : trois versions entières ; 'hunk' : toujours par hunk. */
@@ -214,6 +273,28 @@ export const DEFAULT_TOKENS_SETTINGS: TokensSettings = Object.freeze({
       ]) as unknown as string[],
       importExpansion: true,
     }),
+    preset: 'balanced',
+    prompt: 'v3',
+    map: Object.freeze({ mode: 'candidates', candidates: 40 }),
+    retrieval: Object.freeze({ enabled: true, bilingual: true }),
+    expansion: Object.freeze({
+      imports: 'off',
+      depth: 1,
+      tests: true,
+      siblings: false,
+      contracts: false,
+      coChange: false,
+      maxAdded: 6,
+    }),
+    minFileConfidence: 0.5,
+    maxFiles: 6,
+    vague: Object.freeze({ enabled: true, minConfidence: 0.3, maxFiles: null, verbs: false }),
+    sharedFiles: Object.freeze({
+      mode: 'exclude',
+      patterns: Object.freeze([...DEFAULT_SHARED_PATTERNS]) as unknown as string[],
+    }),
+    history: Object.freeze({ limit: 400 }),
+    maxScanFiles: 5000,
   }),
   merger: Object.freeze({
     mode: 'auto',
@@ -358,7 +439,78 @@ export function isValidTokensSettings(v: unknown): boolean {
     sub(
       v.router,
       (r) =>
-        onlyKeys(r, ['onBudgetExceeded', 'onTreeTruncated', 'tree']) &&
+        onlyKeys(r, [
+          'onBudgetExceeded',
+          'onTreeTruncated',
+          'tree',
+          'preset',
+          'prompt',
+          'map',
+          'retrieval',
+          'expansion',
+          'minFileConfidence',
+          'maxFiles',
+          'vague',
+          'sharedFiles',
+          'history',
+          'maxScanFiles',
+        ]) &&
+        oneOf(r.preset, ['balanced', 'recall', 'legacy']) &&
+        oneOf(r.prompt, ['legacy', 'v3']) &&
+        numIn(r.minFileConfidence, 0, 1) &&
+        intIn(r.maxFiles, 1, 50) &&
+        sub(
+          r.map,
+          (m) =>
+            onlyKeys(m, ['mode', 'candidates']) &&
+            oneOf(m.mode, ['off', 'candidates']) &&
+            intIn(m.candidates, 1, 500),
+        ) &&
+        sub(
+          r.retrieval,
+          (x) => onlyKeys(x, ['enabled', 'bilingual']) && bool(x.enabled) && bool(x.bilingual),
+        ) &&
+        sub(
+          r.expansion,
+          (x) =>
+            onlyKeys(x, [
+              'imports',
+              'depth',
+              'tests',
+              'siblings',
+              'contracts',
+              'coChange',
+              'maxAdded',
+            ]) &&
+            oneOf(x.imports, ['off', 'importees', 'importers', 'both']) &&
+            (x.depth === undefined || x.depth === 1 || x.depth === 2) &&
+            bool(x.tests) &&
+            bool(x.siblings) &&
+            bool(x.contracts) &&
+            bool(x.coChange) &&
+            intIn(x.maxAdded, 0, 50),
+        ) &&
+        sub(
+          r.vague,
+          (x) =>
+            onlyKeys(x, ['enabled', 'minConfidence', 'maxFiles', 'verbs']) &&
+            bool(x.enabled) &&
+            numIn(x.minConfidence, 0, 1) &&
+            nullableInt(x.maxFiles, 1, 1000) &&
+            bool(x.verbs),
+        ) &&
+        sub(
+          r.sharedFiles,
+          (x) =>
+            onlyKeys(x, ['mode', 'patterns']) &&
+            oneOf(x.mode, ['exclude', 'keep']) &&
+            (x.patterns === undefined ||
+              (Array.isArray(x.patterns) &&
+                x.patterns.length <= 200 &&
+                x.patterns.every(validGlob))),
+        ) &&
+        sub(r.history, (x) => onlyKeys(x, ['limit']) && intIn(x.limit, 10, 5000)) &&
+        intIn(r.maxScanFiles, 100, 1_000_000) &&
         oneOf(r.onBudgetExceeded, ['serialize', 'fail']) &&
         oneOf(r.onTreeTruncated, ['serialize', 'predict']) &&
         sub(
@@ -427,11 +579,54 @@ function merge<T extends object>(base: T, given: unknown): T {
   return out as T;
 }
 
-/** Réglages effectifs : défauts complétés en profondeur par la config. */
+/**
+ * Préréglages du Router, EXPLICITES et complets : ils ne dépendent pas des
+ * défauts du jour (un défaut qui évolue ne change pas silencieusement 'legacy').
+ * 'balanced' = les défauts. Chaque valeur est mesurée par `npm run bench:router`.
+ */
+const ROUTER_PRESETS: Record<'recall' | 'legacy', Rec> = {
+  legacy: {
+    prompt: 'legacy',
+    map: { mode: 'off' },
+    retrieval: { enabled: false },
+    expansion: {
+      imports: 'off',
+      tests: false,
+      siblings: false,
+      contracts: false,
+      coChange: false,
+    },
+    minFileConfidence: 0,
+    maxFiles: 50,
+    vague: { enabled: false, maxFiles: null, verbs: false },
+    sharedFiles: { mode: 'keep' },
+  },
+  recall: {
+    minFileConfidence: 0,
+    expansion: {
+      imports: 'importers',
+      tests: true,
+      siblings: true,
+      contracts: true,
+      coChange: true,
+      maxAdded: 8,
+    },
+    vague: { enabled: true, minConfidence: 0.4, maxFiles: 10 },
+  },
+};
+
+/** Réglages effectifs : défauts, puis préréglage choisi, puis clés explicites de la config. */
 export function resolveTokensSettings(
   config: { tokens?: unknown } | null | undefined,
 ): TokensSettings {
-  return merge(DEFAULT_TOKENS_SETTINGS, config?.tokens);
+  const given = config?.tokens;
+  const router = isObject(given) && isObject(given.router) ? given.router : null;
+  const preset = router?.preset;
+  const overrides = preset === 'legacy' || preset === 'recall' ? ROUTER_PRESETS[preset] : null;
+  const base = overrides
+    ? merge(DEFAULT_TOKENS_SETTINGS, { router: overrides })
+    : DEFAULT_TOKENS_SETTINGS;
+  return merge(base, given);
 }
 
 /**
@@ -463,6 +658,20 @@ export function tokensRelaxations(
       key: 'tokens.cache.roles',
       summary:
         "tokens.cache.roles includes 'merger': an identical conflict is answered from the local cache without a model call (the Test Gate still judges the result).",
+    });
+  }
+  // Posé EXPLICITEMENT par le dépôt (le défaut implicite n'est pas un relâchement : il
+  // ferait apparaître une « protection relâchée » sur toute config vierge) : la tenue de
+  // livre ne sert plus à détecter les collisions — le filet à l'exécution (src/overlap.ts)
+  // applique la même politique, donc ne la voit pas non plus.
+  const rawSharedMode = (
+    config as { tokens?: { router?: { sharedFiles?: { mode?: unknown } } } } | null | undefined
+  )?.tokens?.router?.sharedFiles?.mode;
+  if (rawSharedMode === 'exclude' && s.router.sharedFiles.mode === 'exclude') {
+    out.push({
+      key: 'tokens.router.sharedFiles',
+      summary:
+        "tokens.router.sharedFiles.mode is 'exclude': bookkeeping files (CHANGELOG, README, docs, manifests, lockfiles) are left out of collision detection, both in the Router prediction and in the runtime overlap net — two agents really editing them are not signalled; the Merger resolves them.",
     });
   }
   if (s.router.onTreeTruncated === 'predict') {

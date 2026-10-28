@@ -9,8 +9,8 @@
 
 <p align="center">
   <img alt="version 0.10.0" src="https://img.shields.io/badge/version-0.10.0-6e56cf">
-  <img alt="Node.js ≥ 22.18" src="https://img.shields.io/badge/node-%E2%89%A5%2022.18-339933?logo=node.js&logoColor=white">
-  <img alt="2512 tests" src="https://img.shields.io/badge/tests-2512%20%E2%9C%94-2da44e">
+  <img alt="Node.js ≥ 22.21" src="https://img.shields.io/badge/node-%E2%89%A5%2022.21-339933?logo=node.js&logoColor=white">
+  <img alt="3386 tests" src="https://img.shields.io/badge/tests-3386-blue">
   <img alt="zéro build en développement" src="https://img.shields.io/badge/build-aucun%20en%20dev-8250df">
   <img alt="licence MIT" src="https://img.shields.io/badge/licence-MIT-blue">
 </p>
@@ -29,16 +29,31 @@ Quand plusieurs agents IA travaillent en parallèle sur le même repo, ils se ma
 conflits Git, commits gloutons, merges sémantiquement cassés. Striart résout ça avec trois piliers :
 
 1. **Isolation physique** — chaque agent travaille dans un vrai clone Git indépendant, sans remote (`.striart/agents/<nom>/`).
-2. **Router préventif** — avant de lancer un agent, un LLM prédit les fichiers touchés et met en file d'attente les tâches en collision.
+2. **Router préventif** — avant de lancer un agent, un LLM prédit les fichiers touchés et met en file d'attente les tâches en collision. C'est un filtre grossier, pas une garantie : la sécurité repose sur la fusion et le Test Gate ([mesures](docs/fr/architecture.md#ce-que-valent-le-router-et-la-fusion-sémantique--mesures-du-2026-10-26)).
 3. **Fusion sémantique + Test Gate** — les commits des agents sont mergés automatiquement ; en cas de conflit, un LLM fusionne le code ; rien n'est commité tant que `npm test` (ou votre commande) ne passe pas.
 
 Striart n'est pas un cerveau central opaque : c'est un **pacemaker Git**. L'humain voit tout, peut interrompre, corriger, valider.
+
+### Les problèmes que Striart résout
+
+| Sans Striart | Avec Striart |
+|---|---|
+| Deux agents modifient les mêmes fichiers ; le conflit se découvre au merge, une fois le travail fait. | Le **Router** prédit les fichiers touchés et met en file les tâches en collision **avant** le lancement. |
+| Ramener N branches à la main, dans le bon ordre, en rebasant les agents encore actifs. | Une **chaîne de merge sérialisée** sous verrou, et, sous `striart watch`, un rebase automatique de tous les agents après chaque merge. |
+| Un conflit bloque, ou pire : un merge « propre » casse le comportement. | **Fusion sémantique 3-way** par LLM, puis **Test Gate bloquant** : pas de commit sans suite verte, sinon abort + ticket humain complet. |
+| Un agent qui déraille (`reset --hard`, `gc`, secrets) abîme l'état commun. | **Clones complets** sans remote : le rayon d'explosion est le clone ; secrets retirés ; chemins protégés pour ce qui configure l'agent et Striart. |
+| Une session autonome qui dépense sans limite ou qui tourne sans témoin. | Budgets de **tokens** à plafonds (fail closed), verrous à battement, reprise après crash, arbitrage humain des permissions. |
+| Chaque outil d'agent a sa façon de travailler. | **20 presets prêts** (Claude, Codex, Gemini, Copilot, Cursor, Aider…), pilotables en **MCP** et **ACP**, y compris depuis l'éditeur (`striart acp`). |
+
+Le panorama des projets similaires (Claude Squad, Conductor, Nimbalyst, Weave,
+Agent Client Protocol…) et **quand choisir quoi** sont dans
+**[docs/fr/comparaison.md](docs/fr/comparaison.md)**.
 
 ---
 
 ## Pourquoi Striart — et pas simplement des worktrees ?
 
-Isoler les fichiers, c'est 10 % du problème. Un worktree (ou un clone fait à
+Isoler les fichiers n'est qu'une partie du problème. Un worktree (ou un clone fait à
 la main) évite que deux agents écrivent au même endroit *en même temps* — tout
 le reste reste à ta charge, à chaque tâche : éviter les collisions *avant*
 qu'elles n'arrivent, ramener N branches dans la branche cible, arbitrer les
@@ -49,7 +64,7 @@ conflits, garantir que rien de cassé n'entre. Striart automatise précisément 
 | Isolation des fichiers | ✅ | ✅ (zéro friction) | ✅ clones complets |
 | Solidité face à un agent qui déraille | ⚠️ `.git/` partagé : un `reset --hard` ou un `gc` touche l'état commun | ⚠️ idem | ✅ refs/index propres, pas de remote, secrets exclus — rayon d'explosion borné au clone |
 | Prévention des collisions | ❌ à ta charge | ❌ dépend du découpage du modèle | ✅ Router LLM + file d'attente + dépendances `--after` |
-| Retour du travail dans la branche cible | ❌ merges manuels | ❌ à la charge de l'agent | ✅ merge auto, rebase de tous les agents après chaque merge, fusion sémantique 3-way |
+| Retour du travail dans la branche cible | ❌ merges manuels | ❌ à la charge de l'agent | ✅ merge auto, rebase de tous les agents après chaque merge de `striart watch`, fusion sémantique 3-way |
 | Garde-fou de qualité | ❌ | ❌ | ✅ **Test Gate bloquant** — rien n'entre sans suite verte |
 | Multi-fournisseurs | ❌ | ❌ Claude uniquement | ✅ 20 presets prêts (Claude, Codex, Gemini, Copilot, Cursor, Aider…) côte à côte |
 | Durée de vie | la session | la session | ✅ des heures/jours, plusieurs sessions, file persistante |
@@ -72,7 +87,7 @@ cd /chemin/vers/mon-projet
 striart init
 ```
 
-Prérequis : Node.js 22.18+ (type stripping natif — rien à compiler côté
+Prérequis : Node.js 22.21+ (type stripping natif — rien à compiler côté
 JavaScript), Git, **un repo Git avec au moins un commit**, et un LLM pour le
 Router/Merger — Ollama en local (défaut) **ou** n'importe quelle API cloud. Striart
 s'appuie sur un petit **binaire natif** (Rust) signé, vérifié avant chaque
@@ -103,6 +118,7 @@ striart orchestrate review "Passe l'auth en JWT" --author claude --reviewer code
 
 # Suivi
 striart status / queue / dashboard / usage / resolve
+striart gc --dry-run                  # agents oubliés : sessions inactives (fermeture opt-in, sur autorisation de l'utilisateur)
 ```
 
 Striart se pilote par **trois plans distincts** : `striart mcp` (l'agent pilote
@@ -126,16 +142,17 @@ La documentation complète vit dans **[docs/fr/](docs/fr/README.md)**
 | Page | Contenu |
 |---|---|
 | [Démarrage](docs/fr/demarrage.md) | Prérequis, installation, `striart init`, guide « 3 agents en parallèle ». |
-| [Architecture](docs/fr/architecture.md) | Clones vs worktrees, chaîne sérialisée, flow d'un commit, les 6 statuts de sync, verrous, fichiers d'état, les trois plans, composants natifs. |
-| [Commandes](docs/fr/commandes.md) | Le contrat de la CLI (codes de sortie, `--json`, langue, complétion) et les 30 commandes : options, garde-fous, codes de refus. |
-| [Configuration](docs/fr/configuration.md) | Référence complète de `striart.config.mjs` : défauts et bornes, providers LLM, tokens, profils, chemins protégés, terminal, MCP, orchestration. |
+| [Architecture](docs/fr/architecture.md) | Clones vs worktrees, chaîne sérialisée, flow d'un commit, les 6 statuts de sync, verrous, fichiers d'état, livraison hors verrou, couche réseau, les trois plans, composants natifs, ce que vaut le Router, GC d'inactivité, observabilité. |
+| [Commandes](docs/fr/commandes.md) | Le contrat de la CLI (codes de sortie, `--json`, langue, complétion) et les 31 commandes : options, garde-fous, codes de refus. |
+| [Configuration](docs/fr/configuration.md) | Référence complète de `striart.config.mjs` : défauts et bornes, providers LLM, tokens, profils, fiabilité du Router, chemins protégés, terminal, MCP, orchestration, filet de chevauchement, GC d'inactivité, livraison, environnement du Test Gate, réseau d'entreprise. |
 | [Branches et pipeline](docs/fr/branches.md) | `targetBranch` sur n'importe quelle branche (`dev`, `master`…), pipeline staging → main. |
 | [Modes d'exécution](docs/fr/modes-execution.md) | Supervisé, autonome, ACP, semi-autonome, `striart acp`, modes d'orchestration (`review`, `race`, `team`, `pipeline`). |
 | [Plans](docs/fr/plans.md) | Tâches-as-code : le graphe de tâches YAML versionné (v1 et v2). |
 | [Serveur MCP](docs/fr/mcp.md) | Piloter Striart depuis Claude Code, Cursor ou tout hôte MCP (borné au clone appelant). |
-| [Intégrations](docs/fr/integrations/README.md) | Visual Studio, VS Code, Cursor, Xcode, Theia, Devin Desktop, JetBrains, Zed, Neovim, Emacs, Warp : MCP et ACP. |
+| [Intégrations](docs/fr/integrations/README.md) | Visual Studio, VS Code, Cursor, Xcode, Theia, Devin Desktop, JetBrains, Zed, Neovim, Emacs, Warp : MCP et ACP ; extension VS Code livrée mais non publiée. |
+| [Striart face aux alternatives](docs/fr/comparaison.md) | Problèmes résolus, projets similaires et quand choisir quoi (sources citées). |
 | [Projets volumineux](docs/fr/projets-volumineux.md) | Maîtriser le coût disque des clones. |
-| [Dépannage](docs/fr/depannage.md) | `striart doctor`, tous les codes d'erreur, tickets, `rollback`, `reconcile`, verrous. |
+| [Dépannage](docs/fr/depannage.md) | `striart doctor`, tous les codes d'erreur, tickets, `rollback`, `reconcile`, verrous, réseau d'entreprise. |
 
 ---
 
@@ -150,9 +167,11 @@ La documentation complète vit dans **[docs/fr/](docs/fr/README.md)**
 
 ## Développement
 
-**2512 tests** (1586 unitaires + 920 d'intégration sur de vrais repos Git, plus
+**3386 tests** (2226 unitaires + 1154 d'intégration sur de vrais repos Git, plus
 6 tests de fumée du paquet construit — projet `pack` —, comptés par
-`npx vitest list` le 2026-10-25),
+`npx vitest list` le 2026-10-27 ; le badge les compte, il ne certifie pas un
+passage), plus 87 tests de bout en bout du dashboard (`npm run test:e2e`, hors
+`npm test`),
 typecheck `tsc` sur tout le code (TS natif + JS annoté JSDoc), zéro étape de
 build en développement — `bin` pointe sur la source. Seul le paquet construit par `npm run pack:release`
 contient du JS émis (`npm run pack:release` : Node refuse le type stripping
@@ -161,12 +180,13 @@ sous `node_modules`).
 ```bash
 npm install
 npm run native:build     # binaire natif (toolchain Rust) — requis depuis les sources
-npm run test:unit        # 1586 tests — la boucle de dev
-npm run test:integration # 920 tests — vrais repos Git temporaires
+npm run test:unit        # 2226 tests — la boucle de dev
+npm run test:integration # 1154 tests — vrais repos Git temporaires
 npm run test:pack        # paquet construit : pack → npm install → binaire installé (réseau)
 npm test                 # unit + intégration (hors réseau)
 npm run lint             # ESLint (correctness) + Prettier --check
 npm run test:ci          # typecheck + unit + intégration avec coverage, puis paquet
+npm run test:e2e         # bout en bout du dashboard (Playwright + axe) — hors `npm test`, navigateur requis
 ```
 
 Voir [CONTRIBUTING.md](CONTRIBUTING.md) et [SECURITY.md](SECURITY.md).

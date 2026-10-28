@@ -1,10 +1,14 @@
 import React from 'react';
 import { Box, render, Text, useApp, useInput, useWindowSize } from 'ink';
-import { execa } from 'execa';
 import xtermHeadless from '@xterm/headless';
+import { execa } from 'execa';
 import { fileURLToPath } from 'node:url';
-import { listAgents } from './clone.js';
+import { cloneGit, listAgents } from './clone.js';
+import { loadConfig } from './config.js';
 import { listConflictTickets } from './conflicts.js';
+import { createIdleCellsProvider } from './idle/status.ts';
+import type { IdleCell } from './idle/status.ts';
+import { getQueueDashboard } from './orchestrator.js';
 import { connectAttachClient } from './pty-attach.ts';
 import { defaultShell, ensurePtyHost, resolveAttendedCommand } from './pty-host.ts';
 import { sendHumanPrompt } from './acp/host.ts';
@@ -13,6 +17,25 @@ import { fr } from './cli/i18n/fr.ts';
 import type { Messages } from './cli/i18n/fr.ts';
 import { publicCommands } from './cli/registry.ts';
 import type { ForegroundReason } from './cli/registry.ts';
+import { detectCapabilities } from './cli/caps.ts';
+import type { Capabilities } from './cli/caps.ts';
+import type { Level } from './cli/output.ts';
+import { inkStyleForTone } from './cli/render/tone.ts';
+import { editInput, moveSelection, navAction, PAGE_SIZE } from './watch-ui-keys.ts';
+import type { InputBuffer } from './watch-ui-keys.ts';
+import { buildFrame, displayOrder } from './watch-ui-view.ts';
+import type {
+  ActivityView,
+  AgentRow,
+  BottomPane,
+  ConfirmView,
+  DetailInfo,
+  FrameModel,
+  JournalEntry,
+  Line,
+  Seg,
+  ViewKind,
+} from './watch-ui-view.ts';
 import type { IBufferCell, IBufferLine, Terminal as HeadlessTerminal } from '@xterm/headless';
 
 // `@xterm/headless` s'exporte en CommonJS (pas d'`exports` ESM) — Node ne
@@ -23,18 +46,6 @@ import type { IBufferCell, IBufferLine, Terminal as HeadlessTerminal } from '@xt
 // deux imports distincts (TypeScript n'autorise pas un binding de valeur
 // comme annotation de type).
 const { Terminal: TerminalCtor } = xtermHeadless;
-
-/**
- * Palette de marque Striart — cyan (structure/neutre/en cours), violet
- * (succès/sélection), rouge (erreur — jamais discret). Trois principes de
- * design retenus pour cette UI : (1) jamais de silence — chaque action a
- * une confirmation visible avec un temps écoulé, pas un état qui disparaît
- * sans laisser de trace ; (2) l'erreur est une procédure — un ticket créé
- * (`printMergeResult`, déjà ainsi côté CLI) reste visible, jamais juste
- * « échec » ; (3) le TUI est un cockpit — l'état qui compte (tickets
- * ouverts) est affiché en permanence, jamais un aller chercher ailleurs.
- */
-const COLOR = { cyan: '#00D4AA', violet: '#7B61FF', red: '#FF4D4D' };
 
 /**
  * `watch` interactif — UI Ink + bus de messages `@agent` (roadmap, Phase D).
@@ -519,34 +530,13 @@ export async function runShellCommand(
   return { ok: result.exitCode === 0, output: result.all ?? '' };
 }
 
+/** Entrées d'historique de saisie conservées (mémoire, pas persistant). */
+const HISTORY_MAX_ENTRIES = 200;
+
 interface LogState {
   lines: StyledChunk[][];
   connected: boolean;
 }
-
-/**
- * Une action visible du cockpit (principe « jamais de silence ») — de son
- * lancement à sa conclusion, avec le temps écoulé. `detail` porte la
- * procédure en cas d'erreur (principe « l'erreur est une procédure ») : la
- * sortie complète d'une commande striart (ticket compris, cf.
- * `printMergeResult`), pas juste un « échec » laconique.
- */
-interface ActivityEntry {
-  id: number;
-  label: string;
-  status: 'pending' | 'ok' | 'error';
-  startedAt: number;
-  endedAt: number | null;
-  detail?: string;
-}
-
-const MAX_ACTIVITY_ENTRIES = 4;
-const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-/** Lignes remontées par pression Page Up/Down — fixe plutôt qu'accordé à la
- * hauteur réelle du tab : simple, prévisible, pas besoin d'exactitude ici. */
-const SCROLL_PAGE_SIZE = 10;
-/** Entrées d'historique de saisie conservées (mémoire, pas persistant). */
-const HISTORY_MAX_ENTRIES = 200;
 
 /** Sous-ensemble d'`AgentMeta` nécessaire pour démarrer/rejoindre son pty possédé. */
 export interface TailableAgent {
@@ -799,24 +789,189 @@ export class LogTailManager {
   }
 }
 
-/** Abonnement aux lignes de la boucle de watch : rend la fonction de désabonnement. */
-export type WatchLineSubscription = (listener: (line: string) => void) => () => void;
+/**
+ * Une ligne du journal d'événements de la boucle de watch, déjà qualifiée
+ * (niveau sémantique + texte NON FIABLE, neutralisé à l'affichage). `continuation` :
+ * détail ou piste rattachés à l'entrée précédente.
+ */
+export interface WatchUiEntry {
+  tone: Level;
+  text: string;
+  continuation?: boolean;
+}
+
+/** Abonnement aux événements de la boucle de watch : rend la fonction de désabonnement. */
+export type WatchLineSubscription = (listener: (entry: WatchUiEntry) => void) => () => void;
+
+/** Capacités de présentation du cockpit (sondées UNE fois par `caps.ts`). */
+export type CockpitCaps = Pick<
+  Capabilities,
+  'unicode' | 'colorStdout' | 'plain' | 'theme' | 'animate'
+>;
 
 interface AppProps {
   root: string;
   /**
    * Événements de la boucle de `watch` qui tourne dans le même process,
-   * déjà mis en forme par la CLI. Affichés dans le tab "Terminal" — jamais
-   * écrits sur l'écran alternatif, où ils corrompraient le rendu.
+   * qualifiés par la CLI. Affichés dans le journal — jamais écrits sur
+   * l'écran alternatif, où ils corrompraient le rendu.
    */
   subscribeLoop?: WatchLineSubscription;
   /** Catalogue de la langue choisie par la CLI. */
   m: Messages;
+  caps: CockpitCaps;
+  /** Le watcher du process fusionne-t-il automatiquement ? (informatif) */
+  autoMerge: boolean;
 }
 
-function statusIcon(agent: AgentMeta & { name: string; status: string }): string {
-  if (agent.mode === 'autonomous') return '🤖';
-  return agent.status === 'ACTIVE' ? '👤' : '⚪';
+/** Entrées du journal conservées (borne mémoire). */
+const JOURNAL_MAX = 300;
+/** Cadence maximale de repeinture déclenchée par les flux (sortie de pty, événements). */
+const RENDER_THROTTLE_MS = 100;
+/** Intervalle de rafraîchissement des données (les événements en déclenchent un aussitôt). */
+const REFRESH_MS = 8000;
+const IDLE_TICK_MS = 10_000;
+const DETAIL_REFRESH_MS = 15000;
+const DETAIL_COMMITS = 8;
+const DETAIL_FILES = 12;
+
+/** Ton Ink d'un segment — résolu depuis les thèmes de la CLI (une seule palette). */
+export function segProps(
+  seg: Seg,
+  caps: Pick<CockpitCaps, 'colorStdout' | 'theme'>,
+): Record<string, unknown> {
+  const base = seg.tone ? inkStyleForTone(seg.tone, caps.theme, caps.colorStdout) : {};
+  const props: Record<string, unknown> = { ...base };
+  if (seg.bold) props.bold = true;
+  if (seg.inverse) props.inverse = true;
+  if (seg.italic) props.italic = true;
+  if (seg.underline) props.underline = true;
+  if (seg.strikethrough) props.strikethrough = true;
+  if (caps.colorStdout) {
+    if (seg.dimColor) props.dimColor = true;
+    if (seg.color) props.color = seg.color;
+    if (seg.backgroundColor) props.backgroundColor = seg.backgroundColor;
+  }
+  return props;
+}
+
+/** Une ligne de la trame → un `Text` Ink (jamais de retour à la ligne : la trame est déjà calibrée). */
+function renderLine(line: Line, index: number, caps: CockpitCaps) {
+  // Segments voisins de même style fusionnés : moins d'éléments React, donc moins de CPU.
+  const merged: Array<{ props: Record<string, unknown>; sig: string; text: string }> = [];
+  for (const seg of line.length === 0 ? [{ text: ' ' } as Seg] : line) {
+    const props = segProps(seg, caps);
+    const sig = JSON.stringify(props);
+    const last = merged[merged.length - 1];
+    if (last && last.sig === sig) last.text += seg.text;
+    else merged.push({ props, sig, text: seg.text });
+  }
+  return h(
+    Text,
+    { key: index, wrap: 'truncate' },
+    ...merged.map((part, j) => h(Text, { key: j, ...part.props }, part.text)),
+  );
+}
+
+/** Lignes du tampon d'un terminal émulé → lignes de la vue (mêmes champs de style). */
+function chunkLines(lines: StyledChunk[][]): Line[] {
+  return lines.map((chunks) => chunks as Line);
+}
+
+interface GitCommitInfo {
+  sha: string;
+  at: string | null;
+  subject: string;
+}
+
+/**
+ * Détail d'un agent lu dans SON clone (jamais le dépôt principal) : commits
+ * depuis le dernier merge, fichiers touchés, modifications non commitées.
+ * Lecture seule ; tout échec est rendu (`error`), jamais avalé.
+ */
+export async function readAgentDetail(
+  meta: AgentMeta & { name: string; path: string },
+): Promise<DetailInfo> {
+  const git = cloneGit(meta.path);
+  const mergeBase = meta.lastMergedCommit ?? meta.baseCommit;
+  try {
+    const [log, names, status] = await Promise.all([
+      git.raw([
+        'log',
+        `--max-count=${DETAIL_COMMITS}`,
+        '--format=%H%x1f%cI%x1f%s',
+        `${mergeBase}..HEAD`,
+      ]),
+      git.raw(['diff', '--name-status', `${mergeBase}..HEAD`]),
+      git.raw(['status', '--porcelain']),
+    ]);
+    const commits: GitCommitInfo[] = log
+      .split('\n')
+      .filter((l) => l.trim() !== '')
+      .map((l) => {
+        const [sha, at, ...subject] = l.split('\x1f');
+        return { sha, at: at || null, subject: subject.join('\x1f') };
+      });
+    const files = names
+      .split('\n')
+      .filter((l) => l.trim() !== '')
+      .map((l) => {
+        const [st, ...rest] = l.split('\t');
+        return { status: st, path: rest[rest.length - 1] ?? '' };
+      });
+    return {
+      loading: false,
+      commits,
+      commitTotal: commits.length,
+      files: files.slice(0, DETAIL_FILES),
+      fileTotal: files.length,
+      uncommitted: status.split('\n').filter((l) => l.trim() !== '').length,
+    };
+  } catch (error) {
+    return {
+      loading: false,
+      error: (error as Error).message.split('\n')[0],
+      commits: [],
+      commitTotal: 0,
+      files: [],
+      fileTotal: 0,
+      uncommitted: 0,
+    };
+  }
+}
+
+/** Ligne du registre (+ ticket ouvert, date du dernier commit) → ligne du tableau. */
+export function toAgentRow(
+  agent: AgentMeta & { name: string; status: string },
+  ticket: { id: string; reason: string } | null,
+  lastCommitAt: string | null,
+  idle: IdleCell | null = null,
+): AgentRow {
+  const a = agent as AgentMeta & {
+    name: string;
+    status: string;
+    currentBranch?: string;
+    lastMessage?: string | null;
+    pendingCommits?: number;
+    sizeBytes?: number;
+    session?: AgentRow['session'];
+    profile?: string | null;
+  };
+  return {
+    name: a.name,
+    status: a.status,
+    mode: a.mode,
+    profile: a.profile ?? null,
+    session: a.session ?? null,
+    pendingCommits: a.pendingCommits ?? 0,
+    branch: a.currentBranch ?? a.branch,
+    lastMessage: a.lastMessage ?? null,
+    lastCommitAt,
+    sizeBytes: a.sizeBytes,
+    ticket,
+    // Additif : absent tant que rien n'est à signaler (le tableau et les instantanés restent inchangés).
+    ...(idle ? { idle } : {}),
+  };
 }
 
 /**
@@ -855,7 +1010,12 @@ interface StriartCommandInfo {
 function striartCommands(m: Messages): StriartCommandInfo[] {
   const fromRegistry = publicCommands().map((spec) => {
     const reason = foregroundReason(spec.name, m);
-    let description: string = m.commands[spec.name as keyof Messages['commands']].summary;
+    // Repli EXPLICITE (le nom de la commande) si le catalogue n'a pas son entrée : le cockpit ne
+    // plante jamais pour un texte manquant. Le test de cohérence registre ↔ catalogue
+    // (tests/unit/cli-registry-i18n.test.js) reste la garde qui l'interdit à la livraison.
+    const entry = (m.commands as Record<string, { summary?: string } | undefined>)[spec.name];
+    let description: string =
+      typeof entry?.summary === 'string' && entry.summary !== '' ? entry.summary : spec.name;
     if (spec.name === 'dashboard') description = m.watchUi.dashboardSuggestion;
     else if (reason) description = m.watchUi.unavailableHere(reason);
     else if (spec.name === 'init') description = m.watchUi.initSuggestion;
@@ -874,8 +1034,6 @@ export interface Suggestion {
   value: string;
   description: string;
 }
-
-const MAX_SUGGESTIONS_SHOWN = 8;
 
 /**
  * Suggestions actives pour l'autocomplétion "@"/"/" — recalculées à chaque
@@ -947,66 +1105,105 @@ export function looksLikeIdleShellPrompt(lines: StyledChunk[][]): boolean {
   return false;
 }
 
-function App({ root, subscribeLoop, m }: AppProps) {
+function App({ root, subscribeLoop, m, caps, autoMerge }: AppProps) {
   const { exit } = useApp();
   const { columns, rows } = useWindowSize();
-  const [agents, setAgents] = React.useState<Array<AgentMeta & { name: string; status: string }>>(
-    [],
-  );
-  // TERMINAL_TAB par défaut — le tab "Terminal" est toujours disponible,
-  // jamais un agent absent : pas de course de démarrage à gérer ici.
-  const [selected, setSelected] = React.useState<string | null>(TERMINAL_TAB);
-  const [loaded, setLoaded] = React.useState(false); // vrai après le 1er listAgents() réussi
-  const [input, setInput] = React.useState('');
-  const [selectionIndex, setSelectionIndex] = React.useState(0);
+  const c = m.watchUi.cockpit;
+
+  // ── données collectées (rafraîchies, jamais re-rendues si inchangées) ──
+  const [agentRows, setAgentRows] = React.useState<AgentRow[]>([]);
+  const metasRef = React.useRef<Array<AgentMeta & { name: string; status: string }>>([]);
   const [openTickets, setOpenTickets] = React.useState(0);
+  const [queueWaiting, setQueueWaiting] = React.useState(0);
+  const [loaded, setLoaded] = React.useState(false);
   const [refreshError, setRefreshError] = React.useState<string | null>(null);
-  const [activity, setActivity] = React.useState<ActivityEntry[]>([]);
-  const [, bumpTick] = React.useState(0);
-  // Tabs dont le contenu a changé pendant qu'un AUTRE tab était affiché —
-  // purement informatif (aucune notion de "lu" persistée), effacé dès que
-  // l'utilisateur bascule dessus (cf. l'effect plus bas).
-  const [unread, setUnread] = React.useState<Set<string>>(new Set());
-  // Toujours à jour pour la fermeture d'`onChange` ci-dessous, créée UNE
-  // SEULE fois via l'init paresseuse de `tailManagerRef` — sans cette ref,
-  // elle capturerait la valeur de `selected` du tout premier rendu pour
-  // toujours (école du piège classique de fermeture React).
-  const selectedRef = React.useRef(selected);
-  selectedRef.current = selected;
-  const tailManagerRef = React.useRef<LogTailManager | null>(null);
-  if (!tailManagerRef.current) {
-    tailManagerRef.current = new LogTailManager(root, (key) => {
-      bumpTick((t) => t + 1);
-      if (key !== selectedRef.current) {
-        setUnread((prev) => (prev.has(key) ? prev : new Set(prev).add(key)));
-      }
-    });
-  }
-  const activityIdRef = React.useRef(0);
-  // Historique des lignes soumises (tous préfixes confondus) — `↑`/`↓`
-  // rappellent une entrée quand le champ n'est pas vide et qu'aucune
-  // suggestion n'est active (cf. useInput) ; `-1` = pas en train de
-  // parcourir, `draftInput` garde ce qui était tapé avant d'y entrer.
+  const lastRefreshAt = React.useRef<number | null>(null);
+  const [targetBranch, setTargetBranch] = React.useState('main');
+  const dataSignature = React.useRef('');
+  const commitDates = React.useRef(new Map<string, string | null>());
+  const idleProvider = React.useRef(createIdleCellsProvider(root));
+
+  // ── navigation ──
+  const [selectedRaw, setSelected] = React.useState<string | null>(null);
+  const [view, setView] = React.useState<ViewKind>('main');
+  const [bottom, setBottom] = React.useState<BottomPane>('journal');
+  const [unread, setUnread] = React.useState({ journal: false, commands: false });
+  const [journalScroll, setJournalScroll] = React.useState(0);
+  const [commandsScroll, setCommandsScroll] = React.useState(0);
+  const [outputScroll, setOutputScroll] = React.useState(0);
+  const [confirmAgent, setConfirmAgent] = React.useState<string | null>(null);
+  const [detailState, setDetailState] = React.useState<{ name: string; info: DetailInfo } | null>(
+    null,
+  );
+  const detailSignature = React.useRef('');
+
+  // ── saisie ──
+  const [inputFocused, setInputFocused] = React.useState(false);
+  const [input, setInput] = React.useState<InputBuffer>({ text: '', cursor: 0 });
+  const [selectionIndex, setSelectionIndex] = React.useState(0);
   const [history, setHistory] = React.useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = React.useState(-1);
   const [draftInput, setDraftInput] = React.useState('');
-  // Lignes remontées depuis le bas dans le tab affiché (Page Up/Down) —
-  // remis à 0 à chaque changement de tab (cf. effect plus bas) : on atterrit
-  // toujours sur le direct en changeant d'onglet, jamais sur un ancien
-  // défilement oublié.
-  const [scrollOffset, setScrollOffset] = React.useState(0);
 
-  // Principe « jamais de silence » : chaque action lancée depuis le champ de
-  // saisie reste visible, du départ à la conclusion, avec son temps écoulé —
-  // jamais une ligne de statut unique qui écrase la précédente sans laisser
-  // de trace.
+  // ── flux et activité ──
+  const journalRef = React.useRef<JournalEntry[]>([]);
+  const bottomRef = React.useRef(bottom);
+  bottomRef.current = bottom;
+  const [activity, setActivity] = React.useState<ActivityView[]>([]);
+  const activityIdRef = React.useRef(0);
+  const [, setVersion] = React.useState(0);
+
+  // Repeinture regroupée : un flux rapide (sortie d'un pty, rafale d'événements)
+  // ne provoque jamais plus de ~10 rendus par seconde.
+  const renderTimer = React.useRef<NodeJS.Timeout | null>(null);
+  const scheduleRender = React.useCallback(() => {
+    if (renderTimer.current) return;
+    renderTimer.current = setTimeout(() => {
+      renderTimer.current = null;
+      setVersion((v) => v + 1);
+    }, RENDER_THROTTLE_MS);
+  }, []);
+
+  const tailManagerRef = React.useRef<LogTailManager | null>(null);
+  if (!tailManagerRef.current) {
+    tailManagerRef.current = new LogTailManager(root, (key) => {
+      if (key === TERMINAL_TAB && bottomRef.current !== 'commands') {
+        setUnread((prev) => (prev.commands ? prev : { ...prev, commands: true }));
+      }
+      scheduleRender();
+    });
+  }
+  const tail = tailManagerRef.current;
+
+  const addJournal = React.useCallback(
+    (entry: WatchUiEntry) => {
+      const list = journalRef.current;
+      list.push({ at: Date.now(), ...entry });
+      if (list.length > JOURNAL_MAX) list.splice(0, list.length - JOURNAL_MAX);
+      if (bottomRef.current !== 'journal') {
+        setUnread((prev) => (prev.journal ? prev : { ...prev, journal: true }));
+      }
+      scheduleRender();
+    },
+    [scheduleRender],
+  );
+
+  // ── sélection effective : suit l'ordre d'écran, jamais un agent disparu ──
+  const ordered = displayOrder(agentRows, m.status.stateTicket);
+  const selected =
+    selectedRaw && ordered.some((a) => a.name === selectedRaw)
+      ? selectedRaw
+      : (ordered[0]?.name ?? null);
+  const selectedRow = ordered.find((a) => a.name === selected);
+
+  // ── activité (« jamais de silence » : chaque action a un début, une fin, une durée) ──
   const pushActivity = React.useCallback((label: string): number => {
     const id = ++activityIdRef.current;
     setActivity((list) =>
       [
         ...list,
         { id, label, status: 'pending' as const, startedAt: Date.now(), endedAt: null },
-      ].slice(-MAX_ACTIVITY_ENTRIES),
+      ].slice(-4),
     );
     return id;
   }, []);
@@ -1021,47 +1218,114 @@ function App({ root, subscribeLoop, m }: AppProps) {
     [],
   );
 
-  // Changer de tab : on atterrit toujours sur le direct (pas un défilement
-  // oublié d'une visite précédente), et le tab qu'on vient d'ouvrir n'a plus
-  // de raison de rester marqué "non lu".
+  // ── cible de merge (config), une fois ──
   React.useEffect(() => {
-    setScrollOffset(0);
-    if (!selected) return;
-    setUnread((prev) => {
-      if (!prev.has(selected)) return prev;
-      const next = new Set(prev);
-      next.delete(selected);
-      return next;
-    });
-  }, [selected]);
+    let cancelled = false;
+    void loadConfig(root)
+      .then((config: { targetBranch?: string }) => {
+        if (!cancelled && config.targetBranch) setTargetBranch(config.targetBranch);
+      })
+      .catch(() => {
+        // Config illisible : le rafraîchissement des agents le dira ; la cible reste « main » à l'affichage.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [root]);
 
-  // Lignes de la boucle de watch (commit, merge, rebase…) → tab "Terminal".
+  // ── événements de la boucle de watch → journal ──
+  const refreshSoon = React.useRef<() => void>(() => {});
   React.useEffect(() => {
     if (!subscribeLoop) return undefined;
-    return subscribeLoop((line) => tailManagerRef.current?.appendLine(line));
-  }, [subscribeLoop]);
+    return subscribeLoop((entry) => {
+      addJournal(entry);
+      if (!entry.continuation) refreshSoon.current();
+    });
+  }, [subscribeLoop, addJournal]);
 
-  // Fait avancer le chronomètre des actions en cours — seulement pendant
-  // qu'il y en a une, pour ne pas redessiner pour rien une fois tout réglé.
+  // ── horloge et chronomètre ──
+  // L'heure (HH:MM) et les âges (« 3 min ») n'ont pas besoin de plus d'un rendu toutes les 10 s :
+  // chaque image écrite coûte (ConPTY surtout). 10 images/s SEULEMENT pendant qu'une action tourne.
   React.useEffect(() => {
-    if (!activity.some((entry) => entry.status === 'pending')) return undefined;
-    const ticker = setInterval(() => bumpTick((t) => t + 1), 200);
-    return () => clearInterval(ticker);
-  }, [activity]);
+    const id = setInterval(() => setVersion((v) => v + 1), IDLE_TICK_MS);
+    return () => clearInterval(id);
+  }, []);
+  const hasPending = activity.some((entry) => entry.status === 'pending');
+  React.useEffect(() => {
+    if (!hasPending || !caps.animate) return undefined;
+    const id = setInterval(() => setVersion((v) => v + 1), 100);
+    return () => clearInterval(id);
+  }, [hasPending, caps.animate]);
 
-  // Rafraîchit la liste des agents et garde une connexion de lecture par
-  // agent supervisé actif — jamais pour l'autonome (pas de pty à suivre).
+  // ── rafraîchissement des données ──
   React.useEffect(() => {
     const manager = tailManagerRef.current!;
     let cancelled = false;
-    let refreshing = false; // pas de chevauchement si un listAgents traîne (plusieurs agents = plusieurs commandes git)
+    let refreshing = false;
+    let again = false; // un événement est arrivé pendant un rafraîchissement : en refaire un juste après
     const refresh = async () => {
-      if (refreshing) return;
+      if (refreshing) {
+        again = true;
+        return;
+      }
       refreshing = true;
       try {
-        const list = await listAgents(root);
+        // Trois lectures indépendantes : en parallèle (la collecte à froid les enchaînait).
+        const [list, tickets, queue] = await Promise.all([
+          listAgents(root),
+          listConflictTickets(root).catch(() => []),
+          getQueueDashboard({ root }).catch(() => []),
+        ]);
         if (cancelled) return;
-        setAgents(list);
+        // Date du dernier commit : une lecture git par HEAD jamais vu, pas par rafraîchissement.
+        const missing = list.filter(
+          (a) => a.status === 'ACTIVE' && a.head && !commitDates.current.has(a.head),
+        );
+        await Promise.all(
+          missing.map(async (a) => {
+            try {
+              const out = await cloneGit(a.path).raw(['log', '-1', '--format=%cI']);
+              commitDates.current.set(a.head, out.trim() || null);
+            } catch {
+              commitDates.current.set(a.head, null); // clone illisible : l'état BROKEN l'affiche déjà
+            }
+          }),
+        );
+        if (commitDates.current.size > 200) commitDates.current.clear();
+        if (cancelled) return;
+        const ticketByAgent = new Map<string, { id: string; reason: string }>();
+        for (const t of tickets as Array<{ id: string; agent?: string; reason?: string }>) {
+          if (typeof t.agent === 'string' && !ticketByAgent.has(t.agent)) {
+            ticketByAgent.set(t.agent, { id: t.id, reason: t.reason ?? '?' });
+          }
+        }
+        // Inactivité (GC) : lecture en lecture seule, mémoïsée ~15 s, jamais bloquante (un GC
+        // indisponible n'a simplement pas de cellule).
+        const idleByAgent = await idleProvider
+          .current(list)
+          .catch(() => new Map<string, IdleCell>());
+        if (cancelled) return;
+        const nextRows = list.map((a) =>
+          toAgentRow(
+            a,
+            ticketByAgent.get(a.name) ?? null,
+            commitDates.current.get(a.head) ?? null,
+            idleByAgent.get(a.name) ?? null,
+          ),
+        );
+        const waiting = (queue as Array<{ status: string }>).filter(
+          (r) => r.status === 'WAITING',
+        ).length;
+        metasRef.current = list;
+        lastRefreshAt.current = Date.now();
+        // Rien n'a changé : aucun état React touché, donc aucune repeinture.
+        const signature = JSON.stringify([nextRows, tickets.length, waiting]);
+        if (signature !== dataSignature.current) {
+          dataSignature.current = signature;
+          setAgentRows(nextRows);
+          setOpenTickets(tickets.length);
+          setQueueWaiting(waiting);
+        }
         setLoaded(true);
         setRefreshError(null);
         const attended = list.filter((a) => a.status === 'ACTIVE' && a.mode !== 'autonomous');
@@ -1070,116 +1334,148 @@ function App({ root, subscribeLoop, m }: AppProps) {
         for (const name of manager.trackedAgents()) {
           if (!attendedNames.has(name)) manager.release(name);
         }
-        setSelected((current) => {
-          // TERMINAL_TAB n'est jamais dans attendedNames (ce n'est pas un
-          // agent) : sans ce garde, le tick de rafraîchissement (2s) le
-          // remplacerait par le premier agent dès qu'il y en a un.
-          if (current === TERMINAL_TAB) return current;
-          if (current && attendedNames.has(current)) return current;
-          return [...attendedNames][0] ?? TERMINAL_TAB;
-        });
-        // Principe « cockpit » : les tickets ouverts (procédure d'erreur en
-        // cours — Test Gate rouge, conflit hors fusion sémantique...) sont
-        // affichés en permanence, jamais un aller voir ailleurs pour savoir
-        // s'il y a du travail humain en attente.
-        const tickets = await listConflictTickets(root).catch(() => []);
-        if (!cancelled) setOpenTickets(tickets.length);
       } catch (error) {
-        // Remonté, jamais avalé en silence — une erreur permanente (mauvais
-        // root, registre corrompu...) doit être VISIBLE, pas se traduire par
-        // un panneau vide indéfiniment sans explication.
+        // Remonté, jamais avalé : une erreur permanente (mauvaise racine, registre
+        // corrompu) doit se VOIR, pas se traduire par un écran vide sans explication.
         if (!cancelled) setRefreshError((error as Error).message);
       } finally {
         refreshing = false;
+        if (again && !cancelled) {
+          again = false;
+          void refresh();
+        }
       }
     };
+    let soonTimer: NodeJS.Timeout | null = null;
+    refreshSoon.current = () => {
+      if (soonTimer) return;
+      soonTimer = setTimeout(() => {
+        soonTimer = null;
+        void refresh();
+      }, 250);
+    };
     void refresh();
-    const interval = setInterval(refresh, 2000);
+    const interval = setInterval(refresh, REFRESH_MS);
     return () => {
       cancelled = true;
       clearInterval(interval);
+      if (soonTimer) clearTimeout(soonTimer);
+      refreshSoon.current = () => {};
       manager.releaseAll();
     };
   }, [root]);
 
-  // Partagé entre Ctrl+C et "/exit" tapé dans le champ — même séquence
-  // d'arrêt, jamais dupliquée : `watch --ui` porte aussi le watcher habituel
-  // (chokidar, intervals de fetch/réconciliation, chaîne de merge), le mode
-  // raw d'Ink n'intercepte jamais Ctrl+C comme un vrai SIGINT, donc sans ce
-  // `process.exit` ces handles actifs garderaient le process vivant,
-  // invisible, après la disparition de l'UI.
+  // ── détail de l'agent sélectionné (lu dans son clone) ──
+  const selectedKey = selectedRow
+    ? `${selectedRow.name}|${selectedRow.pendingCommits}|${selectedRow.lastCommitAt ?? ''}`
+    : '';
+  React.useEffect(() => {
+    if (!selected) return undefined;
+    let cancelled = false;
+    const load = async () => {
+      const meta = metasRef.current.find((a) => a.name === selected);
+      if (!meta || meta.status !== 'ACTIVE') return;
+      const info = await readAgentDetail(meta);
+      if (cancelled) return;
+      const signature = `${selected}|${JSON.stringify(info)}`;
+      if (signature === detailSignature.current) return;
+      detailSignature.current = signature;
+      setDetailState({ name: selected, info });
+    };
+    void load();
+    const id = setInterval(load, DETAIL_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+    // La clé change quand les commits de l'agent changent : relecture immédiate.
+  }, [selected, selectedKey]);
+
+  // Arrêt : même séquence pour Ctrl+C, `q` et `/exit` — le watcher du process s'arrête avec l'UI.
   const shutdown = React.useCallback(() => {
-    // Sortie voulue : l'UI se démonte, `runWatchUi` rend la main et la
-    // commande `watch` arrête proprement la boucle (watchers, timers)
-    // avant de sortir en 0.
     tailManagerRef.current?.releaseAll();
     exit();
   }, [exit]);
 
-  // Partagé entre "@agent message" et le texte sans préfixe (envoyé à
-  // l'agent sélectionné) — même acheminement, jamais dupliqué.
   const sendAgentMessage = React.useCallback(
     (agentName: string, text: string) => {
       setSelected(agentName);
       const activityId = pushActivity(m.watchUi.sending(agentName));
-      void resolveAgentMeta(root, agents, agentName)
+      void resolveAgentMeta(root, metasRef.current, agentName)
         .then((meta) => routeAgentMessage(root, agentName, text, meta, m))
         .then((result: MessageRouteResult) => {
-          // `'reason' in result`, pas `if (result.ok)` : contourne un bug de
-          // rétrécissement de union discriminée par littéral booléen dans
-          // @typescript/native (TS7) sous `strict: false` explicite (tsconfig
-          // du projet) — reproduit et isolé en bisectant les compilerOptions,
-          // absent de TS6 et absent quand `strict` n'est pas déclaré du tout.
+          // `'reason' in result`, pas `if (result.ok)` : contourne un défaut de
+          // rétrécissement d'union (TS7 natif, `strict: false`) — cf. routeAgentMessage.
           if ('reason' in result) {
             resolveActivity(activityId, 'error', result.reason);
+            addJournal({
+              tone: 'error',
+              text: `${m.watchUi.sending(agentName)} — ${result.reason}`,
+            });
           } else {
             resolveActivity(activityId, 'ok');
           }
         });
     },
-    [agents, root, pushActivity, resolveActivity, m],
+    [root, m, pushActivity, resolveActivity, addJournal],
   );
 
+  /** Lance `striart <argv>` (même code que la CLI) ; la sortie va au panneau Commandes, le résultat au journal. */
+  const runCliAction = React.useCallback(
+    (label: string, argv: string[], echo: string) => {
+      const activityId = pushActivity(label);
+      const startedAt = Date.now();
+      void runStriartCommand(root, argv, m).then((result) => {
+        tailManagerRef.current!.appendCommandOutput(`❯ ${echo}`, result.output);
+        const elapsed = `${((Date.now() - startedAt) / 1000).toFixed(1)}s`;
+        resolveActivity(
+          activityId,
+          result.ok ? 'ok' : 'error',
+          result.ok ? undefined : c.seeCommands,
+        );
+        addJournal({
+          tone: result.ok ? 'ok' : 'error',
+          text: `${c.done(label, elapsed)}${result.ok ? '' : ` — ${c.seeCommands}`}`,
+        });
+        refreshSoon.current();
+      });
+    },
+    [root, m, c, pushActivity, resolveActivity, addJournal],
+  );
+
+  const blurInput = React.useCallback(() => {
+    setInputFocused(false);
+    setInput({ text: '', cursor: 0 });
+    setSelectionIndex(0);
+    setHistoryIndex(-1);
+    setDraftInput('');
+  }, []);
+
   /**
-   * Grammaire du champ, revue le 2026-09-10 : "/" pour TOUTES les commandes
-   * striart (y compris "/exit", natif à ce panneau) plutôt que du texte nu —
-   * cohérent avec l'autocomplétion ("/" liste les commandes, "@" liste les
-   * agents) et avec les outils hébergés eux-mêmes (Claude Code utilise déjà
-   * "/" pour ses propres commandes). Le texte SANS préfixe n'est plus une
-   * commande implicite : il part vers l'agent actuellement sélectionné, pour
-   * ne plus avoir à retaper "@agent-a" à chaque message vers le même agent —
-   * seul "@autre-agent" reste nécessaire pour changer de cible.
+   * Grammaire du champ : « / » pour les commandes striart (y compris « /exit »,
+   * natif à ce panneau), « ! » pour un vrai shell, « @agent texte » pour écrire
+   * à un agent, texte nu → agent sélectionné.
    */
   const submitLine = React.useCallback(
     (line: string) => {
       const trimmed = line.trim();
       if (!trimmed) return;
-
-      // Historique de saisie (`↑`/`↓` le rappellent, cf. useInput) — tous
-      // préfixes confondus, dédoublonné sur les répétitions consécutives
-      // (marteler Entrée sur la même commande n'empile pas de doublons).
       setHistory((prev) =>
         prev[prev.length - 1] === trimmed ? prev : [...prev, trimmed].slice(-HISTORY_MAX_ENTRIES),
       );
-      setHistoryIndex(-1);
-      setDraftInput('');
 
       if (trimmed.startsWith('!')) {
         const command = trimmed.slice(1).trim();
-        if (!command) return; // "!" seul : rien à faire
-        // Même canal de sortie/activité que "/" — voir plus bas — mais un
-        // VRAI shell (`runShellCommand`) plutôt qu'un argv `striart` : pas de
-        // garde "premier plan" ici, un shell interactif au sens plein (build
-        // qui tourne longtemps, `git log` sans --no-pager qui attend une
-        // touche...) reste possible et bloquera le champ jusqu'au même
-        // timeout de 120s que "/" — attendu d'un vrai shell, pas un bug.
+        if (!command) return;
+        setBottom('commands');
+        setUnread((prev) => ({ ...prev, commands: false }));
         const activityId = pushActivity(`! ${command}`);
         void runShellCommand(root, command).then((result) => {
           tailManagerRef.current!.appendCommandOutput(`❯ ${trimmed}`, result.output);
           resolveActivity(
             activityId,
             result.ok ? 'ok' : 'error',
-            result.ok ? undefined : m.watchUi.seeTerminalTab,
+            result.ok ? undefined : c.seeCommands,
           );
         });
         return;
@@ -1187,36 +1483,25 @@ function App({ root, subscribeLoop, m }: AppProps) {
 
       if (trimmed.startsWith('/')) {
         const rest = trimmed.slice(1).trim();
-        if (!rest) return; // "/" seul : rien à faire
+        if (!rest) return;
         const [cmd] = tokenizeCommand(rest);
         if (cmd === 'exit') {
           shutdown();
           return;
         }
-        // "/clear" — adapté à l'onglet actif, pas un seul comportement :
-        // sur TERMINAL_TAB, vide notre propre historique de sorties de
-        // commandes (rien d'autre à effacer, ce n'est pas un vrai pty) ;
-        // sur un agent, envoie la VRAIE commande d'effacement de son shell
-        // (`defaultShell()` — PowerShell/`cls`, POSIX/`clear`) : la même
-        // frontière de confiance que le bus "@agent" (SECURITY.md), pas un
-        // nettoyage local qui laisserait l'écran distant réel inchangé.
+        // « /clear » : dans le détail d'un agent, la VRAIE commande d'effacement de son
+        // shell (même frontière de confiance que le bus @agent, SECURITY.md) ; ailleurs,
+        // l'historique du panneau Commandes.
         if (cmd === 'clear') {
-          if (selected === TERMINAL_TAB) {
-            tailManagerRef.current!.clearTerminalTab();
-          } else if (selected) {
+          if (view === 'zoom' && selected) {
             sendAgentMessage(selected, process.platform === 'win32' ? 'cls' : 'clear');
+          } else {
+            tailManagerRef.current!.clearTerminalTab();
           }
           return;
         }
-        // "/relaunch [agent]" — retape la commande de lancement de l'agent
-        // (`resolveAttendedCommand`, même résolution que `--open`/l'hôte de
-        // pty) : utile quand le badge 🟡 signale que l'outil hébergé s'est
-        // arrêté dans un pty par ailleurs toujours vivant. Sans argument,
-        // cible l'agent actuellement sélectionné (jamais TERMINAL_TAB, qui
-        // n'est pas un agent).
         if (cmd === 'relaunch') {
-          const argAgent = tokenizeCommand(rest)[1];
-          const targetAgent = argAgent ?? (selected !== TERMINAL_TAB ? selected : null);
+          const targetAgent = tokenizeCommand(rest)[1] ?? selected;
           const activityId = pushActivity(
             targetAgent ? m.watchUi.relaunching(targetAgent) : 'striart relaunch',
           );
@@ -1225,11 +1510,10 @@ function App({ root, subscribeLoop, m }: AppProps) {
             return;
           }
           setSelected(targetAgent);
-          void resolveAgentMeta(root, agents, targetAgent)
+          void resolveAgentMeta(root, metasRef.current, targetAgent)
             .then(async (meta) => {
               if (!meta) return { ok: false as const, reason: m.watchUi.unknownAgent(targetAgent) };
-              // Une session autonome n'a pas d'outil à relancer dans un pty :
-              // envoyer la commande de l'outil comme prompt serait un contresens.
+              // Une session autonome n'a pas d'outil à relancer dans un pty : un contresens.
               if (meta.mode === 'autonomous')
                 return { ok: false as const, reason: m.watchUi.relaunchAutonomous(targetAgent) };
               const tool = await resolveAttendedCommand(root, meta);
@@ -1241,48 +1525,52 @@ function App({ root, subscribeLoop, m }: AppProps) {
             });
           return;
         }
-        // Sortie dans le tab TERMINAL_TAB (`appendCommandOutput`), jamais via
-        // `console.log` : sur écran alternatif (`alternateScreen: true`)
-        // `console.log`/`patchConsole` n'a aucun scrollback — la sortie
-        // disparaît dès qu'un redessin la recouvre. La procédure complète
-        // (ticket, chemin de résolution — `printMergeResult` la construit
-        // déjà côté CLI) reste donc consultable en revenant sur ce tab,
-        // jamais réduite à un « échec » dans le cockpit.
-        const activityId = pushActivity(`striart ${rest}`);
-        void runStriartCommand(root, tokenizeCommand(rest), m).then((result) => {
-          tailManagerRef.current!.appendCommandOutput(`❯ ${trimmed}`, result.output);
-          resolveActivity(
-            activityId,
-            result.ok ? 'ok' : 'error',
-            result.ok ? undefined : m.watchUi.seeTerminalTab,
-          );
-        });
+        setBottom('commands');
+        setUnread((prev) => ({ ...prev, commands: false }));
+        runCliAction(`striart ${rest}`, tokenizeCommand(rest), trimmed);
         return;
       }
 
       if (trimmed.startsWith('@')) {
         const parsed = parseAgentMessage(trimmed);
-        // "@" incomplet (pas encore de message après le nom, ex. autocomplétion
-        // à peine validée) : rien à envoyer, jamais interprété comme du texte
-        // littéral vers l'agent sélectionné.
+        // « @ » incomplet : rien à envoyer, jamais pris pour du texte vers l'agent sélectionné.
         if (parsed) sendAgentMessage(parsed.agent, parsed.text);
         return;
       }
 
-      // TERMINAL_TAB n'est pas un agent — un texte nu tapé pendant qu'il est
-      // affiché n'a nulle part où aller, contrairement à un vrai agent
-      // sélectionné.
-      if (selected && selected !== TERMINAL_TAB) sendAgentMessage(selected, trimmed);
+      if (selected) sendAgentMessage(selected, trimmed);
     },
-    [selected, agents, root, pushActivity, resolveActivity, shutdown, sendAgentMessage, m],
+    [
+      root,
+      m,
+      c,
+      view,
+      selected,
+      pushActivity,
+      resolveActivity,
+      shutdown,
+      sendAgentMessage,
+      runCliAction,
+    ],
   );
 
-  // Recalculées à chaque rendu (donc à jour dans la fermeture de useInput
-  // ci-dessous) — cf. `computeSuggestions` : liste vide dès qu'on est déjà
-  // dans le corps du message ou les arguments (un espace après le premier mot).
-  const suggestions = computeSuggestions(input, agents, m);
-  const activeSuggestionIndex =
+  // ── suggestions (champ en saisie seulement) ──
+  const suggestions = inputFocused ? computeSuggestions(input.text, metasRef.current, m) : [];
+  const activeSuggestion =
     suggestions.length > 0 ? Math.min(selectionIndex, suggestions.length - 1) : 0;
+
+  const scrollBy = (delta: number) => {
+    if (view === 'zoom') setOutputScroll((o) => Math.max(0, o + delta));
+    else if (bottom === 'journal') setJournalScroll((o) => Math.max(0, o + delta));
+    else setCommandsScroll((o) => Math.max(0, o + delta));
+  };
+
+  const confirmedMerge = () => {
+    const agent = confirmAgent;
+    setConfirmAgent(null);
+    setView('main');
+    if (agent) runCliAction(c.merging(agent), ['merge', agent], `striart merge ${agent}`);
+  };
 
   useInput((char, key) => {
     if (key.ctrl && char === 'c') {
@@ -1290,366 +1578,257 @@ function App({ root, subscribeLoop, m }: AppProps) {
       return;
     }
 
-    // Tab ou Entrée SUR une suggestion active : complète le mot en cours
-    // plutôt que de soumettre — même convention que Discord/Slack (une
-    // deuxième pression sur Entrée, une fois la liste vide car le mot est
-    // déjà complet, envoie enfin). Le préfixe ("@" ou "/") est celui déjà
-    // tapé, jamais deviné.
-    if ((key.tab || key.return) && suggestions.length > 0) {
-      setInput(`${input[0]}${suggestions[activeSuggestionIndex].value} `);
-      setSelectionIndex(0);
+    // Confirmation d'une action risquée : SEUL « y » la déclenche (Entrée n'est jamais un oui).
+    if (view === 'confirm') {
+      if (char === 'y' || char === 'Y') confirmedMerge();
+      else if (key.escape || char === 'n' || char === 'N') {
+        setConfirmAgent(null);
+        setView('main');
+      }
       return;
     }
 
-    // `char` est parfois un CHUNK de plusieurs caractères d'un coup (frappe
-    // rapide, entrée automatisée/collée) — jamais garanti un caractère par
-    // appel. `key.return` ne détecte QUE le cas où le chunk EST juste la
-    // touche Entrée seule ; un \r/\n en fin de chunk plus long (texte +
-    // Entrée arrivés ensemble) doit être détecté explicitement, sinon la
-    // ligne entière — retour compris — finit ajoutée telle quelle au champ
-    // de saisie au lieu d'être soumise.
-    if (char) {
-      const newlineIdx = char.search(/[\r\n]/);
-      if (newlineIdx !== -1) {
-        const line = input + char.slice(0, newlineIdx);
-        setInput('');
-        setSelectionIndex(0);
-        submitLine(line);
+    // Champ de saisie : tout caractère imprimable est du texte, aucun raccourci ne part.
+    if (inputFocused) {
+      if (key.escape) {
+        blurInput();
         return;
       }
-    }
-
-    if (key.return) {
-      const line = input;
-      setInput('');
-      setSelectionIndex(0);
-      submitLine(line);
-      return;
-    }
-    if (key.pageUp || key.pageDown) {
-      // Défilement dans le tab affiché — indépendant du direct : remonter ne
-      // "suit" jamais un nouvel arrivage (comme le scrollback d'un vrai
-      // terminal), on ne revient au direct qu'en rechangeant de tab (effect
-      // plus haut) ou en redescendant explicitement.
-      setScrollOffset((offset) =>
-        Math.max(0, offset + (key.pageUp ? SCROLL_PAGE_SIZE : -SCROLL_PAGE_SIZE)),
-      );
-      return;
-    }
-    if (key.upArrow || key.downArrow) {
-      // Une liste de suggestions active absorbe les flèches en premier
-      // (navigation dedans).
-      if (suggestions.length > 0) {
-        setSelectionIndex((i) => {
-          const next = key.upArrow ? i - 1 : i + 1;
-          return ((next % suggestions.length) + suggestions.length) % suggestions.length;
-        });
-        return;
+      if (key.tab || key.return) {
+        if (suggestions.length > 0) {
+          const chosen = suggestions[activeSuggestion];
+          const text = `${input.text[0]}${chosen.value} `;
+          setInput({ text, cursor: [...text].length });
+          setSelectionIndex(0);
+          return;
+        }
+        if (key.tab) return;
       }
-      // Champ non vide, pas de suggestion : on est en train de taper quelque
-      // chose — les flèches rappellent l'historique plutôt que de changer de
-      // tab (qui garde ce rôle uniquement à champ vide, juste en dessous).
-      // Pas la convention d'un vrai shell (qui rappelle même à champ vide),
-      // mais la case "champ vide" est déjà prise par le changement d'onglet.
-      if (input !== '') {
+      if (key.upArrow || key.downArrow) {
+        if (suggestions.length > 0) {
+          setSelectionIndex((i) => {
+            const next = key.upArrow ? i - 1 : i + 1;
+            return ((next % suggestions.length) + suggestions.length) % suggestions.length;
+          });
+          return;
+        }
         if (history.length === 0) return;
         if (key.upArrow) {
-          if (historyIndex === -1) setDraftInput(input); // sauvegardé avant d'entrer dans l'historique
+          if (historyIndex === -1) setDraftInput(input.text);
           const nextIndex =
             historyIndex === -1 ? history.length - 1 : Math.max(historyIndex - 1, 0);
           setHistoryIndex(nextIndex);
-          setInput(history[nextIndex]);
+          setInput({ text: history[nextIndex], cursor: [...history[nextIndex]].length });
         } else if (historyIndex !== -1) {
           const nextIndex = historyIndex + 1;
           if (nextIndex >= history.length) {
             setHistoryIndex(-1);
-            setInput(draftInput);
+            setInput({ text: draftInput, cursor: [...draftInput].length });
           } else {
             setHistoryIndex(nextIndex);
-            setInput(history[nextIndex]);
+            setInput({ text: history[nextIndex], cursor: [...history[nextIndex]].length });
           }
         }
         return;
       }
-      // TERMINAL_TAB en premier — toujours disponible, jamais absent de la
-      // liste (contrairement à un agent qui peut s'arrêter).
-      const names = [
-        TERMINAL_TAB,
-        ...agents
-          .filter((a) => a.status === 'ACTIVE' && a.mode !== 'autonomous')
-          .map((a) => a.name),
-      ];
-      const idx = selected ? names.indexOf(selected) : -1;
-      const nextIdx = key.upArrow
-        ? (idx - 1 + names.length) % names.length
-        : (idx + 1) % names.length;
-      setSelected(names[nextIdx]);
-      return;
-    }
-    if (key.backspace || key.delete) {
-      setInput((s) => s.slice(0, -1));
-      setSelectionIndex(0);
-      setHistoryIndex(-1); // édition manuelle : on n'est plus "sur" une entrée d'historique
-      return;
-    }
-    if (char && !key.ctrl && !key.meta) {
-      setInput((s) => s + char);
+      if (key.pageUp || key.pageDown) {
+        scrollBy(key.pageUp ? PAGE_SIZE : -PAGE_SIZE);
+        return;
+      }
+      const result = editInput(input, char, key);
+      if (result.submit !== null) {
+        const line = result.submit;
+        blurInput();
+        submitLine(line);
+        return;
+      }
+      setInput(result.buffer);
       setSelectionIndex(0);
       setHistoryIndex(-1);
+      return;
+    }
+
+    // Aide en surcouche.
+    if (view === 'help') {
+      if (key.escape || char === '?') setView('main');
+      else if (char === 'q') shutdown();
+      return;
+    }
+
+    // Un collage ou une frappe rapide qui commence par un préfixe de saisie : le champ le reçoit en entier.
+    if (char.length > 1 && !key.ctrl && !key.meta && /^[/@!]/.test(char)) {
+      const result = editInput({ text: '', cursor: 0 }, char, key);
+      if (result.submit !== null) submitLine(result.submit);
+      else {
+        setInputFocused(true);
+        setInput(result.buffer);
+      }
+      return;
+    }
+
+    const action = navAction(char, key);
+    if (!action) return;
+    switch (action.type) {
+      case 'quit':
+        shutdown();
+        return;
+      case 'help':
+        setView('help');
+        return;
+      case 'back':
+        if (view === 'zoom') setView('main');
+        else if (view === 'main') {
+          if (bottom === 'journal') setJournalScroll(0);
+          else setCommandsScroll(0);
+        }
+        return;
+      case 'select':
+        if (view === 'zoom') {
+          scrollBy(-action.delta);
+          return;
+        }
+        setSelected(
+          moveSelection(
+            ordered.map((a) => a.name),
+            selected,
+            action.delta,
+          ),
+        );
+        setOutputScroll(0);
+        return;
+      case 'select-edge':
+        if (view !== 'zoom') {
+          setSelected(
+            ordered.length === 0
+              ? null
+              : ordered[action.edge === 'first' ? 0 : ordered.length - 1].name,
+          );
+        }
+        return;
+      case 'scroll':
+        scrollBy(action.delta);
+        return;
+      case 'pane': {
+        if (view !== 'main') return;
+        const next: BottomPane = bottom === 'journal' ? 'commands' : 'journal';
+        setBottom(next);
+        setUnread((prev) => ({ ...prev, [next]: false }));
+        return;
+      }
+      case 'zoom':
+        if (selected && view === 'main') {
+          setOutputScroll(0);
+          setView('zoom');
+        }
+        return;
+      case 'focus':
+        setInputFocused(true);
+        // « @ » pré-remplit le nom de l'agent sélectionné : on n'a qu'à écrire le message.
+        {
+          const text = action.prefix === '@' && selected ? `@${selected} ` : action.prefix;
+          setInput({ text, cursor: [...text].length });
+        }
+        return;
+      case 'merge':
+        if (selected) {
+          setConfirmAgent(selected);
+          setView('confirm');
+        }
+        return;
+      case 'sync':
+        if (selected)
+          runCliAction(c.syncing(selected), ['sync', selected], `striart sync ${selected}`);
+        return;
     }
   });
 
-  const activityIcon = (entry: ActivityEntry): string => {
-    if (entry.status === 'ok') return '✓';
-    if (entry.status === 'error') return '✗';
-    return SPINNER_FRAMES[Math.floor(Date.now() / 100) % SPINNER_FRAMES.length];
-  };
-  const activityColor = (entry: ActivityEntry): string => {
-    if (entry.status === 'ok') return COLOR.violet;
-    if (entry.status === 'error') return COLOR.red;
-    return COLOR.cyan;
-  };
-  const activityElapsed = (entry: ActivityEntry): string => {
-    const end = entry.endedAt ?? Date.now();
-    return `${((end - entry.startedAt) / 1000).toFixed(1)}s`;
-  };
-
-  // Budget de lignes DÉLIBÉRÉMENT conservateur, jamais une hauteur fixe posée
-  // sur la boîte elle-même : un `height` explicite mal calculé (chrome sous-
-  // estimé, ligne de statut oubliée du compte) fait déborder le rendu de la
-  // fenêtre — Ink recalcule alors sa remontée de curseur sur une hauteur
-  // fausse, et chaque tick réempile un nouveau cadre au lieu de redessiner
-  // en place. Indépendant de l'OS/terminal : n'importe quel terminal trop
-  // petit pour la hauteur réclamée aurait le même symptôme. La boîte de log
-  // n'a PAS de `height` : elle se dimensionne à ses enfants réels, jamais
-  // plus — la seule chose à borner est COMBIEN de lignes on lui donne.
-  // Budget relevé (18 → 20) avec la zone d'activité : jusqu'à
-  // MAX_ACTIVITY_ENTRIES lignes remplacent l'ancienne ligne de statut
-  // unique — sous-estimer à nouveau ce chrome reproduirait exactement le
-  // bug de débordement déjà corrigé une fois.
-  const CHROME_LINES = 20;
-  const maxVisibleLines = Math.max(rows - CHROME_LINES, 3);
+  // ── trame ──
+  const detail = detailState && detailState.name === selected ? detailState.info : null;
+  const isCommandsEmpty = tail.get(TERMINAL_TAB).lines.every((l) => l.length === 0);
   const selectedLog = selected
-    ? tailManagerRef.current!.get(selected)
-    : { lines: [], connected: false };
-  // Uniquement si connecté : sur 🔴 la question ne se pose pas, et un pty
-  // qui vient tout juste de démarrer (écran encore vide) ne doit jamais se
-  // lire comme "outil terminé" — cf. looksLikeIdleShellPrompt.
-  const idleShell = selectedLog.connected && looksLikeIdleShellPrompt(selectedLog.lines);
-  // Nombre de lignes CONSTANT à chaque rendu (complété, espace plutôt que
-  // chaîne vide — un `Text` Ink avec un contenu vide s'effondre à hauteur
-  // ZÉRO, vérifié par pilotage réel). Root cause du réempilement signalé en
-  // usage réel (le cadre grandissait à chaque tick au lieu de se redessiner
-  // en place, jusqu'à remplir tout le scrollback) identifiée le 2026-09-09 :
-  // Ink redessine par diff (remontée curseur + effacement des lignes
-  // précédentes) dans le buffer PRINCIPAL du terminal — sur Windows Terminal
-  // en particulier, un déplacement de curseur fait suivre le viewport
-  // jusqu'en haut du scrollback, donc chaque frame semble s'empiler sur la
-  // précédente au lieu de l'écraser (bug documenté, indépendant de Striart :
-  // https://github.com/anthropics/claude-code/issues/34794). `render()` bascule
-  // désormais sur le buffer alternatif natif d'Ink (`alternateScreen: true`,
-  // dispo depuis Ink 7 — déjà la version installée ici) : mécanisme du plein
-  // écran de vim/htop/less, écran fixe sans scrollback, donc sans viewport à
-  // faire suivre — élimine la cause plutôt que de la contourner. `rows`/
-  // `columns` viennent maintenant de `useWindowSize()` (et non plus
-  // `useStdout()`), le seul hook Ink qui redéclenche un rendu React au
-  // redimensionnement — sans lui le plein écran restait figé à la taille du
-  // terminal au lancement.
-  // `[{ text: ' ' }]`, pas `[]` — une ligne réellement vide (chunks == [])
-  // s'effondrerait à la même hauteur ZÉRO que le remplissage de padding
-  // ci-dessus (même comportement Ink, même parade).
-  // Avant la toute première commande, TERMINAL_TAB serait sinon une boîte
-  // vide sans explication — même principe « jamais de silence » que pour
-  // les autres états vides du panneau (agent absent, etc.).
-  const isEmptyTerminalTab =
-    selected === TERMINAL_TAB && selectedLog.lines.every((chunks) => chunks.length === 0);
-  const sourceLines = isEmptyTerminalTab
-    ? [[{ text: m.watchUi.terminalEmpty }]]
-    : selectedLog.lines;
-  // Page Up/Down (cf. useInput) — `clampedScroll` ne suit JAMAIS un nouvel
-  // arrivage automatiquement (comme le scrollback d'un vrai terminal) :
-  // remonter puis laisser filer du nouveau contenu ne redescend pas tout
-  // seul, un changement de tab le fait (effect plus haut).
-  const maxScroll = Math.max(sourceLines.length - maxVisibleLines, 0);
-  const clampedScroll = Math.min(scrollOffset, maxScroll);
-  const windowEnd = sourceLines.length - clampedScroll;
-  const windowStart = Math.max(windowEnd - maxVisibleLines, 0);
-  const windowLines = sourceLines.slice(windowStart, windowEnd);
-  const visibleLines = Array.from(
-    { length: maxVisibleLines },
-    (_, i) => windowLines[i] ?? [{ text: ' ' }],
-  );
+    ? tail.get(selected)
+    : { lines: [] as StyledChunk[][], connected: false };
+  const confirmRow = confirmAgent ? agentRows.find((a) => a.name === confirmAgent) : undefined;
+  const confirm: ConfirmView | null =
+    view === 'confirm' && confirmAgent
+      ? {
+          title: c.confirmMergeTitle(confirmAgent, targetBranch),
+          lines: [
+            confirmRow && confirmRow.pendingCommits > 0
+              ? c.confirmMergePending(confirmRow.pendingCommits)
+              : c.confirmMergeNone,
+            c.confirmMergeGate,
+            ...(confirmRow?.session?.via === 'autonomous' && confirmRow.session.state === 'running'
+              ? [c.confirmMergeLive]
+              : []),
+            ...(confirmRow?.ticket ? [c.confirmMergeTicket] : []),
+          ],
+        }
+      : null;
 
+  const model: FrameModel = {
+    cols: columns,
+    rows,
+    now: Date.now(),
+    root,
+    targetBranch,
+    autoMerge,
+    loaded,
+    refreshError,
+    lastRefreshAt: lastRefreshAt.current,
+    agents: agentRows,
+    selected,
+    openTickets,
+    queueWaiting,
+    detail,
+    view,
+    bottom,
+    unread,
+    journal: journalRef.current,
+    journalScroll,
+    commandLines: isCommandsEmpty ? [] : chunkLines(tail.get(TERMINAL_TAB).lines),
+    commandsScroll,
+    outputLines: chunkLines(selectedLog.lines),
+    outputConnected: selectedLog.connected || selectedRow?.mode === 'autonomous',
+    idleTool: selectedLog.connected && looksLikeIdleShellPrompt(selectedLog.lines),
+    outputScroll,
+    confirm,
+    input: { focused: inputFocused, text: input.text, cursor: input.cursor },
+    suggestions,
+    activeSuggestion,
+    activity,
+  };
+  const frame = buildFrame(model, { m, caps });
   return h(
     Box,
     { flexDirection: 'column', width: columns },
-    h(Text, { bold: true, color: COLOR.cyan }, m.watchUi.title),
-    // Principe « cockpit » : un ticket ouvert (procédure d'erreur en cours)
-    // reste affiché en permanence tant qu'il n'est pas traité — jamais à
-    // découvrir seulement en tapant `resolve`. Toujours UN `Text` rendu
-    // (jamais `null`) pour une mise en page stable — cf. la note détaillée
-    // sur `visibleLines` plus haut : la hauteur variable n'était PAS la
-    // cause du signalement de titre en double (infirmé par test), mais une
-    // hauteur constante reste une bonne pratique de mise en page.
-    h(
-      Text,
-      { bold: true, color: COLOR.red },
-      openTickets > 0 ? m.watchUi.ticketsOpen(openTickets) : ' ', // espace, pas '' — cf. visibleLines : un Text vide s'effondre à hauteur 0 dans Ink
-    ),
-    h(
-      Box,
-      { borderStyle: 'round', borderColor: COLOR.cyan, paddingX: 1, marginTop: 1 },
-      h(
-        Text,
-        { wrap: 'truncate-end' },
-        // Un `Text` par tab plutôt qu'une seule chaîne jointe : c'est ce qui
-        // permet de colorer l'indicateur "non lu" par tab (Ink `Text` ne
-        // segmente jamais la couleur au mot dans une chaîne unique — même
-        // limite déjà contournée ailleurs dans ce fichier pour le contenu
-        // stylé du tail). "◀" repère la sélection.
-        h(
-          Text,
-          {
-            key: 'terminal-tab',
-            color: unread.has(TERMINAL_TAB) ? COLOR.violet : undefined,
-            bold: unread.has(TERMINAL_TAB),
-          },
-          `🖥️ ${m.watchUi.terminalTab}${unread.has(TERMINAL_TAB) ? ' •' : ''}${selected === TERMINAL_TAB ? ' ◀' : ''}`,
-        ),
-        !loaded
-          ? h(Text, { key: 'loading' }, `   ${m.watchUi.loading}`)
-          : agents.length === 0
-            ? h(Text, { key: 'none' }, `   ${m.watchUi.noAgents}`)
-            : agents.map((a) =>
-                h(
-                  Text,
-                  {
-                    key: a.name,
-                    color: unread.has(a.name) ? COLOR.violet : undefined,
-                    bold: unread.has(a.name),
-                  },
-                  `   ${statusIcon(a)} ${a.name}${unread.has(a.name) ? ' •' : ''}${a.name === selected ? ' ◀' : ''}`,
-                ),
-              ),
-      ),
-    ),
-    h(
-      Box,
-      {
-        borderStyle: 'round',
-        borderColor: COLOR.cyan,
-        flexDirection: 'column',
-        marginTop: 1,
-        paddingX: 1,
-      },
-      h(
-        Text,
-        { dimColor: true },
-        (selected === TERMINAL_TAB
-          ? m.watchUi.terminalHeader
-          : selected
-            ? `${selected} ${!selectedLog.connected ? '🔴' : idleShell ? `🟡 ${m.watchUi.idleTool}` : '🟢'}`
-            : m.watchUi.noSupervised) +
-          (clampedScroll > 0 ? `  ${m.watchUi.scrolled(clampedScroll)}` : ''),
-      ),
-      ...visibleLines.map((chunks, i) => {
-        const displayChunks = chunks.length > 0 ? chunks : [{ text: ' ' }];
-        return h(
-          Text,
-          { key: i, wrap: 'truncate-end' },
-          ...displayChunks.map((c, j) =>
-            h(
-              Text,
-              {
-                key: j,
-                color: c.color,
-                backgroundColor: c.backgroundColor,
-                bold: c.bold,
-                dimColor: c.dimColor,
-                italic: c.italic,
-                underline: c.underline,
-                strikethrough: c.strikethrough,
-                inverse: c.inverse,
-              },
-              c.text,
-            ),
-          ),
-        );
-      }),
-    ),
-    h(
-      Box,
-      { marginTop: 1 },
-      h(Text, { color: COLOR.violet, bold: true }, '> '),
-      h(Text, null, input, h(Text, { inverse: true }, ' ')),
-    ),
-    // Autocomplétion "@"/"/" — liste filtrée en direct, ↑/↓ pour naviguer,
-    // Tab ou Entrée pour compléter (cf. useInput). Bornée à
-    // MAX_SUGGESTIONS_SHOWN : "/" seul liste ~24 commandes, les afficher
-    // toutes pousserait la zone d'activité hors de l'écran sur un petit
-    // terminal — un compteur "+N autres" comble la coupe plutôt que de la
-    // passer sous silence.
-    suggestions.length > 0
-      ? h(
-          Box,
-          { flexDirection: 'column', paddingLeft: 2 },
-          ...suggestions.slice(0, MAX_SUGGESTIONS_SHOWN).map((s, i) => {
-            const isActive = i === activeSuggestionIndex;
-            return h(
-              Text,
-              {
-                key: `${s.kind}:${s.value}`,
-                color: isActive ? COLOR.violet : undefined,
-                inverse: isActive,
-              },
-              `${s.kind === 'agent' ? '@' : '/'}${s.value}  ${s.description}`,
-            );
-          }),
-          suggestions.length > MAX_SUGGESTIONS_SHOWN
-            ? h(
-                Text,
-                { dimColor: true },
-                m.watchUi.moreSuggestions(suggestions.length - MAX_SUGGESTIONS_SHOWN),
-              )
-            : null,
-        )
-      : null,
-    // Zone d'activité — principe « jamais de silence » : chaque action
-    // reste visible avec son temps écoulé, jusqu'à MAX_ACTIVITY_ENTRIES à
-    // la fois, au lieu d'une ligne de statut unique qui efface la précédente.
-    h(
-      Box,
-      { flexDirection: 'column', marginTop: 1 },
-      activity.length === 0
-        ? h(
-            Box,
-            { flexDirection: 'column' },
-            h(Text, { dimColor: true }, m.watchUi.help1),
-            h(Text, { dimColor: true }, m.watchUi.help2),
-          )
-        : activity.map((entry) =>
-            h(
-              Text,
-              { key: entry.id, color: activityColor(entry) },
-              `${activityIcon(entry)} ${entry.label} (${activityElapsed(entry)})${
-                entry.detail ? ` — ${entry.detail}` : ''
-              }`,
-            ),
-          ),
-      refreshError
-        ? h(Text, { color: COLOR.red }, `⚠️ ${m.watchUi.refreshFailed(refreshError)}`)
-        : null,
-    ),
+    ...frame.map((line, i) => renderLine(line, i, caps)),
   );
+}
+
+/** Capacités par défaut quand l'appelant n'en fournit pas (tests, usage direct). */
+function defaultCaps(): CockpitCaps {
+  const caps = detectCapabilities({
+    env: process.env,
+    platform: process.platform,
+    stdout: process.stdout,
+    stderr: process.stderr,
+    stdin: process.stdin,
+    plain: false,
+    color: null,
+  });
+  return caps;
 }
 
 /**
  * Point d'entrée : `striart watch --ui`. Résout quand l'utilisateur quitte
- * (Ctrl+C). `alternateScreen: true` : buffer d'écran alternatif natif d'Ink
- * (mécanisme de vim/htop/less) — restaure le contenu du terminal tel qu'avant
- * le lancement à la sortie, et élimine le bug de réempilement des frames
- * documenté au-dessus de `maxVisibleLines` (pas de scrollback à faire suivre
- * dans un écran alternatif).
+ * (`q`, `/exit`, Ctrl+C) ou quand la CLI abandonne `signal`.
+ *
+ * `alternateScreen` : écran alternatif natif d'Ink (mécanisme de vim/htop) —
+ * le terminal est restauré tel qu'avant à la sortie. `incrementalRendering` +
+ * `maxFps` : seules les lignes qui changent sont réécrites, à ≤ 12 images/s
+ * (pas de scintillement, CPU au repos négligeable). `--plain` / `TERM=dumb` :
+ * pas d'écran plein du tout, mode linéaire lisible par un lecteur d'écran.
  */
 export async function runWatchUi(
   root: string,
@@ -1657,15 +1836,37 @@ export async function runWatchUi(
     subscribeLoop,
     messages = fr,
     signal,
+    caps = defaultCaps(),
+    autoMerge = true,
+    io,
   }: {
     subscribeLoop?: WatchLineSubscription;
     messages?: Messages;
     /** Arrêt demandé de l'extérieur (SIGINT/SIGTERM reçus par la CLI) : l'UI se démonte. */
     signal?: AbortSignal;
+    /** Capacités du terminal (sonde unique de la CLI). */
+    caps?: CockpitCaps;
+    /** Le watcher du process fusionne-t-il automatiquement ? (informatif) */
+    autoMerge?: boolean;
+    /** Flux d'E/S d'Ink (tests : terminal simulé) ; défaut = le vrai terminal. */
+    io?: { stdin: NodeJS.ReadStream; stdout: NodeJS.WriteStream };
   } = {},
 ): Promise<void> {
   if (signal?.aborted) return;
-  const instance = render(h(App, { root, subscribeLoop, m: messages }), { alternateScreen: true });
+  if (caps.plain) {
+    const { runWatchPlain } = await import('./watch-plain.ts');
+    await runWatchPlain(root, { subscribeLoop, messages, signal, caps, autoMerge, io });
+    return;
+  }
+  const instance = render(h(App, { root, subscribeLoop, m: messages, caps, autoMerge }), {
+    ...(io ?? {}),
+    alternateScreen: true,
+    exitOnCtrlC: false,
+    // Aucun console.* dans le produit (journaux dans un fichier) : rien à rediriger dans l'écran.
+    patchConsole: false,
+    maxFps: 12,
+    incrementalRendering: true,
+  });
   const onAbort = () => instance.unmount();
   signal?.addEventListener('abort', onAbort, { once: true });
   try {

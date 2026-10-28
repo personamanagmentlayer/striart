@@ -215,7 +215,8 @@ export async function emitFindings(findings: BudgetFinding[], ctx: GuardContext)
       {
         scope: f.scope,
         metric: f.metric,
-        level: f.level,
+        // `level` est réservé à pino (niveau du log) : ne jamais le réutiliser.
+        severity: f.level,
         used: f.used,
         limit: f.limit,
         role: ctx.role,

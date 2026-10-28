@@ -76,6 +76,7 @@ export const COMMANDS: readonly CommandSpec[] = Object.freeze([
   { name: 'clean', group: 'repair', json: 'document' },
   { name: 'reconcile', group: 'repair', json: 'document' },
   { name: 'prune', group: 'repair', json: 'document' },
+  { name: 'gc', group: 'repair', json: 'document' },
 
   { name: 'promote', group: 'integrate', json: 'document' },
   { name: 'mcp', group: 'integrate', json: 'none', foreground: 'protocol' },

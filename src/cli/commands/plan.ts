@@ -135,6 +135,14 @@ function progressRenderer(
       case 'verdict':
         out.step(m.plan.progress.verdict(event.reviewer, event.round, event.verdict));
         return;
+      case 'serialization-relaxed':
+        out.step(
+          m.plan.progress.serializationRelaxed(
+            label(event.nodeId),
+            out.untrusted(event.blockers.join(', ')),
+          ),
+        );
+        return;
     }
   };
   // `openSession` attrape et signale ses erreurs : un rejet ici serait un bug,

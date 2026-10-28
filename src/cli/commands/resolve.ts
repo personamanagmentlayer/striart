@@ -58,6 +58,8 @@ export const resolve: CommandModule<ResolveInput, ResolveData> = {
       return { data: { action: 'unlock' }, outcome: 'ok' };
     }
     if (input.close !== null) {
+      // Fermer un ticket DÉJÀ résolu est refusé par le domaine (TICKET_ALREADY_RESOLVED, comme
+      // `--apply`) : la garde vaut pour tous les appelants, pas seulement cette commande.
       return {
         data: { action: 'close', ticket: await closeConflictTicket(root, input.close) },
         outcome: 'ok',
@@ -123,6 +125,10 @@ export const resolve: CommandModule<ResolveInput, ResolveData> = {
           if (r.closedTickets.length > 1)
             out.detail(m.resolve.duplicatesClosed(r.closedTickets.slice(1).join(', ')));
           if (r.pushError) out.line('warn', m.merge.pushFailed(out.untrusted(r.pushError)));
+          if (r.delivery?.pushed && r.delivery.mode === 'branch' && r.delivery.ref)
+            out.detail(
+              m.merge.deliveredBranch(out.untrusted(r.delivery.ref), out.sha(r.delivery.sha)),
+            );
           out.hint(`striart sync ${r.agent}`);
         } else if (r.status === 'ALREADY_CLEAN') {
           out.line('ok', m.resolve.alreadyClean(r.ticketId));
@@ -147,11 +153,13 @@ export const resolve: CommandModule<ResolveInput, ResolveData> = {
               key: 'state',
               header: m.resolve.colState,
               value: (t) =>
-                !isReadableTicket(t)
-                  ? m.resolve.stateCorrupt(t.cause)
-                  : t.resolved
-                    ? m.resolve.stateResolved
-                    : m.resolve.stateOpen,
+                `${t.resolved ? out.glyphs.ok : out.glyphs.error} ${
+                  !isReadableTicket(t)
+                    ? m.resolve.stateCorrupt(t.cause)
+                    : t.resolved
+                      ? m.resolve.stateResolved
+                      : m.resolve.stateOpen
+                }`,
               style: (text, t) => out.style(t.resolved ? 'ok' : 'error', text),
               priority: 9,
             },

@@ -82,7 +82,9 @@ export type ProgressEvent =
       reason: 'dependency' | 'collision' | 'attended' | 'human-review';
       ref: string | null;
     }
-  | { type: 'verdict'; group: string; reviewer: string; round: number; verdict: string };
+  | { type: 'verdict'; group: string; reviewer: string; round: number; verdict: string }
+  /** La sentinelle WHOLE_REPO du Router n'a pas attendu ces clones (session en échec, sans commit). */
+  | { type: 'serialization-relaxed'; nodeId: string | null; blockers: string[] };
 
 export interface OrchestrationContext {
   root: string;
@@ -163,8 +165,16 @@ export async function startOrchestratedClone(
       mode: 'autonomous',
       profile: profileKey,
     });
-    if (r.status === 'STARTED')
+    if (r.status === 'STARTED') {
+      if (r.relaxedBlockers?.length) {
+        report(ctx, {
+          type: 'serialization-relaxed',
+          nodeId: ctx.nodeId,
+          blockers: r.relaxedBlockers.map((b) => b.agent),
+        });
+      }
       return { ok: true, meta: r.info as AgentInfo, predictedFiles: r.predictedFiles };
+    }
     name = r.task.agent;
     if (!(await removeTask(ctx.root, r.task.id))) {
       // La file l'a déjà relancée (en supervisé) entre l'enfilage et le

@@ -22,6 +22,11 @@ import { logger } from './logger.js';
 import { loadConfig } from './config.js';
 import { agentsDir } from './paths.js';
 import { watchAgents } from './watcher.js';
+import { createOverlapMonitor } from './overlap.ts';
+import type { ObservedOverlap } from './overlap.ts';
+import { resolveOverlapSettings } from './overlap-settings.ts';
+import { resolveIdleSettings } from './idle/settings.ts';
+import { sweepIdle } from './idle/sweep.ts';
 import {
   checkAgentsBehind,
   mergeAgentCommit,
@@ -47,7 +52,19 @@ export type WatchEvent =
     }
   | { type: 'reconcile-error'; error: { code: string | null; message: string } }
   | { type: 'behind'; agent: string; behind: number; targetBranch: string }
-  | { type: 'fetch-error'; agent: string | null; error: { code: string | null; message: string } };
+  | { type: 'fetch-error'; agent: string | null; error: { code: string | null; message: string } }
+  /** Filet à l'exécution : fichiers RÉELLEMENT touchés par deux agents, ou par un agent et la cible (src/overlap.ts). */
+  | { type: 'overlap'; overlap: ObservedOverlap; targetBranch: string }
+  /** Rebase anticipé tenté (ou ajourné : session vivante, worktree occupé, conflit) pour un chevauchement avec la cible. */
+  | { type: 'overlap-catchup'; agent: string; status: string }
+  | { type: 'overlap-error'; error: { code: string | null; message: string } }
+  /** GC d'inactivité (src/idle/) : agent averti, sa session sera fermable après la grâce. */
+  | { type: 'idle-warned'; agent: string; idleMs: number; willClose: boolean }
+  /** Session inactive fermée proprement (`CLOSED`) ou en cours d'arrêt (`CLOSING`) ; clone et travail conservés. */
+  | { type: 'idle-closed'; agent: string; host: string; code: string }
+  /** Fermeture refusée par une garde (IDLE_CLOSE_*) : la session reste vivante, intacte. */
+  | { type: 'idle-refused'; agent: string; host: string; code: string; detail: string | null }
+  | { type: 'idle-error'; error: { code: string | null; message: string } };
 
 export interface WatchLoop {
   /**
@@ -76,12 +93,19 @@ export async function startWatchLoop({
   merge,
   onEvent,
   usePolling = false,
+  idleSweep = {},
 }: {
   root: string;
   merge: boolean;
   onEvent: (event: WatchEvent) => void;
   /** Sondage des refs au lieu des notifications du système (systèmes de fichiers réseau, tests). */
   usePolling?: boolean;
+  /**
+   * Prise de test du balayage d'inactivité : période et horloge. Absent en production (période de
+   * `idle.sweepIntervalMs`, horloge système) — l'horloge virtuelle permet de vérifier avertissement,
+   * grâce et fermeture sans attendre des heures.
+   */
+  idleSweep?: { intervalMs?: number; now?: () => number };
 }): Promise<WatchLoop> {
   const config = await loadConfig(root);
   const timers: NodeJS.Timeout[] = [];
@@ -133,6 +157,54 @@ export async function startWatchLoop({
     logger.warn({ agent }, 'Merge non lancé : arrêt demandé (à relancer par striart merge)');
     emit({ type: 'merge-deferred', agent });
   };
+
+  // Filet à l'exécution : chevauchements OBSERVÉS (git entre commits, lecture seule),
+  // indépendants de la prédiction du Router. Enfilé sur la même chaîne que les merges ;
+  // un commit arrivé PENDANT un cycle en provoque un second (aucun commit n'est perdu).
+  const overlapMonitor = resolveOverlapSettings(config).enabled
+    ? createOverlapMonitor({ root, config, allowSync: merge })
+    : null;
+  let overlapQueued = false;
+  let overlapRunning = false;
+  let overlapRerun = false;
+  const scheduleOverlap = () => {
+    if (!overlapMonitor || stopped) return;
+    if (overlapRunning) {
+      overlapRerun = true;
+      return;
+    }
+    if (overlapQueued) return;
+    overlapQueued = true;
+    enqueue(
+      async () => {
+        overlapQueued = false;
+        overlapRunning = true;
+        try {
+          const { fresh, caughtUp } = await overlapMonitor.cycle();
+          for (const overlap of fresh) {
+            emit({ type: 'overlap', overlap, targetBranch: config.targetBranch });
+          }
+          for (const { agent, status } of caughtUp) {
+            emit({ type: 'overlap-catchup', agent, status });
+          }
+        } catch (error) {
+          emit({ type: 'overlap-error', error: describeError(error) });
+        } finally {
+          overlapRunning = false;
+          if (overlapRerun) {
+            overlapRerun = false;
+            scheduleOverlap();
+          }
+        }
+      },
+      async () => {
+        overlapQueued = false;
+      },
+    );
+  };
+  if (overlapMonitor && config.fetchIntervalMs > 0) {
+    timers.push(setInterval(scheduleOverlap, config.fetchIntervalMs));
+  }
 
   // Fetch silencieux périodique : visibilité sur le retard des agents, sans
   // jamais toucher leurs working trees. Le rebase reste fait au merge.
@@ -191,15 +263,76 @@ export async function startWatchLoop({
     );
   }
 
+  // GC d'inactivité : balayage périodique HORS de la chaîne de merge (une fermeture ne doit pas
+  // attendre un merge de 44 minutes, et ne tient jamais le verrou principal). Un seul balayage à la
+  // fois ; une reprise de veille (le minuteur se réveille très en retard) neutralise ce tour : les
+  // agents gelés avec la machine n'ont pas eu le temps de reprendre.
+  const idleSettings = resolveIdleSettings(config);
+  let idleInFlight: Promise<void> | null = null;
+  if (idleSettings.enabled) {
+    let lastTick = Date.now();
+    const intervalMs = idleSweep.intervalMs ?? idleSettings.sweepIntervalMs;
+    const suspendedAfterMs = Math.max(3 * intervalMs, 120_000);
+    timers.push(
+      setInterval(() => {
+        if (idleInFlight || stopped) return;
+        const started = Date.now();
+        const suspended = started - lastTick > suspendedAfterMs;
+        lastTick = started;
+        idleInFlight = (async () => {
+          try {
+            const report = await sweepIdle({
+              root,
+              config,
+              suspended,
+              ...(idleSweep.now ? { now: idleSweep.now() } : {}),
+            });
+            for (const agent of report.warned) {
+              const entry = report.agents.find((a) => a.agent === agent);
+              emit({
+                type: 'idle-warned',
+                agent,
+                idleMs: entry?.idleMs ?? 0,
+                willClose: idleSettings.action === 'close' && report.closeAuthorized,
+              });
+            }
+            for (const c of report.closed) {
+              emit({ type: 'idle-closed', agent: c.agent, host: c.host, code: c.code });
+            }
+            for (const r of report.refused) {
+              emit({
+                type: 'idle-refused',
+                agent: r.agent,
+                host: r.host,
+                code: r.code,
+                detail: r.detail,
+              });
+            }
+          } catch (error) {
+            emit({ type: 'idle-error', error: describeError(error) });
+          } finally {
+            idleInFlight = null;
+            lastTick = Date.now();
+          }
+        })();
+      }, intervalMs),
+    );
+  }
+
   const watcher = watchAgents({
     root,
     usePolling,
     onCommit: ({ agent, branch, sha }: { agent: string; branch: string; sha: string }) => {
       emit({ type: 'commit', agent, branch, sha });
-      if (!merge) return;
+      // Le filet à l'exécution passe APRÈS le merge éventuel de ce commit (même chaîne
+      // FIFO) : un fichier déjà mergé n'est plus un chevauchement agent ↔ agent, et le
+      // rebase anticipé part de l'état à jour. Sans merge, il observe seulement.
       // Seule la branche de tâche déclenche un merge : les refs annexes du
       // clone (ex. son main local touché par l'agent) ne sont que du bruit.
-      if (!branch.startsWith('striart/')) return;
+      if (!merge || !branch.startsWith('striart/')) {
+        if (branch.startsWith('striart/')) scheduleOverlap();
+        return;
+      }
       // Commit vu entre l'arrêt demandé et la fermeture du watcher : pas de
       // merge, mais signalé comme ceux qui attendaient en file.
       if (stopped) {
@@ -231,6 +364,7 @@ export async function startWatchLoop({
         },
         () => deferMerge(agent),
       );
+      scheduleOverlap();
     },
   });
 
@@ -242,6 +376,8 @@ export async function startWatchLoop({
   });
 
   const ready = new Promise<void>((resolve) => watcher.once('ready', () => resolve()));
+  // Chevauchements déjà présents au démarrage (aucun nouveau commit ne les révélerait).
+  void ready.then(scheduleOverlap);
 
   return {
     ready,
@@ -254,7 +390,10 @@ export async function startWatchLoop({
       await watcher.close().catch((error: unknown) => {
         logger.debug({ err: error }, 'Fermeture du watcher de refs');
       });
-      if (drain) await chain;
+      if (drain) {
+        await chain;
+        await idleInFlight;
+      }
       closed = true;
     },
     isBusy() {

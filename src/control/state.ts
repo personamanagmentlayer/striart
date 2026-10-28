@@ -17,6 +17,8 @@ import { listMergeHistory } from '../history.js';
 import { readLocks } from '../locks.js';
 import { readMainSessionStatus } from '../main-session.js';
 import { getQueueDashboard } from '../orchestrator.js';
+import { overlapStatus } from '../overlap.ts';
+import { idleStatus } from '../idle/status.ts';
 import { acpHostStatus } from '../acp/host.ts';
 import { listPendingHumanRequests } from '../permissions.ts';
 import type { ElicitationRequest, PermissionRequest } from '../permissions.ts';
@@ -135,6 +137,11 @@ export async function collectControlState(root: string) {
     listHumanReviews(root),
   ]);
   const heatmap = await collectHeatmap(root, allTickets);
+  // Chevauchements OBSERVÉS (filet à l'exécution) : git entre commits, borné, mis en cache
+  // entre deux collectes (le hub recollecte à chaque changement). Ne throw jamais.
+  const overlaps = await overlapStatus(root, config);
+  // GC d'inactivité : balayage en lecture seule (aucune écriture, aucun événement). Ne throw jamais.
+  const idle = await idleStatus(root, agents);
   const permissions = humanRequests.filter(
     (r): r is PermissionRequest => (r.kind ?? 'permission') === 'permission',
   );
@@ -171,6 +178,8 @@ export async function collectControlState(root: string) {
     mainSession,
     orchestration,
     reviews: reviews.map(presentReview),
+    overlaps,
+    idle,
     // Profils du mode autonome : clés d'env uniquement, jamais les valeurs
     // (même contrat que `striart profiles`).
     profiles: listProfiles(config),

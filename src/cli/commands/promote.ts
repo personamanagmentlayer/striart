@@ -26,6 +26,10 @@ export const promote: CommandModule<PromoteInput, PromoteResult> = {
       case 'PROMOTED':
         out.line('ok', m.promote.promoted(data.commits, out.sha(data.sha)));
         if (data.pushError) out.line('warn', m.merge.pushFailed(out.untrusted(data.pushError)));
+        if (data.delivery?.pushed && data.delivery.mode === 'branch' && data.delivery.ref)
+          out.detail(
+            m.merge.deliveredBranch(out.untrusted(data.delivery.ref), out.sha(data.delivery.sha)),
+          );
         return;
       case 'GATE_FAILED':
         out.line('error', m.promote.gateFailed(data.gate.exitCode ?? null));

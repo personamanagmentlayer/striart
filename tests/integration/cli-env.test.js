@@ -73,7 +73,7 @@ describe('.env de la racine du dépôt : liste blanche (S-I1)', () => {
 });
 
 describe('plan humain : commandes décisionnelles refusées en session d agent (S-I2)', () => {
-  it.each(['resolve', 'merge', 'stop', 'lock', 'rollback', 'promote'])(
+  it.each(['resolve', 'merge', 'stop', 'lock', 'rollback', 'promote', 'gc'])(
     '%s refusé sous STRIART_SESSION=1 (CONTROL_NESTED_SESSION, sortie 3)',
     async (name) => {
       const cwd = await mkdtemp(path.join(os.tmpdir(), 'striart-hp-'));

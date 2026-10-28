@@ -43,11 +43,22 @@ describe('config UTILISATEUR de Striart — emplacement', () => {
 });
 
 describe('config UTILISATEUR — validation (données seules, stricte)', () => {
-  it('défaut vide pour hooks.trustedRoots, env.allow et native.trustedKeyIds', () => {
+  it('défaut vide pour hooks.trustedRoots, env.allow, native.trustedKeyIds et gate.envAllow', () => {
     expect(DEFAULT_USER_CONFIG).toEqual({
       hooks: { trustedRoots: [] },
       env: { allow: [] },
+      idle: { closeRoots: [] },
       native: { trustedKeyIds: [] },
+      gate: { envAllow: [] },
+      network: {
+        proxy: null,
+        noProxy: null,
+        caFile: null,
+        allowedHosts: [],
+        allowInsecureHosts: [],
+        offline: false,
+        tlsMinVersion: null,
+      },
     });
     expect(validateUserConfig({})).toEqual(DEFAULT_USER_CONFIG);
   });
@@ -66,7 +77,7 @@ describe('config UTILISATEUR — validation (données seules, stricte)', () => {
         native: { trustedKeyIds: ['0123456789ABCDEF'] },
       }),
     ).toEqual({
-      hooks: { trustedRoots: [] },
+      ...DEFAULT_USER_CONFIG,
       env: { allow: ['MY_API_KEY', 'ACME_*'] },
       native: { trustedKeyIds: ['0123456789ABCDEF'] },
     });

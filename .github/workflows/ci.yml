@@ -1,9 +1,19 @@
 name: CI
 
 on:
+  # Branche par défaut et branches de maintenance release/X.Y ; les tags ne
+  # relancent PAS la CI : un tag désigne un commit déjà testé, et le workflow de
+  # release vérifie que la CI est verte sur ce commit.
   push:
-    branches: [main, master]
+    branches: [main, 'release/**']
   pull_request:
+    branches: [main, 'release/**']
+
+# Une seule exécution par référence ; une pull request obsolète est annulée, un
+# push ne l'est jamais (il peut porter les archives signées).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Moindre privilège : le jeton du workflow ne lit que le dépôt. Les jobs qui
 # ont besoin de plus (attestation de provenance) le déclarent eux-mêmes.
@@ -149,8 +159,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        # 22 = plancher supporté (22.18+ : type stripping natif actif par
-        # défaut — les modules .ts s'exécutent sans build) ; 24 = LTS courante.
+        # 22 = plancher supporté (22.21+ : type stripping natif actif par défaut, et NODE_USE_ENV_PROXY=1
+        # honore HTTP(S)_PROXY — les modules .ts s'exécutent sans build) ; 24 = LTS courante.
         node: [22, 24]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -203,6 +213,57 @@ jobs:
 
       - name: Tests d'intégration
         run: npm run test:integration
+
+  # Extension VS Code (extensions/vscode/, client léger du Control Protocol) :
+  # lint (prettier + tsc), tests unitaires puis d'intégration contre le VRAI
+  # `striart api` de ce dépôt (le CLI parent, binaire natif de dev compris).
+  # Le test de bout en bout dans un VS Code réel (`npm run test:e2e`, qui
+  # télécharge VS Code) n'est pas lancé en CI. L'extension n'est pas publiée.
+  vscode-extension:
+    name: extension VS Code · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            extensions/vscode/package-lock.json
+
+      - name: Configurer git
+        run: |
+          git config --global user.name "Striart CI"
+          git config --global user.email "ci@striart.invalid"
+          git config --global init.defaultBranch main
+
+      # Le CLI parent (src/cli.js) et ses dépendances, sans scripts de cycle de vie.
+      - run: npm ci --ignore-scripts
+
+      - name: Toolchain Rust épinglée
+        working-directory: native
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Binaire natif (build de dev)
+        run: npm run native:build
+
+      - name: Dépendances de l'extension
+        working-directory: extensions/vscode
+        run: npm ci --ignore-scripts
+
+      - name: Lint de l'extension
+        working-directory: extensions/vscode
+        run: npm run lint
+
+      - name: Tests de l'extension (unitaires + intégration)
+        working-directory: extensions/vscode
+        run: npm test
 
   # Le paquet PUBLIÉ, pas le dépôt : scripts/pack.ts émet le JS de src/,
   # embarque les binaires natifs des six plateformes (manifeste d'empreintes
@@ -338,3 +399,25 @@ jobs:
             dist/*.tgz
             dist/*.cdx.json
           if-no-files-found: ignore
+
+  # Point d'entrée UNIQUE de la protection de branche : un seul contrôle requis
+  # (« ci-ok ») au lieu d'une liste de jobs de matrice à tenir à jour. Il échoue
+  # si un job amont a échoué, a été annulé OU a été sauté — jamais « vert par
+  # absence ». La release exige ce contrôle vert sur le commit à publier.
+  ci-ok:
+    name: ci-ok
+    if: always()
+    needs: [native-check, native-musl, native-build, test, vscode-extension, pack-smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Tous les jobs requis sont verts
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "résultats : $RESULTS"
+          for r in $RESULTS; do
+            if [ "$r" != "success" ]; then
+              echo "::error::un job requis n'est pas vert ($r)"
+              exit 1
+            fi
+          done

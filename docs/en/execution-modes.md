@@ -62,7 +62,10 @@ Per-profile fields (see the [configuration reference](configuration.md)):
 `command` + `args` (with `{{prompt}}` substituted **as an argv element,
 never through a shell** — the prompt is data; interpreting it would be a
 command injection), `env` (profile-specific variables merged over the
-environment — scope one key per tool), `timeout` (precedence: `--timeout` >
+environment — scope one key per tool; the session also receives Striart's network
+environment: `network.caFile` becomes its `NODE_EXTRA_CA_CERTS` unless the shell
+already set another one, and `STRIART_PROXY_AUTH` is never passed on — see
+[Enterprise network](configuration.md#enterprise-network-network)), `timeout` (precedence: `--timeout` >
 `profile.timeout` > `autonomousTimeoutMs`), `acp` (below), and — for the
 presets — `writeMode`, `commitPolicy`, `structuredOutput` (the tool's JSON
 output is transcribed readably into the log and feeds the token ledger) and
@@ -318,6 +321,13 @@ the session lives, is what makes the state verifiable rather than assumed:
 A PID left in the registry after a crash is neutralized by the liveness
 check: nothing stays frozen. The same guard applies to the main repository
 itself (`striart run --on-main`, `striart lock --start`).
+
+**One exception, and for the session only**: the
+[idle GC](commands.md#striart-gc-agent---close---dry-run) can cleanly close the
+session of a **forgotten** agent (no activity signal for tens of minutes), after
+a warning and a grace period, and only if the user has authorized it for this
+repository (`idle.closeRoots`, user config). It deletes neither the clone nor its
+uncommitted work, and removes nothing from the registry.
 
 ## What you must own
 

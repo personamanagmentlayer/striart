@@ -1,5 +1,9 @@
 import { execa } from 'execa';
 import { StriartError } from './errors.js';
+import { buildGateEnv } from './gate-env.ts';
+import { logger } from './logger.js';
+import { redactSecrets, secretValuesFromEnv } from './redact-secrets.ts';
+import { readUserConfig } from './user-config.ts';
 import { killProcessTree, normalizeExitCode } from './process-tree.js';
 import { assertJobComplete, startNativeJob } from './native.ts';
 
@@ -70,7 +74,13 @@ export class TailBuffer {
 export function gateShellArgv(testCommand, platform = process.platform, env = process.env) {
   if (platform === 'win32') {
     return {
-      argv: [env.ComSpec || 'cmd.exe', '/d', '/s', '/c', `"${testCommand}"`],
+      argv: [
+        env.ComSpec || env.COMSPEC || env.comspec || 'cmd.exe',
+        '/d',
+        '/s',
+        '/c',
+        `"${testCommand}"`,
+      ],
       windowsVerbatimArguments: true,
     };
   }
@@ -98,6 +108,15 @@ export function gateShellArgv(testCommand, platform = process.platform, env = pr
  * `container: 'process'` : relâchement explicite et opt-in (config
  * `gateContainer`) — pas de détection d'orphelins.
  *
+ * Environnement : les tests sont du code potentiellement écrit par l'agent. Ils
+ * ne reçoivent PAS l'environnement de l'orchestrateur mais une liste blanche
+ * minimale (`gate-env.ts`) : jamais de clé d'API (`*_API_KEY`, `apiKeyEnv`), ni
+ * d'URL de webhook. `gateEnv` (config du dépôt) demande des variables en plus,
+ * valables seulement si la config UTILISATEUR (`gate.envAllow`) les autorise ;
+ * `'inherit'` rend tout l'environnement (relâchement journalisé, affiché par
+ * `striart doctor`). Le journal rendu est caviardé (clés connues, motifs de
+ * secrets) : il part dans des tickets, des prompts de fusion et des `--json`.
+ *
  * @param {{
  *   cwd: string,
  *   testCommand: string,
@@ -105,6 +124,9 @@ export function gateShellArgv(testCommand, platform = process.platform, env = pr
  *   orphanGraceMs?: number,
  *   maxOutputBytes?: number,
  *   container?: 'native'|'process',
+ *   gateEnv?: 'inherit'|string[]|null,
+ *   secretEnvNames?: string[],
+ *   baseEnv?: NodeJS.ProcessEnv,
  * }} p
  * @returns {Promise<import('./types.js').GateResult>}
  */
@@ -115,11 +137,84 @@ export async function runTestGate({
   orphanGraceMs = DEFAULT_GATE_ORPHAN_GRACE_MS,
   maxOutputBytes = DEFAULT_GATE_MAX_OUTPUT_BYTES,
   container = 'native',
+  gateEnv = null,
+  secretEnvNames = [],
+  baseEnv = process.env,
 }) {
-  if (container === 'process') {
-    return runInPlainProcess({ cwd, testCommand, timeoutMs, maxOutputBytes });
+  const environment = await resolveGateEnvironment({ gateEnv, secretEnvNames, baseEnv });
+  const result =
+    container === 'process'
+      ? await runInPlainProcess({ cwd, testCommand, timeoutMs, maxOutputBytes, environment })
+      : await runInNativeContainer({
+          cwd,
+          testCommand,
+          timeoutMs,
+          orphanGraceMs,
+          maxOutputBytes,
+          environment,
+        });
+  return { ...result, log: redactGateLog(result.log, environment, baseEnv) };
+}
+
+/** Avertissements déjà émis (un par process et par cause : le gate tourne à chaque merge). */
+const warnedGateEnv = new Set();
+
+/**
+ * Environnement effectif du gate (voir `gate-env.ts`). Une config utilisateur
+ * illisible n'élargit RIEN (fail closed : plafond vide), et le dit.
+ * @param {{gateEnv: 'inherit'|string[]|null, secretEnvNames: string[], baseEnv: NodeJS.ProcessEnv}} p
+ */
+async function resolveGateEnvironment({ gateEnv, secretEnvNames, baseEnv }) {
+  /** @type {string[]} */
+  let userAllow = [];
+  if (Array.isArray(gateEnv) && gateEnv.length > 0) {
+    try {
+      const user = /** @type {any} */ (await readUserConfig());
+      userAllow = Array.isArray(user?.gate?.envAllow) ? user.gate.envAllow : [];
+    } catch (error) {
+      if (!warnedGateEnv.has('user-config')) {
+        warnedGateEnv.add('user-config');
+        logger.warn(
+          { code: error?.code },
+          'Config utilisateur illisible : aucune variable supplémentaire (gateEnv) n’est transmise au Test Gate',
+        );
+      }
+    }
   }
-  return runInNativeContainer({ cwd, testCommand, timeoutMs, orphanGraceMs, maxOutputBytes });
+  const built = buildGateEnv({ baseEnv, repo: gateEnv, userAllow, secretNames: secretEnvNames });
+  if (built.inherited && !warnedGateEnv.has('inherit')) {
+    warnedGateEnv.add('inherit');
+    logger.warn(
+      'gateEnv "inherit" : le Test Gate reçoit TOUT l’environnement de l’orchestrateur (clés d’API comprises) — relâchement explicite',
+    );
+  }
+  const refusedKey = `refused:${built.refused.join(',')}`;
+  if (built.refused.length > 0 && !warnedGateEnv.has(refusedKey)) {
+    warnedGateEnv.add(refusedKey);
+    logger.warn(
+      { refused: built.refused },
+      'gateEnv : variables demandées par le dépôt mais non autorisées par la config utilisateur (gate.envAllow) — non transmises au Test Gate',
+    );
+  }
+  return built;
+}
+
+/**
+ * Journal du gate sans secret : valeurs exactes des variables à clé/webhook de
+ * l'orchestrateur (celles que le gate n'a pas reçues, ou a reçues en `inherit`)
+ * puis motifs de secrets. Les variables écartées par l'utilisateur sont
+ * annoncées en tête (noms seulement).
+ * @param {string} log
+ * @param {import('./gate-env.ts').GateEnvResult} environment
+ * @param {NodeJS.ProcessEnv} baseEnv
+ */
+function redactGateLog(log, environment, baseEnv) {
+  const header =
+    environment.refused.length > 0
+      ? `[Striart] gateEnv : variables demandées par le dépôt mais non autorisées par la config utilisateur (gate.envAllow), non transmises : ${environment.refused.join(', ')}\n`
+      : '';
+  const body = redactSecrets(log, { values: secretValuesFromEnv(baseEnv) });
+  return header + body;
 }
 
 /** Le journal à rendre : la fin de la sortie, annoncée comme telle si coupée. */
@@ -152,8 +247,13 @@ async function runInNativeContainer({
   timeoutMs,
   orphanGraceMs,
   maxOutputBytes,
+  environment,
 }) {
-  const { argv, windowsVerbatimArguments } = gateShellArgv(testCommand);
+  const { argv, windowsVerbatimArguments } = gateShellArgv(
+    testCommand,
+    process.platform,
+    environment.env,
+  );
   let job;
   try {
     job = await startNativeJob({
@@ -162,6 +262,8 @@ async function runInNativeContainer({
       graceMs: orphanGraceMs,
       timeoutMs,
       windowsVerbatimArguments,
+      env: environment.env,
+      extendEnv: false,
       all: true,
       buffer: false,
     });
@@ -266,9 +368,11 @@ async function runInNativeContainer({
   };
 }
 
-async function runInPlainProcess({ cwd, testCommand, timeoutMs, maxOutputBytes }) {
+async function runInPlainProcess({ cwd, testCommand, timeoutMs, maxOutputBytes, environment }) {
   const subprocess = execa(testCommand, {
     cwd,
+    env: environment.env,
+    extendEnv: false,
     shell: true, // 'npm test' est npm.cmd sous Windows : le shell gère la résolution
     all: true,
     buffer: false,

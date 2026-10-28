@@ -90,6 +90,10 @@ export const ERROR_KINDS = Object.freeze({
   UNSUPPORTED_OUTPUT_FORMAT: 'usage',
   // `striart hook install|uninstall` : outil inconnu, portée (--user/--agent) absente.
   HOOK_SCOPE_REQUIRED: 'usage',
+  // Outil hors de l'ensemble FERMÉ de la CLI (claude, codex…) : invalide quel que
+  // soit l'état du dépôt, rejeté avant toute action (sortie 2). Contraste
+  // PROFILE_UNKNOWN, qui dépend de la config de la cible : échec (1).
+  HOOK_TOOL_UNKNOWN: 'usage',
   // Striart Control Protocol : message mal formé ou hors contrat (le client
   // doit corriger sa requête ; relancer telle quelle ne changera rien).
   CONTROL_INVALID_REQUEST: 'usage',
@@ -154,6 +158,18 @@ export const ERROR_KINDS = Object.freeze({
   MAIN_DIRTY: 'refusal',
   MAIN_DIVERGED: 'refusal',
   MAIN_SESSION_LIVE: 'refusal',
+  // GC d'inactivité (src/idle/) : une fermeture que les gardes refusent est un REFUS (sortie 3),
+  // jamais un succès silencieux — l'agent reste vivant, son clone intact. Ces codes sont portés
+  // par le rapport (`closed[].code`, `refused[].code`), pas levés : le balayage ne s'arrête pas
+  // sur un agent.
+  //  - UNVERIFIED     : le process visé n'est pas identifiable (PID recyclé, autre utilisateur) ;
+  //  - NOT_ACKNOWLEDGED : le superviseur de la session n'a pas accusé la demande d'arrêt propre ;
+  //  - BLOCKED        : une garde (demande humaine, ticket, merge, plan, session du principal).
+  IDLE_CLOSE_UNVERIFIED: 'refusal',
+  IDLE_CLOSE_NOT_ACKNOWLEDGED: 'refusal',
+  IDLE_CLOSE_BLOCKED: 'refusal',
+  IDLE_CLOSE_FAILED: 'failure',
+  IDLE_STATE_CORRUPT: 'failure',
   // Serveur MCP : outil mutant refusé par le niveau de l'appelant (D6) —
   // lecture seule demandée, profondeur d'orchestration, ou hors du périmètre
   // de l'agent appelant. Relancer tel quel ne change rien.
@@ -251,6 +267,10 @@ export const ERROR_KINDS = Object.freeze({
   DAEMON_PIDFILE_CORRUPT: 'refusal',
   UNSUPPORTED_RESOLUTION_KIND: 'refusal',
   USER_CONFIG_UNSAFE: 'refusal',
+  NET_OFFLINE: 'refusal',
+  NET_HOST_NOT_ALLOWED: 'refusal',
+  NET_INSECURE_TRANSPORT: 'refusal',
+  NET_REDIRECT_REFUSED: 'refusal',
 
   // Échecs d'exécution, CLASSÉS EXPLICITEMENT : un code levé et absent de
   // cette table est un oubli (tests/unit/cli-contract.test.js l'exige). Une
@@ -280,10 +300,17 @@ export const ERROR_KINDS = Object.freeze({
   DAEMON_BUSY: 'failure',
   DAEMON_SPAWN_FAILED: 'failure',
   MERGE_COMMIT_FAILED: 'failure',
+  // Hook de la cible (pre-commit, commit-msg…) ou signature qui rejette / bloque le
+  // commit de merge : ticket + merge annulé.
+  COMMIT_HOOK_REJECTED: 'failure',
+  // Nom de branche de livraison non dérivable. Les échecs de PUSH (PUSH_TIMEOUT,
+  // PUSH_NON_FAST_FORWARD, PUSH_REJECTED, PUSH_SUPERSEDED, PUSH_FAILED) ne sont PAS
+  // levés : ce sont des codes du rapport `delivery` / de `pushError` (le merge local
+  // reste valide).
+  DELIVERY_REF_INVALID: 'failure',
   TICKETS_UNREADABLE: 'failure',
   ELICITATION_INVALID: 'failure',
   HOOK_CONFIG_UNREADABLE: 'failure',
-  HOOK_TOOL_UNKNOWN: 'failure',
   LLM_CONFIG_INVALID: 'failure',
   LOCKS_CORRUPT: 'failure',
   MAIN_SESSION_CORRUPT: 'failure',
@@ -323,12 +350,17 @@ export const ERROR_KINDS = Object.freeze({
   STATE_LOCK_LOST: 'failure',
   STATE_LOCK_TIMEOUT: 'failure',
   STATE_READ_FAILED: 'failure',
+  STATE_UNPROTECTED: 'refusal',
   STATE_WRITE_FAILED: 'failure',
   TERMINAL_CONTEXT_MISSING: 'failure',
   TERMINAL_LAUNCHER_UNSUPPORTED: 'failure',
   TICKET_UNKNOWN: 'failure',
   UNKNOWN_BRANCH: 'failure',
   USER_CONFIG_INVALID: 'failure',
+  NET_URL_INVALID: 'failure',
+  NET_PROXY_UNSUPPORTED: 'failure',
+  NET_TLS_UNTRUSTED: 'failure',
+  NET_CA_INVALID: 'failure',
   WARP_NOT_FOUND: 'failure',
 });
 

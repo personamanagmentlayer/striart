@@ -4,8 +4,11 @@
 
 ## Prerequisites
 
-- **Node.js 22.18+** — Striart runs without a build step thanks to Node's
-  native type stripping (TypeScript modules are executed as-is).
+- **Node.js 22.21+** — Striart runs without a build step thanks to Node's
+  native type stripping (TypeScript modules are executed as-is, on by default
+  since 22.18); 22.21 is the floor because it is the first Node where
+  `NODE_USE_ENV_PROXY=1` honors `HTTP(S)_PROXY` (corporate proxy: see
+  [Configuration](configuration.md#enterprise-network-network)).
 - **Git** — on the `PATH`.
 - **A Git repository with at least one commit.** Striart initializes at the
   root of an existing Git repo (`striart init` looks for the root and fails

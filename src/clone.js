@@ -1,4 +1,4 @@
-import { mkdir, readdir, stat, unlink } from 'node:fs/promises';
+import { mkdir, readdir, readFile, stat, unlink } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { simpleGit } from 'simple-git';
@@ -22,6 +22,8 @@ import { agentsDir, striartDir } from './paths.js';
 import { syncLocks } from './locks.js';
 import { withMainLock } from './lock.js';
 import { CLONE_MEMORY_FILE, syncMemoryToClone } from './memory.js';
+import { cloneDiskSize, cloneWorkScan } from './clone-disk.ts';
+import { createSizeCache } from './clone-size-cache.ts';
 import { syncAgentInstructionsToClone } from './agents/instructions.ts';
 import { releaseAgentArtifacts } from './agent-artifacts.ts';
 import { isProcessAlive } from './process-tree.js';
@@ -218,6 +220,7 @@ export async function removeAgentFromRegistry(root, name) {
  * @param {string} root @param {string} name @param {import('./types.js').AgentMeta} meta
  */
 async function registerAgent(root, name, meta) {
+  cloneSizeCache.invalidate(meta.path); // clone neuf ou réhabilité : aucune taille d'une vie antérieure
   await updateRegistry(
     root,
     (current) => {
@@ -448,6 +451,26 @@ async function discardPartialClone(dest, name, stage) {
   });
 }
 
+/**
+ * HEAD du repo principal, ou EMPTY_REPO s'il n'a aucun commit (source unique :
+ * création et réutilisation d'un clone).
+ * @param {import('simple-git').SimpleGit} mainGit @param {string} root
+ */
+async function readMainHeadOrRefuse(mainGit, root) {
+  try {
+    return (await mainGit.revparse(['HEAD'])).trim();
+  } catch {
+    throw new StriartError(
+      'Le repo principal ne contient aucun commit. Crée au moins un commit avant de démarrer un agent.',
+      {
+        code: 'EMPTY_REPO',
+        hint: 'git commit --allow-empty -m "chore: initial commit"',
+        details: { root },
+      },
+    );
+  }
+}
+
 /** @param {{root: string, name: string, prompt?: string|null, predictedFiles?: string[], command?: string|null, cloneFilter?: string|null, secretPatterns?: string[]|null, mode?: 'attended'|'autonomous', profile?: string|null, allowHistoricalSecrets?: boolean, signal?: AbortSignal|null}} params @returns {Promise<import('./types.js').AgentMeta & {name: string}>} */
 export async function createAgent(params) {
   // `signal` n'annule que l'ATTENTE du verrou, jamais un clonage commencé.
@@ -485,19 +508,7 @@ async function createAgentImpl({
   }
 
   const mainGit = simpleGit(root);
-  let baseCommit;
-  try {
-    baseCommit = (await mainGit.revparse(['HEAD'])).trim();
-  } catch {
-    throw new StriartError(
-      'Le repo principal ne contient aucun commit. Crée au moins un commit avant de démarrer un agent.',
-      {
-        code: 'EMPTY_REPO',
-        hint: 'git commit --allow-empty -m "chore: initial commit"',
-        details: { root },
-      },
-    );
-  }
+  const baseCommit = await readMainHeadOrRefuse(mainGit, root);
 
   // Scanné AVANT de cloner (mêmes objets, hardlinkés — inutile de créer le
   // clone pour découvrir qu'on doit le jeter).
@@ -672,7 +683,7 @@ async function reuseAgentImpl({
 
   // Présence : une archive qui vient d'écrire sur disque héberge peut-être
   // encore un process. Heuristique mtime — force explicite pour passer outre.
-  const { workActivityMs } = await cloneStats(dest);
+  const workActivityMs = await cloneWorkActivityMs(dest);
   if (Date.now() - workActivityMs < (await presenceWindowMs(root)) && !force) {
     throw new StriartError(
       `Le clone de "${name}" a une activité disque récente (IN_USE). Vérifie qu'aucun process n'y travaille, ou --force.`,
@@ -702,7 +713,7 @@ async function reuseAgentImpl({
   }
 
   const mainGit = simpleGit(root);
-  const baseCommit = (await mainGit.revparse(['HEAD'])).trim();
+  const baseCommit = await readMainHeadOrRefuse(mainGit, root);
   try {
     // Fetch par chemin local (mêmes propriétés que le clone initial) du seul
     // HEAD du principal : rien à nettoyer, aucune ref permanente créée.
@@ -787,35 +798,94 @@ async function reuseAgentImpl({
 const DEFAULT_PRESENCE_MINUTES = 10;
 
 /**
- * Statistiques d'un clone : taille additionnelle totale (worktree + .git),
- * mais activité mesurée sur le WORKTREE SEUL. Striart écrit lui-même dans
- * .git en continu (fetch silencieux du watch, status…) : l'inclure rendrait
- * tous les clones "occupés" à perpétuité. Ce qui signale une session de
- * coding, ce sont les écritures de fichiers de travail.
- * @returns {Promise<{sizeBytes: number, workActivityMs: number}>}
+ * Activité du WORKTREE d'un clone — SIGNAL DE SÉCURITÉ (`sessionActive`, gardes
+ * de `cleanClones` et de `reuseAgent`) : exact, JAMAIS mis en cache, fail closed
+ * (une partie illisible = « actif »). Mesurée sur le worktree seul : Striart
+ * écrit lui-même dans .git en continu (fetch silencieux du watch, status…),
+ * l'inclure rendrait tous les clones « occupés » à perpétuité ; CLONE_MEMORY_FILE
+ * est écrit par Striart aussi (mémoire partagée). Ce qui signale une session de
+ * coding, ce sont les écritures de fichiers de travail. Ne parcourt pas .git.
+ * @param {string} clonePath
+ * @returns {Promise<number>}
  */
-async function cloneStats(clonePath) {
-  let sizeBytes = 0;
-  let workActivityMs = 0;
-  const entries = await readdir(clonePath, { withFileTypes: true }).catch(() => []);
-  for (const entry of entries) {
-    const p = path.join(clonePath, entry.name);
-    if (entry.isSymbolicLink()) continue;
-    const sub = entry.isDirectory()
-      ? await dirStats(p)
-      : await stat(p).then(
-          (s) => ({ sizeBytes: s.nlink <= 1 ? s.size : 0, latestMtimeMs: s.mtimeMs }),
-          () => null,
-        );
-    if (!sub) continue;
-    sizeBytes += sub.sizeBytes;
-    // .git : Striart y écrit en continu (fetch, status). CLONE_MEMORY_FILE :
-    // écrit par Striart aussi (mémoire partagée) — ni l'un ni l'autre ne
-    // signale une session de coding.
-    if (entry.name !== '.git' && entry.name !== CLONE_MEMORY_FILE)
-      workActivityMs = Math.max(workActivityMs, sub.latestMtimeMs);
-  }
-  return { sizeBytes, workActivityMs };
+export async function cloneWorkActivityMs(clonePath) {
+  return (await scanWorktree(clonePath)).workActivityMs;
+}
+
+/**
+ * Même mesure exacte que `cloneWorkActivityMs`, mais DISTINGUE « illisible »
+ * (`complete: false`, l'activité vaut alors « maintenant ») de « récent » :
+ * le GC d'inactivité (src/idle/) range un worktree illisible en signal INCONNU
+ * (fail closed, nommé), pas en activité fraîche.
+ * @param {string} clonePath
+ * @returns {Promise<{workActivityMs: number, complete: boolean}>}
+ */
+export async function cloneWorktreeActivity(clonePath) {
+  const { workActivityMs, complete } = await scanWorktree(clonePath);
+  return { workActivityMs, complete };
+}
+
+/** Parcours unique du worktree (activité exacte + octets, voir `cloneWorkScan`). */
+function scanWorktree(clonePath) {
+  return cloneWorkScan(clonePath, { skipTop: ['.git', CLONE_MEMORY_FILE] });
+}
+
+/**
+ * Cache des tailles (décision D4) : la taille est de l'AFFICHAGE. Servie du
+ * cache tant que l'entrée a moins de `CLONE_SIZE_TTL_MS` et que rien n'a bougé
+ * (signature), ou moins de `CLONE_SIZE_MIN_REFRESH_MS` quoi qu'il arrive (borne
+ * le coût d'un clone qui écrit en continu). L'horodatage de la mesure est
+ * exposé (`sizesComputedAt`). `clean`/`prune`/`reuse` ne lisent jamais ce cache.
+ */
+export const CLONE_SIZE_TTL_MS = 300_000;
+export const CLONE_SIZE_MIN_REFRESH_MS = 10_000;
+const cloneSizeCache = createSizeCache({
+  ttlMs: CLONE_SIZE_TTL_MS,
+  minRefreshMs: CLONE_SIZE_MIN_REFRESH_MS,
+});
+
+/** Vide le cache des tailles (tests, bancs). */
+export function clearCloneSizeCache() {
+  cloneSizeCache.clear();
+}
+
+/**
+ * Empreinte de ce qui fait varier la taille d'un clone, à coût de quelques
+ * `stat` : activité du worktree (déjà mesurée, exacte), références, index et
+ * dossier des packs. Un fait non couvert (écriture isolée dans .git) est borné
+ * par le TTL.
+ * @param {string} clonePath @param {number} workActivityMs
+ */
+async function sizeSignature(clonePath, workActivityMs) {
+  const gitDir = path.join(clonePath, '.git');
+  return [
+    workActivityMs,
+    (await refsSignature(clonePath)) ?? '-',
+    await fileSig(path.join(gitDir, 'index')),
+    await fileSig(path.join(gitDir, 'objects', 'pack')),
+  ].join('|');
+}
+
+/**
+ * Taille additionnelle d'un clone, depuis le cache si valide. Sur un échec de
+ * cache, le worktree n'est PAS reparcouru : ses octets viennent du parcours
+ * d'activité déjà fait (`scan`) ; seuls .git et le fichier de mémoire sont lus.
+ * @param {string} clonePath @param {import('./clone-disk.ts').WorkScan} scan
+ * @returns {Promise<{sizeBytes: number, computedAt: number}>}
+ */
+async function cachedCloneSize(clonePath, scan) {
+  const sig = await sizeSignature(clonePath, scan.workActivityMs);
+  return cloneSizeCache.get(clonePath, sig, async () => {
+    const git = await cloneDiskSize(path.join(clonePath, '.git'));
+    const memory = await stat(path.join(clonePath, CLONE_MEMORY_FILE)).then(
+      (s) => ({ bytes: s.nlink <= 1 ? s.size : 0, complete: true }),
+      (error) => ({ bytes: 0, complete: error.code === 'ENOENT' }),
+    );
+    return {
+      sizeBytes: scan.bytes + git.sizeBytes + memory.bytes,
+      complete: scan.complete && git.complete && memory.complete,
+    };
+  });
 }
 
 /** La config est lue best effort — un état consultable ne doit jamais échouer sur elle. */
@@ -850,6 +920,78 @@ async function readAgentSession(root, name, meta, recentActivity) {
 }
 
 /**
+ * Faits git d'un clone (branche, HEAD, commits en attente, dernier message),
+ * mémoïsés par PROCESS. La collecte d'état du dashboard est refaite à chaque
+ * changement et coûtait 4 process git par agent (≈ 1 s chacun sous Windows :
+ * 50 agents = 20 à 50 s avant le premier rendu). La clé est la signature des
+ * fichiers de références (inode, mtime, taille de `HEAD`, de la référence
+ * qu'il désigne et de `packed-refs`) + la base de comptage : tout commit, reset
+ * ou rebase la change. Une entrée n'est jamais crue plus de FACTS_TTL_MS, pour
+ * que la détection d'un clone illisible (BROKEN) ne soit jamais retardée de
+ * plus. Affichage seulement : aucune garde ne décide sur ces valeurs (`stopAgent`,
+ * `cleanClones` relisent git eux-mêmes). Signature illisible → pas de cache.
+ */
+const FACTS_TTL_MS = 30_000;
+/** @type {Map<string, {sig: string, at: number, facts: {currentBranch: string, head: string, pendingCommits: number, lastMessage: string|null}}>} */
+const gitFactsCache = new Map();
+
+/** @param {string} file */
+async function fileSig(file) {
+  const s = await stat(file).catch(() => null);
+  return s ? `${s.ino}:${s.mtimeMs}:${s.size}` : '-';
+}
+
+/** @param {string} clonePath @returns {Promise<string|null>} */
+async function refsSignature(clonePath) {
+  try {
+    const gitDir = path.join(clonePath, '.git');
+    const headText = (await readFile(path.join(gitDir, 'HEAD'), 'utf8')).trim();
+    const symbolic = headText.startsWith('ref: ') ? headText.slice(5) : null;
+    const parts = [headText, await fileSig(path.join(gitDir, 'packed-refs'))];
+    if (symbolic) parts.push(await fileSig(path.join(gitDir, ...symbolic.split('/'))));
+    return parts.join('|');
+  } catch {
+    // .git illisible ou non standard (fichier gitdir:, reftable) : pas de signature, pas de cache.
+    return null;
+  }
+}
+
+/**
+ * `openGit` n'est appelée qu'APRÈS le test de cache : un fait servi par le cache
+ * ne fabrique aucune instance git (copie de l'environnement, config). La clé de
+ * validité (signature des références + base + TTL) est inchangée.
+ * @param {string} clonePath @param {string} mergeBase
+ * @param {() => ReturnType<typeof cloneGit>} openGit
+ */
+async function readGitFacts(clonePath, mergeBase, openGit) {
+  const signature = await refsSignature(clonePath);
+  const key = clonePath;
+  const sig = signature === null ? null : `${signature}|${mergeBase}`;
+  const hit = gitFactsCache.get(key);
+  if (sig !== null && hit && hit.sig === sig && Date.now() - hit.at < FACTS_TTL_MS)
+    return hit.facts;
+  const git = openGit();
+  const [currentBranch, head, count, log] = await Promise.all([
+    git.revparse(['--abbrev-ref', 'HEAD']),
+    git.revparse(['HEAD']),
+    git.raw(['rev-list', '--count', `${mergeBase}..HEAD`]),
+    git.log({ maxCount: 1 }),
+  ]);
+  const facts = {
+    currentBranch: currentBranch.trim(),
+    head: head.trim(),
+    pendingCommits: Number.parseInt(count.trim(), 10),
+    lastMessage: log.latest?.message ?? null,
+  };
+  if (sig !== null) gitFactsCache.set(key, { sig, at: Date.now(), facts });
+  else gitFactsCache.delete(key);
+  return facts;
+}
+
+/** Clones inspectés simultanément par `listAgents` (4 process git chacun). */
+const LIST_AGENTS_CONCURRENCY = 6;
+
+/**
  * État de chaque agent enregistré : branche courante, HEAD, nombre de
  * commits en attente de merge (depuis baseCommit), et PRÉSENCE DE SESSION
  * (`session`, voir readAgentSession). `sessionActive` (activité disque du
@@ -861,12 +1003,11 @@ export async function listAgents(root) {
   await assertInitialized(root);
   const registry = await readRegistry(root);
   const presenceMs = await presenceWindowMs(root);
-  const agents = [];
-
-  for (const [name, meta] of Object.entries(registry)) {
+  /** @param {string} name @param {any} meta */
+  const inspect = async (name, meta) => {
     const exists = await stat(meta.path).catch(() => null);
     if (!exists) {
-      agents.push({
+      return {
         name,
         ...meta,
         status: 'MISSING',
@@ -874,37 +1015,33 @@ export async function listAgents(root) {
         pendingCommits: 0,
         lastMessage: null,
         session: await readAgentSession(root, name, meta, false),
-      });
-      continue;
+      };
     }
 
-    const git = cloneGit(meta.path);
     // Les commits "en attente" sont comptés depuis le dernier merge réussi.
     const mergeBase = meta.lastMergedCommit ?? meta.baseCommit;
     try {
-      const [currentBranch, head, count, log] = await Promise.all([
-        git.revparse(['--abbrev-ref', 'HEAD']),
-        git.revparse(['HEAD']),
-        git.raw(['rev-list', '--count', `${mergeBase}..HEAD`]),
-        git.log({ maxCount: 1 }),
-      ]);
-      const { sizeBytes, workActivityMs } = await cloneStats(meta.path);
+      const facts = await readGitFacts(meta.path, mergeBase, () => cloneGit(meta.path));
+      const scan = await scanWorktree(meta.path);
+      const workActivityMs = scan.workActivityMs;
+      const size = await cachedCloneSize(meta.path, scan);
       const sessionActive = Date.now() - workActivityMs < presenceMs;
-      agents.push({
+      return {
         name,
         ...meta,
         status: 'ACTIVE',
-        currentBranch: currentBranch.trim(),
-        head: head.trim(),
-        pendingCommits: Number.parseInt(count.trim(), 10),
-        lastMessage: log.latest?.message ?? null,
-        sizeBytes,
+        currentBranch: facts.currentBranch,
+        head: facts.head,
+        pendingCommits: facts.pendingCommits,
+        lastMessage: facts.lastMessage,
+        sizeBytes: size.sizeBytes,
+        sizesComputedAt: new Date(size.computedAt).toISOString(),
         lastActivity: workActivityMs > 0 ? new Date(workActivityMs).toISOString() : null,
         sessionActive,
         session: await readAgentSession(root, name, meta, sessionActive),
-      });
+      };
     } catch (error) {
-      agents.push({
+      return {
         name,
         ...meta,
         status: 'BROKEN',
@@ -912,9 +1049,27 @@ export async function listAgents(root) {
         pendingCommits: 0,
         lastMessage: error.message,
         session: await readAgentSession(root, name, meta, false),
-      });
+      };
     }
-  }
+  };
+
+  // Inspection à concurrence BORNÉE, ordre du registre conservé : l'état du
+  // dashboard est recollecté à chaque changement, et 4 process git par agent
+  // pris l'un après l'autre rendaient la collecte linéaire (≈ 1 s par agent
+  // mesuré sous Windows : 50 agents = 50 s avant le premier rendu).
+  const entries = Object.entries(registry);
+  const agents = new Array(entries.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < entries.length) {
+      const index = next++;
+      const [name, meta] = entries[index];
+      agents[index] = await inspect(name, meta);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(LIST_AGENTS_CONCURRENCY, entries.length) }, worker),
+  );
 
   return agents;
 }
@@ -1041,11 +1196,14 @@ async function cleanClonesImpl({
     const clonePath = path.join(dir, entry.name);
     // Présence de session (règle d'or n°3) : activité récente du WORKTREE =
     // quelqu'un travaille peut-être encore dedans. --force assume le risque.
-    const { sizeBytes: freedBytes, workActivityMs } = await cloneStats(clonePath);
+    const workActivityMs = await cloneWorkActivityMs(clonePath);
     if (!force && !sessionEnded && Date.now() - workActivityMs < presenceMs) {
       skipped.push({ name: entry.name, reason: 'IN_USE' });
       continue;
     }
+    // Taille libérée : mesurée à neuf (jamais le cache d'affichage), seulement
+    // pour un clone qu'on va réellement supprimer.
+    const freedBytes = (await cloneDiskSize(clonePath)).sizeBytes;
     const removal = await removeClone(root, entry.name, { wasActive });
     if (!removal.removed) {
       // Un process (session de coding ouverte ?) verrouille encore le
@@ -1152,6 +1310,7 @@ export async function removeClone(root, name, { wasActive }) {
  */
 async function finishCloneRemoval(root, name) {
   const clonePath = path.join(agentsDir(root), name);
+  cloneSizeCache.invalidate(clonePath); // le chemin pourra être recréé : jamais une taille d'avant
   try {
     await removeTreeWithBackoff(clonePath);
   } catch (error) {

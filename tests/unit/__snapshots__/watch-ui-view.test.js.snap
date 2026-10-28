@@ -1,0 +1,280 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`buildFrame : contenu (instantané à largeur fixe) > 60×20 étroit : les colonnes se replient, aucune ligne ne déborde 1`] = `
+"striart watch  ● watcher actif · merge auto  → main    HH:MM
+ag. 4   commits 2   ✗ conflits 1   file 0
+── Agents (4) ──────────────────────────────────────────────
+AGENT            ÉTAT      COMMITS  DERNIER COMMIT
+▸ checkout-flow  ✗ TICKET      1 ↑  feat(checkout): cart to…
+  pricing-fix    ● ACTIVE      1 ↑  fix(pricing): round to …
+  i18n-labels    ○ ACTIVE        ·  chore: initial commit
+  search-index   ○ ACTIVE        ·  chore: initial commit
+
+── Détail · checkout-flow ──────────────────────────────────
+Ticket   ✗ f72c · GATE_FAILED  → striart resolve --prepare …
+Session  ● PID 4242 (terminal) · supervisé · 34 Ko
+Commits  1 commit en attente de merge
+── [Journal]  Commandes  ───────────────────────────────────
+HH:MM:SS · agent checkout-flow : commit a1b2c3d4
+HH:MM:SS ✗ merge checkout-flow : Test Gate rouge (code 1)
+           ticket f72c
+
+Appuie sur / pour une commande, @ pour écrire à un agent, ?…
+ ↑↓  sélectionner   Entrée  détails   ?  aide   q  quitter"
+`;
+
+exports[`buildFrame : contenu (instantané à largeur fixe) > 80×24 ASCII (STRIART_ASCII / --plain) 1`] = `
+"striart watch  * watcher actif - merge auto  -> main  /work/striart-demo   HH:MM
+agents 4   commits en attente 2   x conflits 1   file 0
+-- Agents (4) ------------------------------------------------------------------
+AGENT            ÉTAT      COMMITS  DERNIER COMMIT
+À traiter (1)
+> checkout-flow  x TICKET      1 ^  feat(checkout): cart total
+En cours (1)
+  pricing-fix    * ACTIVE      1 ^  fix(pricing): round to cents, rate 25%
+Inactifs (2)
+  i18n-labels    o ACTIVE        -  chore: initial commit
+  search-index   o ACTIVE        -  chore: initial commit
+-- Détail - checkout-flow ------------------------------------------------------
+Ticket   x f72c - GATE_FAILED  -> striart resolve --prepare f72c
+Session  * PID 4242 (terminal) - supervisé - 34 Ko
+Commits  1 commit en attente de merge
+-- [Journal]  Commandes  -------------------------------------------------------
+HH:MM:SS - agent checkout-flow : commit a1b2c3d4
+HH:MM:SS x merge checkout-flow : Test Gate rouge (code 1)
+           ticket f72c
+
+
+
+Appuie sur / pour une commande, @ pour écrire à un agent, ? pour l'aide.
+ ^v  sélectionner   Entrée  détails   m  merge   ?  aide   q  quitter"
+`;
+
+exports[`buildFrame : contenu (instantané à largeur fixe) > 80×24 Unicode 1`] = `
+"striart watch  ● watcher actif · merge auto  → main  /work/striart-demo    HH:MM
+agents 4   commits en attente 2   ✗ conflits 1   file 0
+── Agents (4) ──────────────────────────────────────────────────────────────────
+AGENT            ÉTAT      COMMITS  DERNIER COMMIT
+À traiter (1)
+▸ checkout-flow  ✗ TICKET      1 ↑  feat(checkout): cart total
+En cours (1)
+  pricing-fix    ● ACTIVE      1 ↑  fix(pricing): round to cents, rate 25%
+Inactifs (2)
+  i18n-labels    ○ ACTIVE        ·  chore: initial commit
+  search-index   ○ ACTIVE        ·  chore: initial commit
+── Détail · checkout-flow ──────────────────────────────────────────────────────
+Ticket   ✗ f72c · GATE_FAILED  → striart resolve --prepare f72c
+Session  ● PID 4242 (terminal) · supervisé · 34 Ko
+Commits  1 commit en attente de merge
+── [Journal]  Commandes  ───────────────────────────────────────────────────────
+HH:MM:SS · agent checkout-flow : commit a1b2c3d4
+HH:MM:SS ✗ merge checkout-flow : Test Gate rouge (code 1)
+           ticket f72c
+
+
+
+Appuie sur / pour une commande, @ pour écrire à un agent, ? pour l’aide.
+ ↑↓  sélectionner   Entrée  détails   m  merge   ?  aide   q  quitter"
+`;
+
+exports[`buildFrame : contenu (instantané à largeur fixe) > 100×30 Unicode 1`] = `
+"striart watch  ● watcher actif · merge auto  → main  /work/striart-demo                        HH:MM
+agents 4   commits en attente 2   ✗ conflits 1   file 0
+── Agents (4) ──────────────────────────────────────────────────────────────────────────────────────
+AGENT            ÉTAT      COMMITS  DERNIER COMMIT                             ÂGE  MODE
+À traiter (1)
+▸ checkout-flow  ✗ TICKET      1 ↑  feat(checkout): cart total               3 min  supervisé
+En cours (1)
+  pricing-fix    ● ACTIVE      1 ↑  fix(pricing): round to cents, rate 25%  10 min  supervisé
+Inactifs (2)
+  i18n-labels    ○ ACTIVE        ·  chore: initial commit                      1 h  supervisé
+  search-index   ○ ACTIVE        ·  chore: initial commit                      1 h  supervisé
+── Détail · checkout-flow ──────────────────────────────────────────────────────────────────────────
+Session  ● PID 4242 (terminal) · supervisé · 34 Ko
+Branche  striart/checkout-flow/task-37478bc6 → main
+Commits  1 commit en attente de merge
+          a1b2c3d 3 min feat(checkout): cart total
+Fichiers src/cart.js M  tests/cart.test.js A
+Ticket   ✗ f72c · GATE_FAILED  → striart resolve --prepare f72c
+── [Journal]  Commandes  ───────────────────────────────────────────────────────────────────────────
+HH:MM:SS · agent checkout-flow : commit a1b2c3d4
+HH:MM:SS ✗ merge checkout-flow : Test Gate rouge (code 1)
+           ticket f72c
+
+
+
+
+
+
+Appuie sur / pour une commande, @ pour écrire à un agent, ? pour l’aide.
+ ↑↓  sélectionner   Entrée  détails   m  merge   s  sync   /  commande   ?  aide   q  quitter"
+`;
+
+exports[`buildFrame : contenu (instantané à largeur fixe) > 140×40 large 1`] = `
+"striart watch  ● watcher actif · merge auto  → main  /work/striart-demo                                                                HH:MM
+agents 4   commits en attente 2   ✗ conflits 1   file 0
+── Agents (4) ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+AGENT            ÉTAT      COMMITS  DERNIER COMMIT                             ÂGE  MODE       SESSION              BRANCHE
+À traiter (1)
+▸ checkout-flow  ✗ TICKET      1 ↑  feat(checkout): cart total               3 min  supervisé  PID 4242 (terminal)  striart/checkout-flow/t…
+En cours (1)
+  pricing-fix    ● ACTIVE      1 ↑  fix(pricing): round to cents, rate 25%  10 min  supervisé  PID 4242 (terminal)  striart/pricing-fix/tas…
+Inactifs (2)
+  i18n-labels    ○ ACTIVE        ·  chore: initial commit                      1 h  supervisé  —                    striart/i18n-labels/tas…
+  search-index   ○ ACTIVE        ·  chore: initial commit                      1 h  supervisé  —                    striart/search-index/ta…
+── Détail · checkout-flow ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+Session  ● PID 4242 (terminal) · supervisé · 34 Ko
+Branche  striart/checkout-flow/task-37478bc6 → main
+Commits  1 commit en attente de merge
+          a1b2c3d 3 min feat(checkout): cart total
+Fichiers src/cart.js M  tests/cart.test.js A
+Ticket   ✗ f72c · GATE_FAILED  → striart resolve --prepare f72c
+── [Journal]  Commandes  ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+HH:MM:SS · agent checkout-flow : commit a1b2c3d4
+HH:MM:SS ✗ merge checkout-flow : Test Gate rouge (code 1)
+           ticket f72c
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Appuie sur / pour une commande, @ pour écrire à un agent, ? pour l’aide.
+ ↑↓  sélectionner   Entrée  détails   m  merge   s  sync   /  commande   @  message @agent   Tab  journal/commandes   ?  aide   q  quitter"
+`;
+
+exports[`buildFrame : contenu (instantané à largeur fixe) > en anglais 1`] = `
+"striart watch  ● watcher running · auto merge  → main  /work/striart-demo                      HH:MM
+agents 4   pending commits 2   ✗ conflicts 1   queue 0
+── Agents (4) ──────────────────────────────────────────────────────────────────────────────────────
+AGENT            STATE     COMMITS  LAST COMMIT                             AGE  MODE
+To handle (1)
+▸ checkout-flow  ✗ TICKET      1 ↑  feat(checkout): cart total               3m  supervised
+Running (1)
+  pricing-fix    ● ACTIVE      1 ↑  fix(pricing): round to cents, rate 25%  10m  supervised
+Idle (2)
+  i18n-labels    ○ ACTIVE        ·  chore: initial commit                    1h  supervised
+  search-index   ○ ACTIVE        ·  chore: initial commit                    1h  supervised
+── Detail · checkout-flow ──────────────────────────────────────────────────────────────────────────
+Session  ● PID 4242 (terminal) · supervised · 34 KB
+Branch   striart/checkout-flow/task-37478bc6 → main
+Commits  1 commit waiting to be merged
+          a1b2c3d   3m feat(checkout): cart total
+Files    src/cart.js M  tests/cart.test.js A
+Ticket   ✗ f72c · GATE_FAILED  → striart resolve --prepare f72c
+── [Journal]  Commands  ────────────────────────────────────────────────────────────────────────────
+HH:MM:SS · agent checkout-flow : commit a1b2c3d4
+HH:MM:SS ✗ merge checkout-flow : Test Gate rouge (code 1)
+           ticket f72c
+
+
+
+
+
+
+Press / for a command, @ to write to an agent, ? for help.
+ ↑↓  select   Entrée  details   m  merge   s  sync   /  command   ?  help   q  quit"
+`;
+
+exports[`indicateur d’inactivité (GC) dans le tableau et le détail > instantanés : français Unicode, anglais, ASCII 1`] = `
+"striart watch  ● watcher actif · merge auto  → main  /work/striart-demo                                            HH:MM
+agents 4   commits en attente 0   ✗ conflits 1   file 0
+── Agents (4) ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+AGENT           ÉTAT                              COMMITS  DERNIER COMMIT         ÂGE  MODE       SESSION
+En cours (3)
+▸ warned-one    ● ACTIVE (inactif 1 h, averti)          ·  chore: initial commit  1 h  supervisé  PID 4242 (terminal)
+  closable-one  ● ACTIVE (inactif 2 h, fermable)        ·  chore: initial commit  1 h  supervisé  PID 4242 (terminal)
+  fresh         ● ACTIVE                                ·  chore: initial commit  1 h  supervisé  PID 4242 (terminal)
+Inactifs (1)
+  forgotten     ○ ACTIVE (inactif 3 h)                  ·  chore: initial commit  1 h  supervisé  —
+── Détail · warned-one ─────────────────────────────────────────────────────────────────────────────────────────────────
+Session  ● PID 4242 (terminal) · supervisé · 34 Ko · inactif 1 h, averti
+Branche  striart/warned-one/task-37478bc6 → main
+Commits  aucun commit en attente de merge
+          a1b2c3d 3 min feat(checkout): cart total
+Fichiers src/cart.js M  tests/cart.test.js A
+Ticket   —
+── [Journal]  Commandes  ───────────────────────────────────────────────────────────────────────────────────────────────
+HH:MM:SS · agent checkout-flow : commit a1b2c3d4
+HH:MM:SS ✗ merge checkout-flow : Test Gate rouge (code 1)
+           ticket f72c
+
+
+
+
+
+
+
+Appuie sur / pour une commande, @ pour écrire à un agent, ? pour l’aide.
+ ↑↓  sélectionner   Entrée  détails   m  merge   s  sync   /  commande   @  message @agent   ?  aide   q  quitter"
+`;
+
+exports[`indicateur d’inactivité (GC) dans le tableau et le détail > instantanés : français Unicode, anglais, ASCII 2`] = `
+"striart watch  ● watcher running · auto merge  → main  /work/striart-demo                                          HH:MM
+agents 4   pending commits 0   ✗ conflicts 1   queue 0
+── Agents (4) ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+AGENT           STATE                         COMMITS  LAST COMMIT            AGE  MODE        SESSION
+Running (3)
+▸ warned-one    ● ACTIVE (idle 1h, warned)          ·  chore: initial commit   1h  supervised  PID 4242 (terminal)
+  closable-one  ● ACTIVE (idle 2h, closable)        ·  chore: initial commit   1h  supervised  PID 4242 (terminal)
+  fresh         ● ACTIVE                            ·  chore: initial commit   1h  supervised  PID 4242 (terminal)
+Idle (1)
+  forgotten     ○ ACTIVE (idle 3h)                  ·  chore: initial commit   1h  supervised  —
+── Detail · warned-one ─────────────────────────────────────────────────────────────────────────────────────────────────
+Session  ● PID 4242 (terminal) · supervised · 34 KB · idle 1h, warned
+Branch   striart/warned-one/task-37478bc6 → main
+Commits  no commit waiting to be merged
+          a1b2c3d   3m feat(checkout): cart total
+Files    src/cart.js M  tests/cart.test.js A
+Ticket   —
+── [Journal]  Commands  ────────────────────────────────────────────────────────────────────────────────────────────────
+HH:MM:SS · agent checkout-flow : commit a1b2c3d4
+HH:MM:SS ✗ merge checkout-flow : Test Gate rouge (code 1)
+           ticket f72c
+
+
+
+
+
+
+
+Press / for a command, @ to write to an agent, ? for help.
+ ↑↓  select   Entrée  details   m  merge   s  sync   /  command   @  @agent message   ?  help   q  quit"
+`;
+
+exports[`indicateur d’inactivité (GC) dans le tableau et le détail > instantanés : français Unicode, anglais, ASCII 3`] = `
+"striart watch  * watcher actif - merge auto  -> main  /work/striart-demo                       HH:MM
+agents 4   commits en attente 0   x conflits 1   file 0
+-- Agents (4) --------------------------------------------------------------------------------------
+AGENT           ÉTAT                              COMMITS  DERNIER COMMIT         ÂGE  MODE
+En cours (3)
+> warned-one    * ACTIVE (inactif 1 h, averti)          -  chore: initial commit  1 h  supervisé
+  closable-one  * ACTIVE (inactif 2 h, fermable)        -  chore: initial commit  1 h  supervisé
+  fresh         * ACTIVE                                -  chore: initial commit  1 h  supervisé
+Inactifs (1)
+  forgotten     o ACTIVE (inactif 3 h)                  -  chore: initial commit  1 h  supervisé
+-- Détail - warned-one -----------------------------------------------------------------------------
+Session  * PID 4242 (terminal) - supervisé - 34 Ko - inactif 1 h, averti
+Commits  aucun commit en attente de merge
+Fichiers src/cart.js M  tests/cart.test.js A
+-- [Journal]  Commandes  ---------------------------------------------------------------------------
+HH:MM:SS - agent checkout-flow : commit a1b2c3d4
+HH:MM:SS x merge checkout-flow : Test Gate rouge (code 1)
+           ticket f72c
+
+
+
+
+Appuie sur / pour une commande, @ pour écrire à un agent, ? pour l'aide.
+ ^v  sélectionner   Entrée  détails   m  merge   s  sync   /  commande   ?  aide   q  quitter"
+`;

@@ -4,6 +4,7 @@ import { StriartError } from './errors.js';
 import { logger } from './logger.js';
 import { MAX_TIMER_MS } from './timer-limits.ts';
 import { assertSecretPatternSyntax } from './secret-patterns.ts';
+import { validateGateEnvPattern } from './gate-env.ts';
 import { parseAllowedHosts } from './control/hosts.ts';
 import { DEFAULT_TERMINAL_SETTINGS, isValidTerminalSettings } from './terminal/config.ts';
 import { DEFAULT_HOOK_SETTINGS, isValidHookSettings } from './hooks/config.ts';
@@ -17,6 +18,8 @@ import {
   isValidOrchestrationSettings,
 } from './orchestration/settings.ts';
 import { isValidLlmResilience } from './llm-resilience.ts';
+import { isValidOverlapSettings } from './overlap-settings.ts';
+import { isValidIdleSettings } from './idle/settings.ts';
 import { PTY_MIN_CLIENT_QUEUE_BYTES, ptyMinClientQueueBytes } from './pty-limits.ts';
 import { isValidTokensSettings } from './tokens/settings.ts';
 import { DEFAULT_LOG_GENERATIONS, DEFAULT_LOG_MAX_BYTES, isValidRotation } from './log-rotation.ts';
@@ -45,6 +48,19 @@ export const DEFAULT_CONFIG = {
   testCommand: 'npm test',
   targetBranch: 'main',
   autoPush: false,
+  // Livraison vers le remote `origin` (exige autoPush) :
+  //  - 'push' (défaut) : le SHA testé du merge part vers targetBranch (mainBranch à la
+  //    promotion) ;
+  //  - 'branch' : il part vers `striart/<agent>/<tâche>` (`striart/promote/…` à la
+  //    promotion) et la forge reste l'autorité d'approbation (PR/MR créée ailleurs) —
+  //    la branche cible distante n'avance JAMAIS du fait de Striart.
+  // Le push est un effet DIFFÉRÉ, hors du verrou principal, du SHA exact testé, jamais
+  // forcé, sans invite interactive. `pushTimeoutMs` : délai dur (arbre de process tué).
+  // `commitTimeoutMs` : idem pour le commit de merge (hooks pre-commit / commit-msg de
+  // la cible, signature) ; un hook n'est jamais contourné (pas de --no-verify).
+  delivery: 'push',
+  pushTimeoutMs: 120_000,
+  commitTimeoutMs: 300_000,
   semanticMerge: true,
   // Clone partiel des agents pour les très gros historiques : 'blob:none'
   // (les blobs anciens sont récupérés à la demande depuis le repo principal,
@@ -118,6 +134,18 @@ export const DEFAULT_CONFIG = {
   gateOrphanGraceMs: 2000,
   gateMaxOutputBytes: 104857600,
   gateContainer: 'native',
+  //  - gateEnv : environnement du Test Gate. null (défaut) = liste blanche
+  //    minimale, sans clé d'API ni webhook (gate-env.ts). Un tableau de noms
+  //    (`['MON_APP_*']`) DEMANDE des variables en plus : elles ne passent que si
+  //    la config UTILISATEUR (gate.envAllow, hors dépôt) les autorise.
+  //    'inherit' = tout l'environnement de l'orchestrateur (relâchement
+  //    EXPLICITE, journalisé, affiché par `striart doctor`).
+  gateEnv: null,
+  // Données locales (.striart/ : journaux, tickets, file, relevés) lisibles par
+  // l'utilisateur SEUL — 0700/0600 (POSIX), ACL protégée (Windows). false =
+  // relâchement EXPLICITE pour un système de fichiers sans permissions (FAT,
+  // exFAT, certains partages réseau) : journalisé, affiché par `striart doctor`.
+  privateStateDir: true,
   // Fetch silencieux périodique en mode watch : mesure le retard des agents
   // sur targetBranch sans toucher leurs working trees. 0 → désactivé.
   fetchIntervalMs: 20000,
@@ -300,6 +328,18 @@ export const DEFAULT_CONFIG = {
   // Résilience des appels LLM (src/llm-resilience.ts) : backoff exponentiel à
   // gigue complète, Retry-After, disjoncteur par fournisseur. Objet partiel.
   llmResilience: {},
+  // Filet à l'exécution (src/overlap.ts) : chevauchement OBSERVÉ entre agents et avec la
+  // cible, indépendant de la prédiction du Router. Objet partiel : enabled (true),
+  // autoSync (true : rebase anticipé, jamais sur une session vivante), maxGitCalls (64
+  // par cycle), maxFilesPerAgent (5000), maxFilesPerOverlap (50). enabled: false est un
+  // relâchement affiché par doctor.
+  overlap: {},
+  // GC d'agents et de sessions inactifs (src/idle/) : objet partiel. enabled (true : détection
+  // et rapport), action ('report' | 'warn' | 'close' — la fermeture exige AUSSI l'autorisation
+  // de la config UTILISATEUR idle.closeRoots), warnAfterMs (30 min), closeAfterMs (2 h),
+  // graceMs (5 min), sweepIntervalMs (5 min), maxClosuresPerSweep (4), closePty (false),
+  // excludeAgents, excludeProfiles.
+  idle: {},
 };
 
 /**
@@ -352,6 +392,9 @@ const VALIDATORS = {
   testCommand: (v) => typeof v === 'string' && v.trim().length > 0,
   targetBranch: (v) => typeof v === 'string' && v.trim().length > 0,
   autoPush: (v) => typeof v === 'boolean',
+  delivery: (v) => v === 'push' || v === 'branch',
+  pushTimeoutMs: (v) => Number.isInteger(v) && v >= 1000 && v <= MAX_TIMER_MS,
+  commitTimeoutMs: (v) => Number.isInteger(v) && v >= 1000 && v <= MAX_TIMER_MS,
   semanticMerge: (v) => typeof v === 'boolean',
   cloneFilter: (v) => v === null || (typeof v === 'string' && v.trim().length > 0),
   pruneDays: (v) => Number.isInteger(v) && v >= 0,
@@ -407,6 +450,11 @@ const VALIDATORS = {
   gateOrphanGraceMs: (v) => Number.isInteger(v) && v >= 0 && v <= 600_000,
   gateMaxOutputBytes: (v) => Number.isInteger(v) && v >= 1_024 && v <= 1_073_741_824,
   gateContainer: (v) => v === 'native' || v === 'process',
+  gateEnv: (v) =>
+    v === null ||
+    v === 'inherit' ||
+    (Array.isArray(v) && v.length <= 64 && v.every((n) => validateGateEnvPattern(n) === null)),
+  privateStateDir: (v) => typeof v === 'boolean',
   mainBranch: (v) => v === null || (typeof v === 'string' && v.trim().length > 0),
   promoteTestCommand: (v) => v === null || (typeof v === 'string' && v.trim().length > 0),
   semanticGateRetries: (v) => Number.isInteger(v) && v >= 0 && v <= 5,
@@ -588,6 +636,8 @@ const VALIDATORS = {
   llmRoles: (v) => isValidLlmRoles(v),
   tokens: (v) => isValidTokensSettings(v),
   llmResilience: (v) => isValidLlmResilience(v),
+  overlap: (v) => isValidOverlapSettings(v),
+  idle: (v) => isValidIdleSettings(v),
   // Même règle que le `commitMessage` d'un profil (profile-schema.ts).
   commitMessage: (v) => isValidCommitMessageTemplate(v),
 };
@@ -684,6 +734,15 @@ export function validateConfig(userConfig) {
         details: { reason: 'INVALID_VALUE', key },
       });
     }
+  }
+  // Le mode branche est une livraison : sans autoPush, Striart ne pousse rien. Un
+  // `delivery: 'branch'` seul laisserait croire à une livraison qui n'a pas lieu.
+  if (userConfig.delivery === 'branch' && userConfig.autoPush !== true) {
+    throw new StriartError('"delivery: branch" exige "autoPush: true" dans la config Striart', {
+      code: 'CONFIG_INVALID',
+      hint: 'striart doctor',
+      details: { reason: 'DELIVERY_REQUIRES_AUTOPUSH', key: 'delivery' },
+    });
   }
 }
 

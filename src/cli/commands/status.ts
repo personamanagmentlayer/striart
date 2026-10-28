@@ -1,6 +1,7 @@
 import { collectStatus } from '../../status.ts';
 import type { CommandModule } from '../context.ts';
 import type { Level } from '../output.ts';
+import { agentStateView, stateGlyphChar } from '../render/agents.ts';
 
 export type StatusData = Awaited<ReturnType<typeof collectStatus>>;
 type Agent = StatusData['agents'][number];
@@ -17,16 +18,19 @@ export const status: CommandModule<Record<string, never>, StatusData> = {
       out.line('info', m.status.empty);
       out.hint('striart start <agent>');
     } else {
-      const stateLevel = (a: Agent): Level =>
-        a.status === 'ACTIVE' ? 'ok' : a.status === 'REMOVING' ? 'warn' : 'error';
+      // Vocabulaire d'état commun avec le cockpit `watch --ui` : mot + glyphe + ton.
+      const ticketed = new Set(
+        data.tickets.map((t) => (t as { agent?: string }).agent).filter(Boolean),
+      );
+      const stateOf = (a: Agent) => agentStateView(a, ticketed.has(a.name), m.status.stateTicket);
       out.table<Agent>(
         [
           { key: 'agent', header: m.status.colAgent, value: (a) => a.name, priority: 10 },
           {
             key: 'state',
             header: m.status.colState,
-            value: (a) => a.status,
-            style: (text, a) => out.style(stateLevel(a), text),
+            value: (a) => `${stateGlyphChar(out.glyphs, stateOf(a).glyph)} ${stateOf(a).label}`,
+            style: (text, a) => out.style(stateOf(a).level, text),
             priority: 9,
           },
           {
@@ -128,6 +132,51 @@ export const status: CommandModule<Record<string, never>, StatusData> = {
         text: m.status.orphanRuns(orphans),
         hint: 'striart status --json',
       });
+    }
+    // GC d'inactivité : sessions vivantes dont TOUS les signaux sont au-delà du seuil.
+    if (data.idle?.available) {
+      const idleLive = data.idle.agents.filter((a) => a.state === 'idle' && a.session === 'live');
+      if (idleLive.length > 0) {
+        items.push({
+          level: 'warn',
+          text: m.status.idleSessions(idleLive.length, idleLive.map((a) => a.agent).join(', ')),
+          hint: 'striart gc --dry-run',
+        });
+      }
+    }
+    // Filet à l'exécution : fichiers RÉELLEMENT touchés par deux agents / par un agent et la cible.
+    const overlaps = data.overlaps;
+    if (overlaps) {
+      if ('unavailable' in overlaps) {
+        items.push({
+          level: 'info',
+          text: m.status.overlapUnavailable(overlaps.reason),
+          hint: null,
+        });
+      } else {
+        for (const o of overlaps.overlaps) {
+          const shown = o.files
+            .slice(0, 5)
+            .map((f) => out.untrusted(f))
+            .join(', ');
+          const more = o.fileCount - Math.min(o.files.length, 5);
+          items.push({
+            level: 'warn',
+            text:
+              o.kind === 'agents'
+                ? m.status.overlapAgents(o.agents[0]!, o.agents[1]!, shown, more)
+                : m.status.overlapTarget(o.agents[0]!, shown, more, overlaps.targetBranch),
+            hint: o.kind === 'agents' ? null : `striart sync ${o.agents[0]}`,
+          });
+        }
+        if (overlaps.deferred.length > 0) {
+          items.push({
+            level: 'info',
+            text: m.status.overlapDeferred(overlaps.deferred.join(', ')),
+            hint: null,
+          });
+        }
+      }
     }
     const waiting = data.queue.filter((t) => t.status === 'WAITING');
     const ready = waiting.filter((t) => t.ready);

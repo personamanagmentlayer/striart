@@ -1,9 +1,12 @@
-import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { striartDir } from './paths.js';
 import { StriartError, ticketUnknownError } from './errors.js';
 import { removeTreeWithBackoff, withTransientRetry, writeJsonAtomic } from './json-file.js';
+import { writePrivateFile } from './private-fs.ts';
+import { redactSecrets, secretValuesFromEnv } from './redact-secrets.ts';
+import { ensureStateProtection } from './state-protection.ts';
 
 /**
  * Dossier de ticket sans ticket.json depuis plus longtemps que ça : débris
@@ -81,7 +84,10 @@ export async function createConflictTicket(
   const now = new Date().toISOString();
   const id = existing ? path.basename(existing.dir) : `${agent}-${randomUUID().slice(0, 8)}`;
   const dir = path.join(striartDir(root), 'conflicts', id);
-  await mkdir(dir, { recursive: true });
+  // Un ticket contient le code des deux côtés du conflit et la sortie des
+  // tests : réservé à l'utilisateur (0600 / ACL héritée d'un `.striart/` durci).
+  await ensureStateProtection(root);
+  await mkdir(dir, { recursive: true, mode: 0o700 });
 
   const ticket = {
     id,
@@ -120,16 +126,22 @@ export async function createConflictTicket(
   // Atomique : un crash ou un lecteur concurrent (dashboard, watch) ne voit
   // jamais un ticket.json tronqué — qui serait alors listé CORRUPT.
   await writeJsonAtomic(path.join(dir, 'ticket.json'), ticket);
-  if (log) await writeFile(path.join(dir, 'test-output.log'), log, 'utf8');
-  else if (existing) await rm(path.join(dir, 'test-output.log'), { force: true });
+  // La sortie des tests (du code que l'agent a pu écrire) est caviardée des secrets
+  // connus avant d'être conservée : elle est relue par un humain, un LLM, le dashboard.
+  if (log) {
+    await writePrivateFile(
+      path.join(dir, 'test-output.log'),
+      redactSecrets(log, { values: secretValuesFromEnv(process.env) }),
+    );
+  } else if (existing) await rm(path.join(dir, 'test-output.log'), { force: true });
 
   for (const res of resolutions) {
     const prefix = safeFileName(res.path, ticket.fileNaming === 1 ? 1 : 2);
-    await writeFile(path.join(dir, `${prefix}.base`), res.base ?? '', 'utf8');
-    await writeFile(path.join(dir, `${prefix}.ours`), res.ours ?? '', 'utf8');
-    await writeFile(path.join(dir, `${prefix}.theirs`), res.theirs ?? '', 'utf8');
+    await writePrivateFile(path.join(dir, `${prefix}.base`), res.base ?? '');
+    await writePrivateFile(path.join(dir, `${prefix}.ours`), res.ours ?? '');
+    await writePrivateFile(path.join(dir, `${prefix}.theirs`), res.theirs ?? '');
     if (res.llmAttempt != null) {
-      await writeFile(path.join(dir, `${prefix}.llm-attempt`), res.llmAttempt, 'utf8');
+      await writePrivateFile(path.join(dir, `${prefix}.llm-attempt`), res.llmAttempt);
     } else if (existing) {
       // Tentative LLM d'un essai précédent : ne pas la présenter comme
       // celle de l'essai courant.
@@ -372,15 +384,32 @@ export async function removeResolvedTicketDir(ticketDir) {
 /**
  * Un ticket CORRUPT se ferme comme un autre : c'est la seule sortie
  * possible pour l'humain qui l'a inspecté.
- * @param {string} root @param {string} ticketId @returns {Promise<import('./types.js').TicketEntry>}
+ *
+ * Fermer un ticket DÉJÀ résolu est refusé (`TICKET_ALREADY_RESOLVED`, comme `--apply`) : un script
+ * qui enchaîne des fermetures croirait avoir agi. La garde vit ici, dans le domaine, pour valoir
+ * pour TOUS les appelants (CLI, Control Protocol et donc dashboard) — pas dans la seule CLI.
+ * `idempotent: true` est réservé aux fermetures INTERNES de l'orchestrateur (doublons d'un même
+ * conflit fermés au passage, tickets de hook périmés), qui peuvent légitimement croiser une
+ * fermeture humaine concurrente : le marqueur d'origine est alors conservé, rien n'est réécrit.
+ * @param {string} root @param {string} ticketId
+ * @param {{idempotent?: boolean}} [options]
+ * @returns {Promise<import('./types.js').TicketEntry>}
  */
-export async function closeConflictTicket(root, ticketId) {
+export async function closeConflictTicket(root, ticketId, { idempotent = false } = {}) {
   const tickets = await listConflictTickets(root, { includeResolved: true });
   const ticket = tickets.find((t) => t.id === ticketId);
   if (!ticket) {
     throw ticketUnknownError(ticketId);
   }
-  await writeFile(path.join(ticket.dir, 'RESOLVED'), `${new Date().toISOString()}\n`, 'utf8');
+  if (ticket.resolved) {
+    if (idempotent) return ticket;
+    throw new StriartError(`Ticket "${ticketId}" déjà marqué résolu.`, {
+      code: 'TICKET_ALREADY_RESOLVED',
+      hint: 'striart resolve --all',
+      details: { ticketId },
+    });
+  }
+  await writePrivateFile(path.join(ticket.dir, 'RESOLVED'), `${new Date().toISOString()}\n`);
   return { ...ticket, resolved: true };
 }
 
@@ -473,7 +502,7 @@ export async function prepareResolutionScaffold(root, ticketId, options = {}) {
           () => null,
         );
         if (content !== null) {
-          await writeFile(resolvedPath, content);
+          await writePrivateFile(resolvedPath, content);
           return { path: filePath, created: true, source };
         }
       }

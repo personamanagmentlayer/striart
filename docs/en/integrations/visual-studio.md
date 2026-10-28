@@ -59,7 +59,8 @@ If `striart` is not found, point at `node` with the absolute path of
 
 - No documented configurable working directory (see above).
 - No native extension is planned for Visual Studio at this stage; the
-  extension to come (no announced date) targets VS Code and Open VSX.
+  VS Code extension (delivered, not published) targets VS Code and, once
+  published, Open VSX.
 
 ## Security
 

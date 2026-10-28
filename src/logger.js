@@ -7,6 +7,7 @@ import {
   createRotatingFileSink,
   isValidRotation,
 } from './log-rotation.ts';
+import { REDACTED, redactSecrets } from './redact-secrets.ts';
 
 /**
  * Journal de diagnostic de Striart (pino).
@@ -42,6 +43,105 @@ export const DAEMON_LOG_ENV = Object.freeze({
   maxBytes: 'STRIART_LOG_MAX_BYTES',
   generations: 'STRIART_LOG_GENERATIONS',
 });
+
+/**
+ * Chemins pino dont la valeur est TOUJOURS remplacée (option `redact`) : en-têtes
+ * d'authentification, clés, jetons, mots de passe, environnements et URL de
+ * webhook, au niveau racine et à un niveau d'imbrication (`*.`) ou deux
+ * (`*.*.`). Le caviardage par chemin est l'exact complément du caviardage par
+ * motif des chaînes (`scrubForLog`) : le premier vise les CHAMPS dont le nom
+ * dit qu'ils portent un secret, le second le TEXTE qui en contient un.
+ */
+const SECRET_KEYS = [
+  'apiKey',
+  'api_key',
+  'token',
+  'accessToken',
+  'refreshToken',
+  'secret',
+  'clientSecret',
+  'password',
+  'passwd',
+  'authorization',
+  'cookie',
+  'env',
+  'webhookUrl',
+];
+export const LOG_REDACT_PATHS = Object.freeze([
+  ...SECRET_KEYS,
+  ...SECRET_KEYS.map((k) => `*.${k}`),
+  ...SECRET_KEYS.map((k) => `*.*.${k}`),
+  'headers["set-cookie"]',
+  '*.headers["set-cookie"]',
+  'req.headers.authorization',
+  'req.headers.cookie',
+  'res.headers["set-cookie"]',
+]);
+
+/** Profondeur et largeur maximales de la copie caviardée d'un objet de log. */
+const SCRUB_MAX_DEPTH = 4;
+const SCRUB_MAX_KEYS = 64;
+const SCRUB_MAX_ITEMS = 64;
+const SCRUB_MAX_STRING = 64 * 1024;
+
+/**
+ * Copie d'une valeur de log dont les chaînes sont caviardées par motif. Les
+ * objets de l'appelant ne sont JAMAIS modifiés (copie). Les `Error` passent
+ * telles quelles : le sérialiseur `err` (ci-dessous) s'en charge.
+ * @param {unknown} value @param {number} [depth] @returns {unknown}
+ */
+export function scrubForLog(value, depth = 0) {
+  if (typeof value === 'string') {
+    return value.length > SCRUB_MAX_STRING
+      ? `${redactSecrets(value.slice(0, SCRUB_MAX_STRING))}…[+${value.length - SCRUB_MAX_STRING}]`
+      : redactSecrets(value);
+  }
+  if (value === null || typeof value !== 'object' || value instanceof Error) return value;
+  if (depth >= SCRUB_MAX_DEPTH) return value;
+  if (Array.isArray(value))
+    return value.slice(0, SCRUB_MAX_ITEMS).map((v) => scrubForLog(v, depth + 1));
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .slice(0, SCRUB_MAX_KEYS)
+      .map(([k, v]) => [k, scrubForLog(v, depth + 1)]),
+  );
+}
+
+/** Caviarde récursivement les chaînes d'un objet d'erreur déjà sérialisé. */
+function scrubSerializedError(value, depth = 0) {
+  if (typeof value === 'string') return redactSecrets(value);
+  if (depth > 4 || value === null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map((v) => scrubSerializedError(v, depth + 1));
+  return Object.fromEntries(
+    Object.entries(value).map(([k, v]) => [k, scrubSerializedError(v, depth + 1)]),
+  );
+}
+
+/**
+ * Options pino de caviardage (`redact`, `serializers.err`, `hooks.logMethod`),
+ * séparées de la création du logger pour être testables avec un flux fictif.
+ * @param {typeof import('pino')} pino
+ */
+export function logRedactionOptions(pino) {
+  return {
+    redact: { paths: [...LOG_REDACT_PATHS], censor: REDACTED },
+    serializers: {
+      err: (/** @type {any} */ error) => scrubSerializedError(pino.stdSerializers.err(error)),
+    },
+    hooks: {
+      logMethod(/** @type {any[]} */ args, /** @type {Function} */ method) {
+        // (obj, msg, …interp) ou (msg, …interp) : l'objet et les chaînes passent
+        // par le caviardage de motifs, une copie jamais l'original.
+        return method.apply(
+          this,
+          args.map((a) => scrubForLog(a)),
+        );
+      },
+    },
+  };
+}
 
 /**
  * @typedef {{maxBytes: number, generations: number}} LogRotation
@@ -154,17 +254,20 @@ function create() {
       sync: true,
       destination: { write: writeToStderr },
     });
-    return pino({ level, base: undefined }, stream);
+    return pino({ level, base: undefined, ...logRedactionOptions(pino) }, stream);
   }
   if (!toFile) {
-    return pino({ level, base: undefined }, { write: writeToStderr });
+    return pino({ level, base: undefined, ...logRedactionOptions(pino) }, { write: writeToStderr });
   }
   // Fichier à rotation par taille (log-rotation.js), écrit de façon
   // synchrone comme le ferait pino.destination.
   const sink = fileSink(/** @type {{file: string}} */ (settings.destination).file);
   // `base: undefined` : pas de pid/hostname dans chaque ligne — le nom
   // d'hôte n'a rien à faire dans un log qu'on colle dans un ticket.
-  return pino({ level, base: undefined }, { write: (chunk) => sink.write(chunk) });
+  return pino(
+    { level, base: undefined, ...logRedactionOptions(pino) },
+    { write: (chunk) => sink.write(chunk) },
+  );
 }
 
 /** @type {(() => void) | null} */

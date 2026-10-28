@@ -1,4 +1,5 @@
 import { logger } from './logger.js';
+import { netFetch } from './net.ts';
 
 /**
  * Notifications sortantes — best-effort par contrat : un canal en panne ne
@@ -83,7 +84,9 @@ export async function notify(config, message) {
   const results = await Promise.all(
     targets.map(async ({ type, url }) => {
       try {
-        const res = await fetch(url, {
+        // Politique réseau (src/net.ts) : HTTPS, liste blanche, offline, proxy ; jamais de redirection.
+        const res = await netFetch(url, {
+          purpose: 'webhook',
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(PAYLOADS[type](message)),
@@ -92,7 +95,10 @@ export async function notify(config, message) {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return true;
       } catch (error) {
-        logger.warn({ err: error.message, type }, 'Notification webhook échouée');
+        logger.warn(
+          { err: error.message, type, ...(error.code ? { code: error.code } : {}) },
+          'Notification webhook échouée',
+        );
         return false;
       }
     }),

@@ -12,6 +12,12 @@
 //!   ligne de commande `pty-host --agent <agent>` que `ptyHostStatus`
 //!   reconnaît, `startedAt` postérieur à la création du process (PID
 //!   recyclé détecté par l'heure de création) ;
+//! - `host.output` : dernière sortie du pty (`{pid, lastOutputAt}`), écrit
+//!   ATOMIQUEMENT et au plus une fois par seconde tant que le programme écrit
+//!   (`OutputBeat`) ; lié au PID de l'hôte, retiré à sa sortie. Absent tant
+//!   que le programme n'a rien écrit : le lecteur (`src/pty-host-state.ts`)
+//!   traite l'absence, un PID différent ou un contenu invalide comme
+//!   « sortie inobservable » (fail closed) ;
 //! - `host.stop` : demande d'arrêt propre (protocole de
 //!   `src/stop-request.js`) — `{pid, requestedAt}` écrit par le demandeur,
 //!   accusé `ackAt` ajouté par l'hôte visé avant de s'arrêter, fichier
@@ -25,6 +31,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub const LOCK_FILE: &str = "host.lock";
 pub const PID_FILE: &str = "host.pid";
 pub const STOP_FILE: &str = "host.stop";
+pub const OUTPUT_FILE: &str = "host.output";
+
+/// Période minimale entre deux écritures de `host.output` : un flot de sortie
+/// ne réécrit pas le fichier à chaque bloc de 8 Kio, et une seconde est
+/// négligeable devant les seuils d'inactivité (minute au plus fin).
+pub const OUTPUT_BEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Horodatage ISO 8601 UTC à la milliseconde (`2026-10-24T13:37:05.123Z`),
 /// la forme de `new Date().toISOString()`.
@@ -80,6 +92,67 @@ pub fn pid_document(pid: u32, started_at: &str, program: &str, child_pid: u32) -
         ("protocol", Json::UInt(PROTOCOL_VERSION)),
         ("childPid", Json::UInt(u64::from(child_pid))),
     ])
+}
+
+/// Contenu de `host.output`.
+pub fn output_document(pid: u32, last_output_at: &str) -> Json {
+    Json::Obj(vec![
+        ("pid", Json::UInt(u64::from(pid))),
+        ("lastOutputAt", Json::Str(last_output_at.into())),
+    ])
+}
+
+/// Publication bornée de la dernière sortie du pty (`host.output`).
+///
+/// Écrite par le thread de lecture du pty : une écriture atomique de quelques
+/// dizaines d'octets, au plus une par `interval` (les tentatives ratées
+/// comptent aussi — un lecteur qui tient le fichier sous Windows fait échouer
+/// le renommage, l'écriture suivante réussira). Un échec n'arrête jamais
+/// l'hôte : le signal reste simplement périmé, et le lecteur le sait (il ne
+/// juge « actif » que ce qu'il voit, jamais « inactif » sur un fichier absent).
+#[derive(Debug)]
+pub struct OutputBeat {
+    path: PathBuf,
+    pid: u32,
+    interval: std::time::Duration,
+    last_attempt: Option<std::time::Instant>,
+    failure_reported: bool,
+}
+
+impl OutputBeat {
+    pub fn new(path: PathBuf, pid: u32, interval: std::time::Duration) -> Self {
+        Self {
+            path,
+            pid,
+            interval,
+            last_attempt: None,
+            failure_reported: false,
+        }
+    }
+
+    /// Note une sortie constatée à `at`. Rend l'erreur d'écriture la PREMIÈRE
+    /// fois seulement (journalisation sans inondation).
+    pub fn record(&mut self, now: std::time::Instant, at: SystemTime) -> Option<std::io::Error> {
+        if self
+            .last_attempt
+            .is_some_and(|last| now.saturating_duration_since(last) < self.interval)
+        {
+            return None;
+        }
+        self.last_attempt = Some(now);
+        let document = output_document(self.pid, &iso8601(at));
+        match write_atomic(&self.path, format!("{}\n", document.to_line()).as_bytes()) {
+            Ok(()) => {
+                self.failure_reported = false;
+                None
+            }
+            Err(error) if !self.failure_reported => {
+                self.failure_reported = true;
+                Some(error)
+            }
+            Err(_) => None,
+        }
+    }
 }
 
 /// PID inscrit dans un fichier JSON `{pid, …}`, s'il est lisible.
@@ -235,6 +308,7 @@ pub struct StatePaths {
     pub dir: PathBuf,
     pub pid: PathBuf,
     pub stop: PathBuf,
+    pub output: PathBuf,
 }
 
 impl StatePaths {
@@ -243,6 +317,7 @@ impl StatePaths {
             dir: dir.to_path_buf(),
             pid: dir.join(PID_FILE),
             stop: dir.join(STOP_FILE),
+            output: dir.join(OUTPUT_FILE),
         }
     }
 }
@@ -303,6 +378,71 @@ mod tests {
         remove_if_owned(&file, 7);
         assert!(!file.exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn battement_de_sortie_borne_et_lie_au_pid() {
+        let dir = std::env::temp_dir().join(format!("striart-native-beat-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let file = dir.join(OUTPUT_FILE);
+        let mut beat = OutputBeat::new(file.clone(), 77, Duration::from_secs(1));
+        let t0 = std::time::Instant::now();
+        assert!(
+            beat.record(t0, UNIX_EPOCH + Duration::from_millis(1_000))
+                .is_none()
+        );
+        let first =
+            json::parse(std::fs::read_to_string(&file).expect("read").trim()).expect("json");
+        assert_eq!(first.get("pid").and_then(Value::as_u64), Some(77));
+        assert_eq!(
+            first.get("lastOutputAt").and_then(Value::as_str),
+            Some("1970-01-01T00:00:01.000Z")
+        );
+        // Dans la période : rien n'est réécrit.
+        beat.record(
+            t0 + Duration::from_millis(500),
+            UNIX_EPOCH + Duration::from_millis(2_000),
+        );
+        let same = std::fs::read_to_string(&file).expect("read");
+        assert!(same.contains("00:00:01.000Z"), "{same}");
+        // Après la période : mis à jour.
+        beat.record(
+            t0 + Duration::from_millis(1_500),
+            UNIX_EPOCH + Duration::from_millis(3_000),
+        );
+        let later = std::fs::read_to_string(&file).expect("read");
+        assert!(later.contains("00:00:03.000Z"), "{later}");
+        // Aucun temporaire laissé.
+        assert!(
+            std::fs::read_dir(&dir)
+                .expect("dir")
+                .filter_map(Result::ok)
+                .all(|e| !e.file_name().to_string_lossy().ends_with(".tmp"))
+        );
+        // Retrait réservé au propriétaire (PID).
+        remove_if_owned(&file, 78);
+        assert!(file.exists());
+        remove_if_owned(&file, 77);
+        assert!(!file.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn battement_en_echec_ne_se_signale_qu_une_fois() {
+        let missing = std::env::temp_dir()
+            .join(format!(
+                "striart-native-beat-missing-{}",
+                std::process::id()
+            ))
+            .join("absent")
+            .join(OUTPUT_FILE);
+        let mut beat = OutputBeat::new(missing, 1, Duration::from_millis(0));
+        let t = std::time::Instant::now();
+        assert!(
+            beat.record(t, UNIX_EPOCH).is_some(),
+            "première erreur rendue"
+        );
+        assert!(beat.record(t, UNIX_EPOCH).is_none(), "puis silence");
     }
 
     #[test]

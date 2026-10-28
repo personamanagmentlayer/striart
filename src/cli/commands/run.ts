@@ -5,6 +5,7 @@ import type { AttendedSession } from '../../pty-host.ts';
 import type { AutonomousResult, RunResult, SessionResult } from '../../types.js';
 import type { CommandModule, CommandWarning, Ctx } from '../context.ts';
 import { autonomousOutcome, mainSessionOutcome } from '../exit.ts';
+import { localizeMergeResult } from '../localize.ts';
 import { renderMergeResult } from '../render/results.ts';
 import { renderStartedAgent, terminalWarnings } from './start.ts';
 
@@ -83,11 +84,19 @@ function assertCoherent(
  */
 export function integrationWarnings(
   m: Ctx['m'],
-  result: Pick<AutonomousResult, 'agent' | 'warnings'>,
+  result: Pick<AutonomousResult, 'agent' | 'warnings' | 'relaxedBlockers'>,
 ): CommandWarning[] {
   return (result.warnings ?? []).map((code) => ({
     code,
-    message: code === 'ALREADY_INTEGRATED' ? m.run.alreadyIntegratedWarning(result.agent) : code,
+    message:
+      code === 'ALREADY_INTEGRATED'
+        ? m.run.alreadyIntegratedWarning(result.agent)
+        : code === 'SERIALIZATION_RELAXED'
+          ? m.run.serializationRelaxedWarning(
+              result.agent,
+              (result.relaxedBlockers ?? []).map((b) => b.agent).join(', '),
+            )
+          : code,
   }));
 }
 
@@ -107,7 +116,7 @@ export const run: CommandModule<RunInput, RunData> = {
     const { m, out } = ctx;
 
     if (input.onMain) {
-      out.line('info', m.run.onMainIntro(input.profile));
+      out.notice('info', m.run.onMainIntro(input.profile));
       const session = await out.task(m.run.sessionRunning, () =>
         runMainSession({
           root,
@@ -126,7 +135,7 @@ export const run: CommandModule<RunInput, RunData> = {
     }
 
     if (input.autonomous) {
-      out.line('info', m.run.autonomousIntro(input.profile));
+      out.notice('info', m.run.autonomousIntro(input.profile));
       const result = await out.task(m.run.sessionRunning, () =>
         runAutonomousTask({
           root,
@@ -224,7 +233,7 @@ export const run: CommandModule<RunInput, RunData> = {
           );
         }
       }
-      if (r.merge) renderMergeResult(out, r.merge);
+      if (r.merge) renderMergeResult(out, localizeMergeResult(m, r.merge));
       // Raison localisée par code ; repli sur le texte du domaine (français).
       const reason = r.keptCode
         ? (m.run.kept(r.keptCode, r.keptDetail) ?? r.keptReason)
@@ -260,6 +269,18 @@ export const run: CommandModule<RunInput, RunData> = {
     out.detail(
       m.run.predicted(r.predictedFiles.map((f) => out.untrusted(f)).join(', ') || out.glyphs.empty),
     );
+    if (r.routing?.serialized) {
+      out.detail(
+        m.run.serialized(
+          out.untrusted(
+            [r.routing.serialized.kind, ...(r.routing.serialized.reasons ?? [])].join(', '),
+          ),
+        ),
+      );
+    }
+    if ((r.routing?.shared.length ?? 0) > 0) {
+      out.detail(m.run.sharedIgnored(r.routing!.shared.map((f) => out.untrusted(f)).join(', ')));
+    }
     for (const w of r.semanticWarnings ?? []) {
       const links = w.links
         .map((l) => m.run.importLink(out.untrusted(l.importedBy), out.untrusted(l.file)))

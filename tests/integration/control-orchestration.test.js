@@ -232,7 +232,8 @@ describe('Control Protocol — revues humaines, orchestration, tickets illisible
     it('le tableau de bord n’offre aucune action sur un clone en suppression', async () => {
       const page = await fetch(`${baseUrl(server)}/`, { headers: { Cookie: cookie } });
       const html = await page.text();
-      expect(html).toContain("a.status === 'REMOVING'");
+      // Le script servi est compacté : on cherche la garde, pas sa mise en forme.
+      expect(html).toMatch(/a\.status\s*===\s*['"]REMOVING['"]/);
     });
 
     it('le script de la page est syntaxiquement valide (revues, orchestration, tickets illisibles)', async () => {

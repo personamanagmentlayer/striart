@@ -81,7 +81,9 @@ export const queue: CommandModule<QueueInput, QueueData> = {
         {
           key: 'state',
           header: m.queue.colState,
-          value: (r) => r.status,
+          // Même vocabulaire que `status` et le cockpit : glyphe + mot + ton.
+          value: (r) =>
+            `${r.status === 'RUNNING' ? out.glyphs.active : r.ready ? out.glyphs.idle : out.glyphs.warn} ${r.status}`,
           style: (text, r) =>
             out.style(r.status === 'RUNNING' ? 'ok' : r.ready ? 'info' : 'warn', text),
           priority: 8,

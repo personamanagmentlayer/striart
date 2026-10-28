@@ -8,6 +8,7 @@
 import { Argument, Command, Help, InvalidArgumentError, Option } from 'commander';
 import type { Capabilities } from './caps.ts';
 import type { CommandModule } from './context.ts';
+import { asciiGlyphs } from './text.ts';
 import type { Messages } from './i18n/index.ts';
 import {
   agentNameParser,
@@ -90,6 +91,9 @@ export function buildProgram({
     .configureOutput({
       // Les erreurs d'usage sont rendues par main.ts (localisées, au bon format).
       outputError: () => {},
+      // Aide en ASCII quand les glyphes Unicode sont coupés (STRIART_ASCII, --plain, TERM=dumb).
+      writeOut: (text) => process.stdout.write(caps.unicode ? text : asciiGlyphs(text)),
+      writeErr: (text) => process.stderr.write(caps.unicode ? text : asciiGlyphs(text)),
       getOutHasColors: () => caps.colorStdout,
       getErrHasColors: () => caps.colorStderr,
       getOutHelpWidth: () => caps.columns ?? 80,
@@ -700,6 +704,25 @@ export function buildProgram({
                 lazy(() => import('./commands/prune.ts'), 'prune'),
                 {
                   days: o.days ?? null,
+                  dryRun: Boolean(o.dryRun),
+                },
+              ),
+            ),
+        );
+        return;
+      case 'gc':
+        define('gc', (cmd) =>
+          cmd
+            .argument('[agent]', c.gc.agent, agentName)
+            .option('--close', c.gc.close)
+            .option('--dry-run', c.gc.dryRun)
+            .action((agent: string | undefined, o) =>
+              dispatch(
+                'gc',
+                lazy(() => import('./commands/gc.ts'), 'gc'),
+                {
+                  agent: agent ?? null,
+                  close: Boolean(o.close),
                   dryRun: Boolean(o.dryRun),
                 },
               ),

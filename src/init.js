@@ -3,6 +3,7 @@ import path from 'node:path';
 import { loadConfig } from './config.js';
 import { findRepoRoot } from './clone.js';
 import { agentsDir, striartDir } from './paths.js';
+import { ensureStateProtection } from './state-protection.ts';
 
 const CONFIG_TEMPLATE = `export default {
   testCommand: 'npm test',      // Test Gate : 'yarn test', 'make test', 'pytest'...
@@ -14,8 +15,9 @@ const CONFIG_TEMPLATE = `export default {
   ollamaModel: 'llama3.1:8b',
   ollamaHost: 'http://localhost:11434',
   // Ou n'importe quel provider cloud / endpoint compatible OpenAI :
-  // llm: { provider: 'openai', model: 'gpt-4o-mini' },                                  // clé via OPENAI_API_KEY
-  // llm: { provider: 'anthropic', model: 'claude-haiku-4-5-20251001' },                 // clé via ANTHROPIC_API_KEY
+  // llm: { provider: 'openai', model: 'gpt-5.4-mini' },                                 // clé via OPENAI_API_KEY
+  // llm: { provider: 'anthropic', model: 'claude-haiku-5-5' },                          // clé via ANTHROPIC_API_KEY
+  // llm: { provider: 'openai', model: 'openai/gpt-oss-120b', baseUrl: 'https://api.groq.com/openai/v1', apiKeyEnv: 'GROQ_API_KEY' }, // Groq
   // llm: { provider: 'openai', model: 'llama-3.1-70b', baseUrl: 'http://localhost:1234/v1' }, // LM Studio, vLLM, ...
   // La clé API n'est JAMAIS écrite ici : seulement le nom de la variable d'env (apiKeyEnv).
 
@@ -29,9 +31,9 @@ const CONFIG_TEMPLATE = `export default {
 };
 `;
 
-async function writeIfAbsent(filePath, content) {
+async function writeIfAbsent(filePath, content, mode = 0o666) {
   try {
-    await writeFile(filePath, content, { flag: 'wx' });
+    await writeFile(filePath, content, { flag: 'wx', mode });
     return true;
   } catch (error) {
     if (error.code === 'EEXIST') return false;
@@ -72,14 +74,15 @@ export async function initStriart(cwd = process.cwd()) {
   const base = striartDir(root);
   const alreadyInitialized = Boolean(await stat(base).catch(() => null));
 
-  await mkdir(agentsDir(root), { recursive: true });
-  await mkdir(path.join(base, 'conflicts'), { recursive: true });
-  await mkdir(path.join(base, 'logs'), { recursive: true });
+  await mkdir(agentsDir(root), { recursive: true, mode: 0o700 });
+  await mkdir(path.join(base, 'conflicts'), { recursive: true, mode: 0o700 });
+  await mkdir(path.join(base, 'logs'), { recursive: true, mode: 0o700 });
 
   const created = [];
-  if (await writeIfAbsent(path.join(base, 'queue.json'), '[]\n')) created.push('queue.json');
-  if (await writeIfAbsent(path.join(base, 'locks.json'), '{}\n')) created.push('locks.json');
-  if (await writeIfAbsent(path.join(base, 'agents.json'), '{}\n')) created.push('agents.json');
+  if (await writeIfAbsent(path.join(base, 'queue.json'), '[]\n', 0o600)) created.push('queue.json');
+  if (await writeIfAbsent(path.join(base, 'locks.json'), '{}\n', 0o600)) created.push('locks.json');
+  if (await writeIfAbsent(path.join(base, 'agents.json'), '{}\n', 0o600))
+    created.push('agents.json');
   // .mjs : ESM explicite, fonctionne même si le repo cible est en CommonJS.
   // cosmiconfig accepte aussi striart.config.js / .striartrc.* si l'utilisateur préfère.
   const hasConfig = await loadConfig(root)
@@ -92,5 +95,9 @@ export async function initStriart(cwd = process.cwd()) {
 
   // Validation : une config invalide fait échouer init (CONFIG_INVALID).
   const config = await loadConfig(root);
+  // Données locales réservées à l'utilisateur : dossier créé en 0700 / ACL
+  // protégée ET migration de l'existant (idempotente). Échec = STATE_UNPROTECTED
+  // (fail closed) ; `privateStateDir: false` est le relâchement explicite.
+  await ensureStateProtection(root, config, { fresh: !alreadyInitialized });
   return { root, configPath: config.configPath ?? null, created, alreadyInitialized };
 }

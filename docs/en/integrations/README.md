@@ -166,18 +166,20 @@ Each editor page gives the exact location of this entry. Good to know:
 
 Publishing Striart in the **ACP registry** (the repository's
 `registry/acp/striart/` entry, `npx` distribution of the package) is prepared
-but not done: it is an act of the user, and the package is currently only
-published on the maintainer's private registry, not on public npm. Until then, declare the
-command by hand as above.
+but not done: it is an act of the user, and the package is currently published
+on no registry (install from the sources, see the README). Until then, declare
+the command by hand as above.
 
 ### What is coming
 
-Two native integrations remain in preparation, **with no announced date**:
+Two native integrations, on the Control Protocol (`striart api`):
 
-- a **VS Code extension**, also published on **Open VSX** (Cursor, Devin
-  Desktop, VSCodium…) — it will speak the Control Protocol (`striart api`) and
-  replace the manual `mcp.json` configuration;
-- a **JetBrains plugin**, on the same protocol.
+- a **VS Code extension** — **delivered in the repository**
+  (`extensions/vscode/`, version `0.1.0`) but **not published**: neither VS Code
+  Marketplace nor **Open VSX** (Cursor, Devin Desktop, VSCodium…), no announced
+  date; see [VS Code and Cursor](vscode-cursor.md#vs-code-extension);
+- a **JetBrains plugin**, on the same protocol — **not delivered**, no announced
+  date.
 
 Until then, the pages below describe the integration through MCP and ACP,
 which work with the current version.

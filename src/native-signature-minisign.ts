@@ -379,12 +379,27 @@ export function generateMinisignKeyPair({
   };
 }
 
+/**
+ * Horodatage de la signature : SOURCE_DATE_EPOCH (convention reproducible-builds,
+ * entier de secondes) s'il est défini, sinon l'heure courante. Fixé à la date du
+ * commit par la CI de release, il rend l'archive reproductible (Ed25519 est
+ * déterministe). Une valeur mal formée est refusée, jamais ignorée.
+ */
+export function signingTimestamp(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.SOURCE_DATE_EPOCH;
+  if (raw === undefined || raw === '') return Math.floor(Date.now() / 1000);
+  if (!/^\d{1,12}$/.test(raw)) {
+    throw new Error('SOURCE_DATE_EPOCH must be an integer number of seconds');
+  }
+  return Number(raw);
+}
+
 function signMinisign(
   data: Buffer,
   secret: SigningSecret,
   publicKeyText: string,
   fileName: string,
-  timestamp = Math.floor(Date.now() / 1000),
+  timestamp = signingTimestamp(),
 ) {
   const key = parseSecretKey(secret.key, secret.password);
   const expected = parsePublicKey(publicKeyText);

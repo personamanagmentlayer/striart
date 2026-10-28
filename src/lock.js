@@ -80,11 +80,12 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { readFileSync, rmSync } from 'node:fs';
-import { mkdir, open, readFile, readdir as fsReaddir, rm, utimes } from 'node:fs/promises';
+import { mkdir, open, readFile, readdir as fsReaddir, rm, stat, utimes } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { simpleGit } from 'simple-git';
 import { striartDir } from './paths.js';
+import { ensureStateProtection } from './state-protection.ts';
 import { StriartError } from './errors.js';
 import { logger } from './logger.js';
 import { readMainSession, startMainSession } from './main-session.js';
@@ -794,7 +795,7 @@ function lockTimeoutError(file, current, waitingAhead, verdict = {}) {
  * Tour de ce contexte dans la file FIFO en mémoire du repo `key`.
  * @returns {Promise<() => void>} libération (passe la main au suivant)
  */
-function takeLocalTurn(key, label, deadline, file, signal = null) {
+function takeLocalTurn(key, label, deadline, file, signal = null, contention = null) {
   let queue = localQueues.get(key);
   if (!queue) {
     queue = { busy: null, waiters: [] };
@@ -815,6 +816,13 @@ function takeLocalTurn(key, label, deadline, file, signal = null) {
   if (!q.busy) {
     q.busy = { label, since: Date.now() };
     return Promise.resolve(release);
+  }
+  if (contention) {
+    // Mesure seule (lock:contention) : qui occupe le tour, depuis quand, combien devant nous.
+    contention.contended = true;
+    contention.holderLabel = q.busy.label;
+    contention.holderSince = q.busy.since;
+    contention.queued = Math.max(contention.queued, q.waiters.length + 1);
   }
   return new Promise((resolve, reject) => {
     const onAbort = () => {
@@ -922,7 +930,7 @@ async function tryCreateLock(file, label) {
  * @returns {Promise<{file: string, handle: import('node:fs/promises').FileHandle, token: string, record: Record<string, unknown>} | null>}
  *   null si `.striart/` n'existe pas.
  */
-async function acquire(root, label, deadline, signal = null) {
+async function acquire(root, label, deadline, signal = null, contention = null) {
   const file = lockPath(root);
   if (signal?.aborted) throw lockWaitCancelledError(label, file);
   // Chemin rapide : personne en file → tentative directe, sans ticket.
@@ -935,6 +943,8 @@ async function acquire(root, label, deadline, signal = null) {
   }
   let ticket = await takeTicket(root, label);
   if (ticket === null) return null;
+  // Chemin lent : un verrou ou une file existait à notre arrivée (mesure seule, lock:contention).
+  if (contention) contention.contended = true;
   const observation = createStaleObservation();
   /** @type {Promise<number | null> | null} */
   let policy = null;
@@ -966,6 +976,10 @@ async function acquire(root, label, deadline, signal = null) {
       }
       const { ahead, waitingAhead } = await liveTicketsAhead(root, ticket);
       if (ticket.lost) continue; // réinscription en tête de boucle
+      if (contention) {
+        contention.queued = Math.max(contention.queued, waitingAhead + 1);
+        if (ahead[0]?.label) contention.holderLabel = ahead[0].label;
+      }
       /** @type {LockFileRead | null} */
       let current = null;
       /** @type {{reason?: string, heartbeatAgeMs?: number | null, cause?: string | null}} */
@@ -975,6 +989,11 @@ async function acquire(root, label, deadline, signal = null) {
         if (lock !== 'EXISTS') return lock;
         current = await readLockFile(file);
         if (current === null) continue; // libéré entre-temps : on retente aussitôt
+        if (contention && current.state === 'ok') {
+          contention.holderLabel = current.info.label ?? contention.holderLabel;
+          const since = Date.parse(current.info.startedAt ?? '');
+          if (Number.isFinite(since)) contention.holderSince = since;
+        }
         const mtime = await mtimeMs(file);
         const judged = await judgeLock(current, mtime, observation, { frozenBreakAfterMs });
         verdict = judged;
@@ -1413,6 +1432,58 @@ async function recoverOrphanMerge(root) {
   }
 }
 
+async function stateDirExists(root) {
+  try {
+    return (await stat(striartDir(root))).isDirectory();
+  } catch (error) {
+    if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return false;
+    throw error;
+  }
+}
+
+/**
+ * Ce qu'un appelant a constaté en attendant le verrou (lock:contention).
+ * @typedef {{contended: boolean, holderLabel: string | null, holderSince: number | null, queued: number}} Contention
+ */
+
+/** Verbe seul d'une étiquette (`merge:agent-x` → `merge`) : jamais un identifiant, qui peut dériver d'un prompt. */
+function operationVerb(label) {
+  const verb = String(label ?? '').split(':')[0];
+  return /^[a-z][a-z0-9-]{0,31}$/.test(verb) ? verb : 'unknown';
+}
+
+/**
+ * Publie `lock:contention` sur le bus (events.js) quand l'acquisition n'a pas été immédiate.
+ * Mesure pure, hors chemin de décision : chargement paresseux (la complétion shell et les
+ * commandes sans contention ne paient pas le bus), émission différée, aucune erreur propagée.
+ * @param {string} label @param {number} waitedMs @param {Contention} contention
+ */
+function reportContention(label, waitedMs, contention) {
+  if (!contention.contended) return;
+  const holderLabel = contention.holderLabel;
+  const holderAgeMs =
+    contention.holderSince === null ? null : Math.max(0, Date.now() - contention.holderSince);
+  setImmediate(() => {
+    import('./events.js')
+      .then(({ emitLockContention }) =>
+        emitLockContention({
+          type: 'lock:contention',
+          operation: operationVerb(label),
+          waitedMs: Math.round(waitedMs * 100) / 100,
+          holder:
+            holderLabel === null && holderAgeMs === null
+              ? null
+              : {
+                  operation: holderLabel === null ? null : operationVerb(holderLabel),
+                  ageMs: holderAgeMs,
+                },
+          queued: Math.max(1, contention.queued),
+        }),
+      )
+      .catch((error) => logger.debug({ err: error?.message }, 'lock:contention non publié'));
+  });
+}
+
 /** Clé d'un repo dans les structures en mémoire : sa racine résolue. */
 function lockKey(root) {
   return path.resolve(root);
@@ -1458,11 +1529,28 @@ export async function withMainLock(
   if (store?.get(key)?.held) return fn();
 
   if (signal?.aborted) throw lockWaitCancelledError(label, lockPath(root));
+  // Données locales réservées à l'utilisateur, AVANT le verrou : l'appel peut
+  // coûter 1 à 3 s sous Windows (icacls) et n'a rien à faire sous un verrou
+  // dont la durée gèle l'orchestrateur. Mémoïsé par racine et par process
+  // (ensureStateProtection) ; échec = STATE_UNPROTECTED (fail closed), ou
+  // relâchement explicite `privateStateDir: false` (journalisé, doctor).
+  // Sans `.striart/` : rien à protéger (l'opération lèvera NOT_INITIALIZED) —
+  // la protection ne crée jamais le dossier d'un dépôt non initialisé.
+  if (await stateDirExists(root)) await ensureStateProtection(root);
   const deadline = Date.now() + timeoutMs;
-  const releaseTurn = await takeLocalTurn(key, label, deadline, lockPath(root), signal);
+  const arrivedAt = performance.now();
+  /** @type {Contention} */
+  const contention = {
+    contended: false,
+    holderLabel: null,
+    holderSince: null,
+    queued: 0,
+  };
+  const releaseTurn = await takeLocalTurn(key, label, deadline, lockPath(root), signal, contention);
   try {
-    const lock = await acquire(root, label, deadline, signal);
+    const lock = await acquire(root, label, deadline, signal, contention);
     // Acquis : à partir d'ici, le signal n'interrompt JAMAIS la section critique.
+    if (lock !== null) reportContention(label, performance.now() - arrivedAt, contention);
     if (lock === null) return await fn(); // pas de .striart/ : l'opération lèvera NOT_INITIALIZED
 
     /** @type {Holding} */

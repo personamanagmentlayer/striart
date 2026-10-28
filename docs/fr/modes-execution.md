@@ -63,7 +63,10 @@ Champs par profil (voir la [référence de configuration](configuration.md)) :
 `command` + `args` (avec `{{prompt}}` substitué **comme élément d'argv,
 jamais via un shell** — le prompt est de la donnée, l'interpréter serait une
 injection de commande), `env` (variables propres au profil, fusionnées
-par-dessus l'environnement — cloisonner une clé par outil), `timeout`
+par-dessus l'environnement — cloisonner une clé par outil ; la session reçoit aussi
+l'environnement réseau de Striart : `network.caFile` y devient `NODE_EXTRA_CA_CERTS`
+si le shell n'en a pas posé un autre, et `STRIART_PROXY_AUTH` n'est jamais
+transmise — voir [Réseau d'entreprise](configuration.md#réseau-dentreprise-network)), `timeout`
 (précédence : `--timeout` > `profile.timeout` > `autonomousTimeoutMs`),
 `acp` (voir ci-dessous), et — pour les presets — `writeMode`, `commitPolicy`,
 `structuredOutput` (la sortie JSON de l'outil est transcrite lisiblement dans
@@ -325,6 +328,14 @@ le temps qu'elle vit, qui rend l'état vérifiable plutôt que supposé :
 Un PID resté au registre après un crash est neutralisé par le contrôle de
 vitalité : rien ne reste gelé. Même garde au niveau du dépôt principal
 lui-même (`striart run --on-main`, `striart lock --start`).
+
+**Une seule exception, et pour la session seulement** : le
+[GC d'inactivité](commandes.md#striart-gc-agent---close---dry-run) peut fermer
+proprement la session d'un agent **oublié** (aucun signal d'activité depuis des
+dizaines de minutes), après avertissement et délai de grâce, et seulement si
+l'utilisateur l'a autorisé pour ce dépôt (`idle.closeRoots`, config utilisateur).
+Il ne supprime ni le clone, ni son travail non commité, et ne retire rien du
+registre.
 
 ## Ce qu'il faut assumer
 

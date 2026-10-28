@@ -153,3 +153,47 @@ describe('notify — table notifiers', () => {
     expect(sent).toBe(false);
   });
 });
+
+describe('notify — couche réseau (src/net.ts)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('webhook : redirect "error" imposé (une redirection ne détourne pas le message)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
+    await notify({ webhookUrl: 'https://hooks.slack.com/services/xxx' }, 'm');
+    expect(fetch.mock.calls[0][1].redirect).toBe('error');
+  });
+
+  it('mode offline (STRIART_OFFLINE) : aucun webhook ne part, ni exception', async () => {
+    vi.stubEnv('STRIART_OFFLINE', '1');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
+    expect(await notify({ webhookUrl: 'https://hooks.slack.com/services/xxx' }, 'm')).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('liste blanche d’hôtes (STRIART_ALLOWED_HOSTS) : seul le canal autorisé reçoit', async () => {
+    vi.stubEnv('STRIART_ALLOWED_HOSTS', 'hooks.slack.com');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
+    const sent = await notify(
+      {
+        notifiers: [
+          { type: 'slack', url: 'https://hooks.slack.com/services/xxx' },
+          { type: 'generic', url: 'https://exfil.example/hook' },
+        ],
+      },
+      'm',
+    );
+    expect(sent).toBe(true);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.mock.calls[0][0]).toBe('https://hooks.slack.com/services/xxx');
+  });
+
+  it('webhook en clair vers un hôte distant : refusé (HTTPS exigé hors boucle locale)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
+    expect(
+      await notify({ notifiers: [{ type: 'generic', url: 'http://n8n.corp.example/h' }] }, 'm'),
+    ).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});

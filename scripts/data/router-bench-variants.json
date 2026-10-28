@@ -1,0 +1,654 @@
+{
+  "_doc": "Ablations du banc du Router : chaque entrée est un patch de tokens.router appliqué au préréglage 'legacy' (comportement d'avant le lot). Ablations livrées ; les options mesurées sans gain (multi-tirages, ajout direct des candidats lexicaux, carte complète, exemples few-shot) ont été retirées du code.",
+  "legacy-shared": {
+    "sharedFiles": {
+      "mode": "exclude"
+    }
+  },
+  "legacy-tests": {
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "expansion": {
+      "tests": true
+    }
+  },
+  "legacy-importers": {
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "expansion": {
+      "imports": "importers"
+    }
+  },
+  "legacy-importees": {
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "expansion": {
+      "imports": "importees"
+    }
+  },
+  "legacy-siblings": {
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "expansion": {
+      "siblings": true,
+      "contracts": true
+    }
+  },
+  "legacy-cochange": {
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "expansion": {
+      "coChange": true
+    }
+  },
+  "legacy-tests-cochange": {
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "expansion": {
+      "tests": true,
+      "coChange": true
+    }
+  },
+  "v3": {
+    "prompt": "v3"
+  },
+  "v3-shared": {
+    "prompt": "v3",
+    "sharedFiles": {
+      "mode": "exclude"
+    }
+  },
+  "v3-cand": {
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "retrieval": {
+      "enabled": true
+    },
+    "map": {
+      "mode": "candidates"
+    },
+    "prompt": "v3"
+  },
+  "cand-c0.3": {
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "retrieval": {
+      "enabled": true
+    },
+    "map": {
+      "mode": "candidates"
+    },
+    "prompt": "v3",
+    "minFileConfidence": 0.3
+  },
+  "cand-c0.4": {
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "retrieval": {
+      "enabled": true
+    },
+    "map": {
+      "mode": "candidates"
+    },
+    "prompt": "v3",
+    "minFileConfidence": 0.4
+  },
+  "cand-c0.5": {
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "retrieval": {
+      "enabled": true
+    },
+    "map": {
+      "mode": "candidates"
+    },
+    "prompt": "v3",
+    "minFileConfidence": 0.5
+  },
+  "cand-c0.6": {
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "retrieval": {
+      "enabled": true
+    },
+    "map": {
+      "mode": "candidates"
+    },
+    "prompt": "v3",
+    "minFileConfidence": 0.6
+  },
+  "cand-c0.7": {
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "retrieval": {
+      "enabled": true
+    },
+    "map": {
+      "mode": "candidates"
+    },
+    "prompt": "v3",
+    "minFileConfidence": 0.7
+  },
+  "cand-c0.8": {
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "retrieval": {
+      "enabled": true
+    },
+    "map": {
+      "mode": "candidates"
+    },
+    "prompt": "v3",
+    "minFileConfidence": 0.8
+  },
+  "cand-tests": {
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "retrieval": {
+      "enabled": true
+    },
+    "map": {
+      "mode": "candidates"
+    },
+    "prompt": "v3",
+    "expansion": {
+      "tests": true
+    }
+  },
+  "cand-co": {
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "retrieval": {
+      "enabled": true
+    },
+    "map": {
+      "mode": "candidates"
+    },
+    "prompt": "v3",
+    "expansion": {
+      "coChange": true
+    }
+  },
+  "cand-tests-co": {
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "retrieval": {
+      "enabled": true
+    },
+    "map": {
+      "mode": "candidates"
+    },
+    "prompt": "v3",
+    "expansion": {
+      "tests": true,
+      "coChange": true
+    }
+  },
+  "cand-importers": {
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "retrieval": {
+      "enabled": true
+    },
+    "map": {
+      "mode": "candidates"
+    },
+    "prompt": "v3",
+    "expansion": {
+      "imports": "importers"
+    }
+  },
+  "cand-vague-scope": {
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "retrieval": {
+      "enabled": true
+    },
+    "map": {
+      "mode": "candidates"
+    },
+    "prompt": "v3",
+    "vague": {
+      "enabled": true,
+      "minConfidence": 0,
+      "verbs": false
+    }
+  },
+  "cand-vague-verbs": {
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "retrieval": {
+      "enabled": true
+    },
+    "map": {
+      "mode": "candidates"
+    },
+    "prompt": "v3",
+    "vague": {
+      "enabled": true,
+      "minConfidence": 0,
+      "verbs": true
+    }
+  },
+  "cand-vague-many": {
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "retrieval": {
+      "enabled": true
+    },
+    "map": {
+      "mode": "candidates"
+    },
+    "prompt": "v3",
+    "vague": {
+      "enabled": true,
+      "minConfidence": 0,
+      "maxFiles": 10
+    }
+  },
+  "bal-c0.4-cap4": {
+    "prompt": "v3",
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "retrieval": {
+      "enabled": true
+    },
+    "map": {
+      "mode": "candidates"
+    },
+    "expansion": {
+      "tests": true,
+      "coChange": true
+    },
+    "vague": {
+      "enabled": true,
+      "minConfidence": 0.3
+    },
+    "minFileConfidence": 0.4,
+    "maxFiles": 4
+  },
+  "bal-c0.4-cap6": {
+    "prompt": "v3",
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "retrieval": {
+      "enabled": true
+    },
+    "map": {
+      "mode": "candidates"
+    },
+    "expansion": {
+      "tests": true,
+      "coChange": true
+    },
+    "vague": {
+      "enabled": true,
+      "minConfidence": 0.3
+    },
+    "minFileConfidence": 0.4,
+    "maxFiles": 6
+  },
+  "bal-c0.4-cap8": {
+    "prompt": "v3",
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "retrieval": {
+      "enabled": true
+    },
+    "map": {
+      "mode": "candidates"
+    },
+    "expansion": {
+      "tests": true,
+      "coChange": true
+    },
+    "vague": {
+      "enabled": true,
+      "minConfidence": 0.3
+    },
+    "minFileConfidence": 0.4,
+    "maxFiles": 8
+  },
+  "bal-c0.5-cap4": {
+    "prompt": "v3",
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "retrieval": {
+      "enabled": true
+    },
+    "map": {
+      "mode": "candidates"
+    },
+    "expansion": {
+      "tests": true,
+      "coChange": true
+    },
+    "vague": {
+      "enabled": true,
+      "minConfidence": 0.3
+    },
+    "minFileConfidence": 0.5,
+    "maxFiles": 4
+  },
+  "bal-c0.5-cap6": {
+    "prompt": "v3",
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "retrieval": {
+      "enabled": true
+    },
+    "map": {
+      "mode": "candidates"
+    },
+    "expansion": {
+      "tests": true,
+      "coChange": true
+    },
+    "vague": {
+      "enabled": true,
+      "minConfidence": 0.3
+    },
+    "minFileConfidence": 0.5,
+    "maxFiles": 6
+  },
+  "bal-c0.5-cap8": {
+    "prompt": "v3",
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "retrieval": {
+      "enabled": true
+    },
+    "map": {
+      "mode": "candidates"
+    },
+    "expansion": {
+      "tests": true,
+      "coChange": true
+    },
+    "vague": {
+      "enabled": true,
+      "minConfidence": 0.3
+    },
+    "minFileConfidence": 0.5,
+    "maxFiles": 8
+  },
+  "bal-c0.5-add2": {
+    "prompt": "v3",
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "retrieval": {
+      "enabled": true
+    },
+    "map": {
+      "mode": "candidates"
+    },
+    "vague": {
+      "enabled": true,
+      "minConfidence": 0.3
+    },
+    "maxFiles": 6,
+    "minFileConfidence": 0.5,
+    "expansion": {
+      "tests": true,
+      "coChange": true,
+      "maxAdded": 2
+    }
+  },
+  "bal-c0.5-add4": {
+    "prompt": "v3",
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "retrieval": {
+      "enabled": true
+    },
+    "map": {
+      "mode": "candidates"
+    },
+    "vague": {
+      "enabled": true,
+      "minConfidence": 0.3
+    },
+    "maxFiles": 6,
+    "minFileConfidence": 0.5,
+    "expansion": {
+      "tests": true,
+      "coChange": true,
+      "maxAdded": 4
+    }
+  },
+  "bal-c0.5-add6": {
+    "prompt": "v3",
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "retrieval": {
+      "enabled": true
+    },
+    "map": {
+      "mode": "candidates"
+    },
+    "vague": {
+      "enabled": true,
+      "minConfidence": 0.3
+    },
+    "maxFiles": 6,
+    "minFileConfidence": 0.5,
+    "expansion": {
+      "tests": true,
+      "coChange": true,
+      "maxAdded": 6
+    }
+  },
+  "bal-c0.6-add2": {
+    "prompt": "v3",
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "retrieval": {
+      "enabled": true
+    },
+    "map": {
+      "mode": "candidates"
+    },
+    "vague": {
+      "enabled": true,
+      "minConfidence": 0.3
+    },
+    "maxFiles": 6,
+    "minFileConfidence": 0.6,
+    "expansion": {
+      "tests": true,
+      "coChange": true,
+      "maxAdded": 2
+    }
+  },
+  "bal-c0.6-add4": {
+    "prompt": "v3",
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "retrieval": {
+      "enabled": true
+    },
+    "map": {
+      "mode": "candidates"
+    },
+    "vague": {
+      "enabled": true,
+      "minConfidence": 0.3
+    },
+    "maxFiles": 6,
+    "minFileConfidence": 0.6,
+    "expansion": {
+      "tests": true,
+      "coChange": true,
+      "maxAdded": 4
+    }
+  },
+  "bal-c0.6-add6": {
+    "prompt": "v3",
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "retrieval": {
+      "enabled": true
+    },
+    "map": {
+      "mode": "candidates"
+    },
+    "vague": {
+      "enabled": true,
+      "minConfidence": 0.3
+    },
+    "maxFiles": 6,
+    "minFileConfidence": 0.6,
+    "expansion": {
+      "tests": true,
+      "coChange": true,
+      "maxAdded": 6
+    }
+  },
+  "c05-t": {
+    "prompt": "v3",
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "retrieval": {
+      "enabled": true
+    },
+    "map": {
+      "mode": "candidates"
+    },
+    "minFileConfidence": 0.5,
+    "maxFiles": 6,
+    "expansion": {
+      "tests": true
+    }
+  },
+  "c05-co": {
+    "prompt": "v3",
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "retrieval": {
+      "enabled": true
+    },
+    "map": {
+      "mode": "candidates"
+    },
+    "minFileConfidence": 0.5,
+    "maxFiles": 6,
+    "expansion": {
+      "coChange": true
+    }
+  },
+  "c05-vague": {
+    "prompt": "v3",
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "retrieval": {
+      "enabled": true
+    },
+    "map": {
+      "mode": "candidates"
+    },
+    "minFileConfidence": 0.5,
+    "maxFiles": 6,
+    "vague": {
+      "enabled": true,
+      "minConfidence": 0.3
+    }
+  },
+  "c05-t-vague": {
+    "prompt": "v3",
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "retrieval": {
+      "enabled": true
+    },
+    "map": {
+      "mode": "candidates"
+    },
+    "minFileConfidence": 0.5,
+    "maxFiles": 6,
+    "expansion": {
+      "tests": true
+    },
+    "vague": {
+      "enabled": true,
+      "minConfidence": 0.3
+    }
+  },
+  "c05-none": {
+    "prompt": "v3",
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "retrieval": {
+      "enabled": true
+    },
+    "map": {
+      "mode": "candidates"
+    },
+    "minFileConfidence": 0.5,
+    "maxFiles": 6
+  },
+  "c04-none": {
+    "prompt": "v3",
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "retrieval": {
+      "enabled": true
+    },
+    "map": {
+      "mode": "candidates"
+    },
+    "minFileConfidence": 0.4,
+    "maxFiles": 6
+  },
+  "c06-none": {
+    "prompt": "v3",
+    "sharedFiles": {
+      "mode": "exclude"
+    },
+    "retrieval": {
+      "enabled": true
+    },
+    "map": {
+      "mode": "candidates"
+    },
+    "minFileConfidence": 0.6,
+    "maxFiles": 6
+  }
+}

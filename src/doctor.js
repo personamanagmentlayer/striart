@@ -24,7 +24,8 @@ import path from 'node:path';
 import { simpleGit } from 'simple-git';
 import { loadConfig, listUnknownConfigKeys } from './config.js';
 import { resolveLlmConfig } from './llm.js';
-import { pingOllama } from './ollama.js';
+import { probeOllama } from './ollama.js';
+import { inspectNetwork, readCaFile } from './net.ts';
 import { dirStats, formatBytes, listAgents, scanHistoricalSecrets, striartDir } from './clone.js';
 import { listConflictTickets } from './conflicts.js';
 import { readState } from './state.js';
@@ -45,7 +46,19 @@ import { llmResilienceRelaxations } from './llm-resilience.ts';
 import { instructionsFootprint } from './tokens/footprint.ts';
 import { usageSummary } from './tokens/report.ts';
 import { collectRelaxations } from './doctor-relaxations.ts';
+import { idleRelaxations, resolveIdleSettings } from './idle/settings.ts';
+import { closeAuthorization } from './idle/authorize.ts';
 import { readUserConfig } from './user-config.ts';
+import { checkGateEnv, checkStateDirPrivacy } from './hardening-checks.ts';
+import {
+  GIT_STATUS_WARN_MS,
+  STATE_LOCK_ALERT_MS,
+  STATE_LOCK_BUDGET_MS,
+  boundedDirSize,
+  latencyLevel,
+  measureGitStatus,
+  measureStateLockLatency,
+} from './doctor-perf.ts';
 
 /** Version minimale pour sparse-checkout --no-cone (nettoyage des secrets). */
 const GIT_RECOMMENDED = [2, 35];
@@ -72,6 +85,7 @@ const LABELS = {
   config: 'Configuration',
   branch: 'Branche cible',
   llm: 'LLM (Router/Merger)',
+  network: 'Réseau',
   secrets: 'Secrets historiques',
   lock: 'Verrou principal',
   'state-lock': "Verrou d'état",
@@ -84,7 +98,12 @@ const LABELS = {
   profiles: "Profils d'agents",
   tokens: 'Tokens et coûts',
   orchestration: 'Orchestration',
+  idle: "GC d'inactivité",
   dashboard: 'Dashboard (hôtes)',
+  'state-privacy': 'Données locales (.striart/)',
+  'gate-env': 'Environnement du Test Gate',
+  delivery: 'Livraison',
+  performance: 'Performance',
   relaxations: 'Protections relâchées',
 };
 
@@ -231,6 +250,171 @@ async function addStateLockCheck(add, root) {
     return;
   }
   add('state-lock', 'ok', 'stateLock.held', params, `écriture en cours (PID ${status.pid})`);
+}
+
+/**
+ * Couche réseau d'entreprise (src/net.ts), lue depuis l'environnement du shell et
+ * la config UTILISATEUR — jamais depuis le dépôt. Une config utilisateur illisible
+ * n'est jamais rendue « réseau sain » : les appels distants sont refusés (fail closed).
+ * @param {(id: keyof typeof LABELS, level: DoctorLevel, key: string, params: Record<string, unknown>, detail: string, hint?: string|null) => unknown} add
+ */
+async function addNetworkCheck(add) {
+  // `ALL_PROXY` n'est pas lue (src/net.ts : HTTP_PROXY, HTTPS_PROXY, NO_PROXY seulement) : la
+  // laisser passer en silence ferait croire à un proxy actif. Jamais de valeur affichée (identifiants).
+  if ((process.env.ALL_PROXY ?? '').trim() !== '' || (process.env.all_proxy ?? '').trim() !== '') {
+    add(
+      'network',
+      'warn',
+      'network.allProxyIgnored',
+      {},
+      "ALL_PROXY n'est pas supporté : la variable est ignorée (Striart ne lit que HTTPS_PROXY, HTTP_PROXY et NO_PROXY), les connexions ne passeront PAS par ce proxy",
+      'définis HTTPS_PROXY / HTTP_PROXY (ou network.proxy dans la config utilisateur) ; les proxys SOCKS ne sont pas supportés',
+    );
+  }
+  let user;
+  try {
+    user = (await readUserConfig()).network;
+  } catch (error) {
+    add(
+      'network',
+      'warn',
+      'network.userConfigUnreadable',
+      { code: error.code ?? 'USER_CONFIG_INVALID' },
+      `config utilisateur illisible (${error.code ?? 'erreur'}) : politique réseau non évaluable, les appels sortants non locaux sont refusés`,
+      error.hint ?? 'corrige la config utilisateur',
+    );
+    return;
+  }
+  let report;
+  try {
+    report = inspectNetwork(user);
+  } catch (error) {
+    add(
+      'network',
+      'fail',
+      'network.envInvalid',
+      { message: error.message },
+      error.message,
+      error.hint ?? null,
+    );
+    return;
+  }
+  const { policy, proxy } = report;
+
+  if (policy.offline || policy.allowLists.length > 0) {
+    const parts = [
+      policy.offline ? 'hors ligne (aucun appel non local : NET_OFFLINE)' : null,
+      policy.allowLists.length > 0
+        ? `hôtes autorisés : ${policy.allowLists.map((l) => l.join(', ')).join(' ∩ ')}`
+        : null,
+    ].filter(Boolean);
+    add(
+      'network',
+      'ok',
+      'network.policy',
+      { offline: policy.offline, allowedHosts: policy.allowLists },
+      parts.join(' ; '),
+    );
+  }
+
+  if (!proxy.configured) {
+    add('network', 'ok', 'network.direct', {}, 'aucun proxy configuré : connexions directes');
+  } else {
+    const shown = [policy.proxy.display.https, policy.proxy.display.http]
+      .filter((v, i, all) => v && all.indexOf(v) === i)
+      .join(', ');
+    const params = {
+      source: policy.proxy.source,
+      proxy: shown,
+      noProxy: policy.proxy.noProxy,
+      mechanism: proxy.mechanism,
+      problem: proxy.problem,
+    };
+    if (proxy.active) {
+      const how =
+        proxy.mechanism === 'runtime'
+          ? 'appliqué à l’exécution'
+          : 'NODE_USE_ENV_PROXY au démarrage';
+      const bypass = policy.proxy.noProxy ? ` ; hors proxy : ${policy.proxy.noProxy}` : '';
+      add(
+        'network',
+        'ok',
+        'network.proxyActive',
+        params,
+        `proxy actif (${policy.proxy.source}, ${how}) : ${shown}${bypass}`,
+      );
+    } else {
+      add(
+        'network',
+        'warn',
+        'network.proxyInactive',
+        params,
+        `proxy configuré (${shown}) mais INACTIF sur Node ${report.nodeVersion} (${proxy.problem}) : les appels distants sont refusés (NET_PROXY_UNSUPPORTED)`,
+        proxy.problem === 'SCHEME'
+          ? 'utilise une URL de proxy http:// ou https://'
+          : 'démarre striart avec NODE_USE_ENV_PROXY=1 (Node >= 22.21 / 24.5) ou passe à Node >= 24.14 / 25.4',
+      );
+    }
+  }
+
+  const tlsParts = [];
+  /** @type {DoctorLevel} */
+  let tlsLevel = 'ok';
+  let tlsHint = null;
+  if (policy.tlsMinVersion) tlsParts.push(`version minimale ${policy.tlsMinVersion}`);
+  if (policy.caFile) {
+    try {
+      const certs = await readCaFile(policy.caFile);
+      tlsParts.push(
+        `CA d'entreprise network.caFile ${policy.caFile} (${certs.length} certificat(s))`,
+      );
+    } catch (error) {
+      tlsLevel = 'warn';
+      tlsParts.push(
+        `network.caFile ${policy.caFile} inutilisable (${error.details?.reason ?? error.message})`,
+      );
+      tlsHint = error.hint ?? null;
+    }
+  }
+  if (report.extraCaCerts) tlsParts.push(`NODE_EXTRA_CA_CERTS ${report.extraCaCerts}`);
+  if (report.systemCa) tlsParts.push('CA du système (--use-system-ca)');
+  if (tlsParts.length > 0) {
+    add(
+      'network',
+      tlsLevel,
+      'network.tls',
+      {
+        tlsMinVersion: policy.tlsMinVersion,
+        caFile: policy.caFile,
+        extraCaCerts: report.extraCaCerts,
+        systemCa: report.systemCa,
+      },
+      tlsParts.join(' ; '),
+      tlsHint,
+    );
+  }
+
+  const insecure = [
+    policy.allowInsecureHosts.length > 0
+      ? `HTTP en clair autorisé vers : ${policy.allowInsecureHosts.join(', ')} (network.allowInsecureHosts)`
+      : null,
+    policy.tlsVerificationDisabled
+      ? 'vérification TLS coupée (NODE_TLS_REJECT_UNAUTHORIZED=0) : les appels distants sont refusés'
+      : null,
+  ].filter(Boolean);
+  if (insecure.length > 0) {
+    add(
+      'network',
+      'warn',
+      'network.insecure',
+      {
+        allowInsecureHosts: policy.allowInsecureHosts,
+        tlsVerificationDisabled: policy.tlsVerificationDisabled,
+      },
+      `protection RELÂCHÉE : ${insecure.join(' ; ')}`,
+      'retire network.allowInsecureHosts / NODE_TLS_REJECT_UNAUTHORIZED si ce n’est pas voulu',
+    );
+  }
 }
 
 /** Verrou d'état tenu plus longtemps que ça : détenteur bloqué (contrat : quelques ms). */
@@ -380,12 +564,204 @@ async function addPtyCheck(add, root, config) {
   add('pty', 'ok', 'pty.ok', params, facts);
 }
 
+/** Un verrou tenu plus longtemps que ça est signalé (Test Gate ou LLM long, ou détenteur figé). */
+const LOCK_AGE_WARN_MS = 5 * 60_000;
+
+/**
+ * Section « performance » (L8, lecture seule du point de vue de l'utilisateur, chaque mesure bornée
+ * dans le temps) : latence réelle du verrou d'état, durée d'un `git status` du principal, taille
+ * cumulée de `.striart/`, nombre d'agents, âge du plus vieux verrou tenu. Budgets : voir
+ * doctor-perf.ts. Un constat de performance n'est JAMAIS un `fail` : Striart fonctionne, plus
+ * lentement.
+ * @param {(id: keyof typeof LABELS, level: DoctorLevel, key: string, params: Record<string, unknown>, detail: string, hint?: string|null) => unknown} add
+ * @param {string} root
+ * @param {number | null} agentCount `null` quand le registre n'a pas pu être lu
+ */
+async function addPerformanceCheck(add, root, agentCount) {
+  const stateDir = striartDir(root);
+  const [latency, gitStatus, size, mainLock, stateLock] = await Promise.all([
+    measureStateLockLatency(stateDir).catch((error) => ({ error })),
+    measureGitStatus(root),
+    boundedDirSize(stateDir),
+    readMainLockStatus(root).catch(() => null),
+    readStateLockStatus(stateDir).catch(() => null),
+  ]);
+
+  if ('error' in latency) {
+    add(
+      'performance',
+      'warn',
+      'performance.stateLock',
+      { samples: 0, failed: true, cause: latency.error?.code ?? latency.error?.message },
+      `latence du verrou d'état non mesurable : ${latency.error?.message ?? 'erreur'}`,
+      'vérifie les permissions de .striart/ puis relance striart doctor',
+    );
+  } else if (latency.samples.length === 0) {
+    add(
+      'performance',
+      'warn',
+      'performance.stateLock',
+      {
+        samples: 0,
+        medianMs: 0,
+        maxMs: 0,
+        budgetMs: STATE_LOCK_BUDGET_MS,
+        alertMs: STATE_LOCK_ALERT_MS,
+        level: 'alert',
+        timedOut: latency.timedOut,
+      },
+      "verrou d'état non obtenu pendant la mesure : un autre process le tient ou le disque ne répond pas",
+      'striart status ; relance au repos',
+    );
+  } else {
+    const level = latencyLevel(latency);
+    const params = {
+      samples: latency.samples.length,
+      medianMs: latency.medianMs,
+      maxMs: latency.maxMs,
+      budgetMs: STATE_LOCK_BUDGET_MS,
+      alertMs: STATE_LOCK_ALERT_MS,
+      level,
+      timedOut: latency.timedOut,
+    };
+    const base = `écriture atomique sous verrou d'état : médiane ${latency.medianMs} ms, pire ${latency.maxMs} ms (${latency.samples.length} mesure(s))`;
+    if (level === 'ok') {
+      add(
+        'performance',
+        'ok',
+        'performance.stateLock',
+        params,
+        `${base} — dans le budget de ${STATE_LOCK_BUDGET_MS} ms`,
+      );
+    } else {
+      add(
+        'performance',
+        'warn',
+        'performance.stateLock',
+        params,
+        level === 'alert'
+          ? `${base} — au-delà de ${STATE_LOCK_ALERT_MS / 1000} s : les opérations qui écrivent l'état s'empilent derrière`
+          : `${base} — au-dessus du budget de ${STATE_LOCK_BUDGET_MS} ms`,
+        "machine chargée ? exclus .striart/ de l'antivirus et de l'indexation, puis relance au repos",
+      );
+    }
+  }
+
+  const gitSlow = gitStatus.timedOut || gitStatus.failed || gitStatus.ms > GIT_STATUS_WARN_MS;
+  let gitDetail = `git status du dépôt principal : ${gitStatus.ms} ms`;
+  if (gitStatus.timedOut) {
+    gitDetail = 'git status du dépôt principal sans réponse dans le délai de la mesure';
+  } else if (gitStatus.failed) {
+    gitDetail = 'git status du dépôt principal en échec';
+  } else if (gitSlow) {
+    gitDetail += ` (au-delà de ${GIT_STATUS_WARN_MS} ms : status, dashboard et gardes de merge en pâtissent)`;
+  }
+  add(
+    'performance',
+    gitSlow ? 'warn' : 'ok',
+    'performance.gitStatus',
+    { ...gitStatus, warnMs: GIT_STATUS_WARN_MS },
+    gitDetail,
+    gitSlow ? "git gc ; vérifie core.fsmonitor, l'antivirus et la taille du dépôt" : null,
+  );
+
+  add(
+    'performance',
+    'ok',
+    'performance.stateDirSize',
+    { sizeBytes: size.sizeBytes, complete: size.complete },
+    `.striart/ : ${formatBytes(size.sizeBytes)} sur disque${size.complete ? '' : ' (parcours interrompu au délai : taille partielle)'}`,
+  );
+
+  if (agentCount !== null) {
+    add(
+      'performance',
+      'ok',
+      'performance.agentCount',
+      { count: agentCount },
+      `${agentCount} agent(s) enregistré(s)`,
+    );
+  }
+
+  // Plus vieux verrou tenu : le verrou principal (opération en cours) ou d'état (écriture en cours).
+  /** @type {Array<{kind: 'main'|'state', ageMs: number, holder: string|null}>} */
+  const held = [];
+  if (mainLock && (mainLock.state === 'held' || mainLock.state === 'frozen')) {
+    const since = Date.parse(mainLock.startedAt ?? '');
+    if (Number.isFinite(since)) {
+      held.push({
+        kind: 'main',
+        ageMs: Math.max(0, Date.now() - since),
+        holder: mainLock.holder ?? null,
+      });
+    }
+  }
+  if (stateLock?.present && stateLock.alive && Number.isFinite(stateLock.ageMs)) {
+    held.push({ kind: 'state', ageMs: stateLock.ageMs, holder: null });
+  }
+  const oldest = held.sort((a, b) => b.ageMs - a.ageMs)[0] ?? null;
+  if (oldest === null) {
+    add('performance', 'ok', 'performance.oldestLock', { ageMs: null }, 'aucun verrou tenu');
+    return;
+  }
+  const long = oldest.ageMs > LOCK_AGE_WARN_MS;
+  add(
+    'performance',
+    long ? 'warn' : 'ok',
+    'performance.oldestLock',
+    { ageMs: Math.round(oldest.ageMs), kind: oldest.kind, holder: oldest.holder },
+    `verrou ${oldest.kind === 'main' ? 'principal' : "d'état"} tenu depuis ${Math.round(oldest.ageMs / 1000)} s${oldest.holder ? ` par « ${oldest.holder} »` : ''}${long ? ' : tout le reste attend (Test Gate ou appel LLM long, ou détenteur figé)' : ''}`,
+    long ? 'striart lock' : null,
+  );
+}
+
 function compareVersion(actual, wanted) {
   for (let i = 0; i < wanted.length; i += 1) {
     const a = actual[i] ?? 0;
     if (a !== wanted[i]) return a - wanted[i];
   }
   return 0;
+}
+
+/**
+ * Enregistre un constat de `hardening-checks.ts` : l'identifiant du constat est
+ * la `key` i18n ; le texte français de référence est composé ici.
+ * @param {(id: keyof typeof LABELS, level: DoctorLevel, key: string, params: Record<string, unknown>, detail: string, hint?: string|null) => unknown} add
+ * @param {'state-privacy'|'gate-env'} id
+ * @param {import('./hardening-checks.ts').HardeningCheck} check
+ */
+function addHardening(add, id, check) {
+  const p = /** @type {any} */ (check.params);
+  /** @type {Record<string, [string, string|null]>} */
+  const text = {
+    'state-privacy.ok': [`${p.inspected} élément(s) de .striart/ réservé(s) à l'utilisateur`, null],
+    'state-privacy.open': [
+      `${p.count} élément(s) de .striart/ lisible(s) par d'autres comptes : ${(p.examples ?? []).map((/** @type {any} */ e) => e.path).join(', ')}`,
+      'striart init (resserre l’existant)',
+    ],
+    'state-privacy.relaxed': [
+      'protection RELÂCHÉE : .striart/ n’est pas réservé à l’utilisateur (privateStateDir: false)',
+      'retire privateStateDir: false de striart.config, puis striart init',
+    ],
+    'state-privacy.unreadable': [
+      `permissions de .striart/ non évaluables (${p.cause})`,
+      'striart init',
+    ],
+    'gate-env.filtered': [
+      `environnement filtré : ${p.passed} variable(s) transmise(s), ${p.removedSecrets} secret(s) retiré(s), ${p.requested} variable(s) demandée(s) par le dépôt`,
+      null,
+    ],
+    'gate-env.inherit': [
+      'protection RELÂCHÉE : le Test Gate reçoit TOUT l’environnement de l’orchestrateur, clés d’API comprises (gateEnv: "inherit")',
+      'retire gateEnv: "inherit" de striart.config si ce n’est pas voulu',
+    ],
+    'gate-env.refused': [
+      `variables demandées par le dépôt (gateEnv) mais non autorisées par la config utilisateur : ${(p.names ?? []).join(', ')}`,
+      'ajoute-les à gate.envAllow dans la config utilisateur si elles sont voulues, sinon retire-les de gateEnv',
+    ],
+  };
+  const [detail, hint] = text[check.id] ?? [check.id, null];
+  add(id, check.status, check.id, check.params, detail, hint);
 }
 
 /**
@@ -579,9 +955,21 @@ export async function runDoctor(cwd = process.cwd()) {
       const resolved = resolveLlmConfig(config);
       const { provider, model, baseUrl: url } = resolved;
       if (provider === 'ollama') {
-        llmUsable = await pingOllama(url);
+        const probe = await probeOllama(url);
+        llmUsable = probe.ok;
         if (llmUsable) {
           add('llm', 'ok', 'llm.ok', { provider, model, url }, `ollama:${model} @ ${url}`);
+        } else if (probe.error) {
+          // Refus de la politique réseau (HTTPS exigé, hors ligne, liste blanche…) : le dire,
+          // plutôt qu'un « injoignable » trompeur.
+          add(
+            'llm',
+            'warn',
+            'llm.networkRefused',
+            { url, code: probe.error.code, message: probe.error.message },
+            `ollama sur ${url} : ${probe.error.code} — ${probe.error.message}`,
+            probe.error.hint,
+          );
         } else {
           add(
             'llm',
@@ -618,6 +1006,9 @@ export async function runDoctor(cwd = process.cwd()) {
   } else {
     add('llm', 'skip', 'skip.noConfig', {}, 'config indisponible');
   }
+
+  // 6ter. Réseau d'entreprise : proxy, CA, hôtes autorisés, hors ligne (src/net.ts).
+  await addNetworkCheck(add);
 
   // 6bis. Secrets historiques : `start`/`run` refusent de cloner tant qu'un
   //       secret a existé dans l'historique (HISTORICAL_SECRETS_FOUND).
@@ -740,6 +1131,63 @@ export async function runDoctor(cwd = process.cwd()) {
         'orchestration.ok',
         {},
         "modes orchestrés aux défauts sûrs : perdants d'une course conservés, relecteur en lecture seule vérifiée, après un échec plus rien ne démarre",
+      );
+    }
+  }
+
+  // 6quater-bis-bis. GC d'inactivité (src/idle/) : détection et rapport par défaut ; la
+  //                  fermeture automatique est une politique OPT-IN qui exige AUSSI l'autorisation
+  //                  de la config utilisateur (idle.closeRoots). Toujours affiché.
+  if (config && root) {
+    const settings = resolveIdleSettings(config);
+    const relaxed = idleRelaxations(config);
+    if (relaxed.length > 0) {
+      add(
+        'idle',
+        'warn',
+        'idle.relaxed',
+        { keys: relaxed.map((r) => r.key) },
+        `protection RELÂCHÉE : ${relaxed.map((r) => r.key).join(', ')} — ${relaxed.map((r) => r.summary).join(' ')}`,
+        "retire ces réglages de striart.config si ce n'est pas voulu",
+      );
+    }
+    if (settings.enabled && settings.action === 'close') {
+      const auth = await closeAuthorization(root);
+      if (auth.authorized) {
+        add(
+          'idle',
+          'ok',
+          'idle.closeAuthorized',
+          {
+            warnAfterMs: settings.warnAfterMs,
+            closeAfterMs: settings.closeAfterMs,
+            graceMs: settings.graceMs,
+          },
+          'fermeture automatique des sessions inactives ACTIVE et autorisée par la config utilisateur (avertissement, délai de grâce ; clone et travail toujours conservés)',
+        );
+      } else {
+        add(
+          'idle',
+          'warn',
+          'idle.closeUnauthorized',
+          { error: auth.error },
+          auth.error
+            ? `idle.action: 'close' demandé mais la config utilisateur est illisible (${auth.error}) : aucune session ne sera fermée`
+            : "idle.action: 'close' demandé mais ce dépôt n'est pas dans idle.closeRoots de la config utilisateur : aucune session ne sera fermée (avertissement seulement)",
+          'striart doctor',
+        );
+      }
+    } else if (settings.enabled) {
+      add(
+        'idle',
+        'ok',
+        'idle.ok',
+        {
+          action: settings.action,
+          warnAfterMs: settings.warnAfterMs,
+          closeAfterMs: settings.closeAfterMs,
+        },
+        `agents inactifs détectés et rapportés (action: ${settings.action}) ; aucune session fermée automatiquement`,
       );
     }
   }
@@ -903,6 +1351,36 @@ export async function runDoctor(cwd = process.cwd()) {
     }
   }
 
+  // 6sexies-bis. Durcissement : données locales réservées à l'utilisateur
+  //          (.striart/) et environnement filtré du Test Gate. La config
+  //          UTILISATEUR (gate.envAllow) est lue UNE fois, ici, et réutilisée
+  //          par la synthèse des relâchements ci-dessous.
+  let userConfig = null;
+  let userConfigUnreadable = false;
+  try {
+    userConfig = await readUserConfig();
+  } catch {
+    userConfigUnreadable = true;
+  }
+  if (root && config && initialized) {
+    const privacy = await checkStateDirPrivacy(root, config).catch(
+      (error) =>
+        /** @type {import('./hardening-checks.ts').HardeningCheck} */ ({
+          status: 'warn',
+          id: 'state-privacy.unreadable',
+          params: { cause: error?.code ?? error?.message ?? 'erreur' },
+        }),
+    );
+    addHardening(add, 'state-privacy', privacy);
+  }
+  if (config) {
+    addHardening(
+      add,
+      'gate-env',
+      checkGateEnv(config, userConfig?.gate.envAllow ?? [], process.env),
+    );
+  }
+
   // 6septies. Synthèse : toutes les protections relâchées, en une ligne
   //           (src/doctor-relaxations.ts). Les lignes dédiées ci-dessus
   //           gardent leur détail ; celle-ci donne la vue d'ensemble.
@@ -934,6 +1412,32 @@ export async function runDoctor(cwd = process.cwd()) {
       );
     }
   }
+  // Politique de livraison (information, pas relâchement) : mode, et délais bornant le push et le
+  // commit de merge (hooks de la cible compris).
+  if (config) {
+    const delivery = config.delivery === 'branch' ? 'branch' : 'push';
+    const params = {
+      delivery,
+      autoPush: config.autoPush === true,
+      pushTimeoutMs: config.pushTimeoutMs,
+      commitTimeoutMs: config.commitTimeoutMs,
+    };
+    const seconds = (/** @type {number} */ ms) => `${Math.round(ms / 1000)} s`;
+    let mode = 'autoPush désactivé : aucune livraison vers origin';
+    if (params.autoPush) {
+      mode =
+        delivery === 'branch'
+          ? 'livraison par BRANCHE : le commit testé part sur une branche de revue (PR/MR), jamais sur la cible'
+          : 'livraison par push de la branche cible';
+    }
+    add(
+      'delivery',
+      'ok',
+      `delivery.${delivery}`,
+      params,
+      `${mode} ; délai du push ${seconds(params.pushTimeoutMs)} (pushTimeoutMs), délai du commit de merge ${seconds(params.commitTimeoutMs)} (commitTimeoutMs)`,
+    );
+  }
   {
     let protectedRelaxed = null;
     if (config) {
@@ -945,19 +1449,27 @@ export async function runDoctor(cwd = process.cwd()) {
     }
     let userTrustedRoots = [];
     let userEnvAllow = [];
-    let userConfigUnreadable = false;
-    try {
-      const userConfig = await readUserConfig();
+    let userNetwork;
+    let userGateEnvAllow = [];
+    if (userConfig) {
       userTrustedRoots = userConfig.hooks.trustedRoots;
       userEnvAllow = userConfig.env.allow;
-    } catch {
-      userConfigUnreadable = true;
+      userNetwork = userConfig.network;
+      userGateEnvAllow = userConfig.gate.envAllow;
     }
-    const { names, unreadable: unevaluated } = collectRelaxations({
+    const {
+      names,
+      policies,
+      unreadable: unevaluated,
+    } = collectRelaxations({
       config,
       protectedRelaxed,
       userTrustedRoots,
       userEnvAllow,
+      userGateEnvAllow,
+      userNetwork,
+      userNetworkUnreadable: userConfigUnreadable,
+      tlsVerificationDisabled: process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0',
     });
     const unreadable = userConfigUnreadable
       ? [...unevaluated, 'hooks.trustedRoots'].sort()
@@ -967,7 +1479,7 @@ export async function runDoctor(cwd = process.cwd()) {
         'relaxations',
         'warn',
         'relaxations.some',
-        { names, count: names.length, unreadable },
+        { names, count: names.length, unreadable, policies },
         [
           names.length > 0
             ? `${names.length} protection(s) relâchée(s) : ${names.join(', ')}`
@@ -983,7 +1495,7 @@ export async function runDoctor(cwd = process.cwd()) {
         'relaxations',
         'ok',
         'relaxations.none',
-        { names: [], count: 0, unreadable: [] },
+        { names: [], count: 0, unreadable: [], policies },
         'aucune protection relâchée : défauts sûrs partout',
       );
     }
@@ -1022,9 +1534,12 @@ export async function runDoctor(cwd = process.cwd()) {
   }
 
   // 8. Agents, file d'attente, espace disque.
+  /** @type {number | null} */
+  let agentCount = null;
   if (root && initialized) {
     try {
       const [agents, queue] = await Promise.all([listAgents(root), readQueue(root)]);
+      agentCount = agents.length;
       const broken = agents.filter((a) => a.status !== 'ACTIVE');
       const { sizeBytes } = await dirStats(path.join(striartDir(root), 'agents')).catch(() => ({
         sizeBytes: 0,
@@ -1051,6 +1566,21 @@ export async function runDoctor(cwd = process.cwd()) {
         'agents.unreadable',
         { message: error.message },
         `état illisible : ${error.message}`,
+      );
+    }
+  }
+
+  // 8bis. Performance (L8) : mesures bornées, jamais bloquantes pour le reste du diagnostic.
+  if (root && initialized) {
+    try {
+      await addPerformanceCheck(add, root, agentCount);
+    } catch (error) {
+      add(
+        'performance',
+        'warn',
+        'performance.unreadable',
+        { message: error.message },
+        `mesures de performance impossibles : ${error.message}`,
       );
     }
   }

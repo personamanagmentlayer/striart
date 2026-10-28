@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { llmGenerate, resolveLlmConfig } from '../../src/llm.js';
+import { llmGenerate, resolveLlmConfig, unwrapJsonResponse } from '../../src/llm.js';
 import { DEFAULT_CONFIG } from '../../src/config.js';
 import { StriartError } from '../../src/errors.js';
 
@@ -189,6 +189,38 @@ describe('llmGenerate — provider anthropic', () => {
     expect(body.max_tokens).toBeGreaterThan(0);
   });
 
+  it('format json : un JSON rendu dans un bloc ```json (pas de mode JSON natif) est déballé avant transform', async () => {
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-test');
+    const fenced = '```json\n{"files":["src/a.js"]}\n```';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ content: [{ type: 'text', text: fenced }] }),
+      }),
+    );
+    const result = await llmGenerate({
+      config,
+      prompt: 'p',
+      format: 'json',
+      transform: (text) => JSON.parse(text),
+    });
+    expect(result).toEqual({ files: ['src/a.js'] });
+  });
+
+  it('sans format json, la réponse est rendue telle quelle (le code fusionné garde ses blocs)', async () => {
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-test');
+    const fenced = '```js\nconst a = 1;\n```';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ content: [{ type: 'text', text: fenced }] }),
+      }),
+    );
+    expect(await llmGenerate({ config, prompt: 'p' })).toBe(fenced);
+  });
+
   it('erreur HTTP → retry puis échec avec le code fourni', async () => {
     vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-test');
     const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 429 });
@@ -285,5 +317,104 @@ describe('llm — exfiltration de secrets par une config de dépôt (S-M5)', () 
     }
     expect(fetchMock).toHaveBeenCalledTimes(4);
     for (const [, init] of fetchMock.mock.calls) expect(init.redirect).toBe('error');
+  });
+});
+
+describe('unwrapJsonResponse', () => {
+  it('déballe un bloc unique, avec ou sans langage, sauts de ligne Windows compris', () => {
+    expect(unwrapJsonResponse('```json\n{"a":1}\n```')).toBe('{"a":1}');
+    expect(unwrapJsonResponse('```\n[1,2]\n```\n')).toBe('[1,2]');
+    expect(unwrapJsonResponse('  ```json\r\n{"a":1}\r\n```  ')).toBe('{"a":1}');
+  });
+
+  it('ne devine rien d’autre : texte autour, plusieurs blocs ou JSON nu → inchangé', () => {
+    for (const text of [
+      '{"a":1}',
+      'Voici :\n```json\n{"a":1}\n```',
+      '```json\n{"a":1}\n```\net voilà',
+      '```json\n{"a":1}\n```\n```json\n{"b":2}\n```',
+      '',
+    ]) {
+      expect(unwrapJsonResponse(text)).toBe(text);
+    }
+  });
+});
+
+describe('llmGenerate — couche réseau (src/net.ts)', () => {
+  const okFetch = () =>
+    vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ response: 'ok', done: true }),
+    }));
+
+  it('Ollama distant en http:// SANS clé API : refusé (NET_INSECURE_TRANSPORT), jamais retenté ni enveloppé', async () => {
+    const fetchMock = okFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    const error = await llmGenerate({
+      config: { llm: { provider: 'ollama', model: 'm', baseUrl: 'http://gpu.corp.example:11434' } },
+      prompt: 'x',
+      retries: 3,
+      retryDelayMs: 1,
+    }).catch((e) => e);
+    expect(error).toBeInstanceOf(StriartError);
+    expect(error.code).toBe('NET_INSECURE_TRANSPORT');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('ollamaHost historique distant en http:// : même refus', async () => {
+    vi.stubGlobal('fetch', okFetch());
+    await expect(
+      llmGenerate({
+        config: { ollamaModel: 'm', ollamaHost: 'http://gpu.corp.example:11434' },
+        prompt: 'x',
+      }),
+    ).rejects.toMatchObject({ code: 'NET_INSECURE_TRANSPORT' });
+  });
+
+  it('mode offline : un LLM cloud est refusé (NET_OFFLINE), Ollama local reste servi', async () => {
+    vi.stubEnv('STRIART_OFFLINE', '1');
+    vi.stubEnv('OPENAI_API_KEY', 'sk-test');
+    const fetchMock = okFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(
+      llmGenerate({ config: { llm: { provider: 'openai', model: 'm' } }, prompt: 'x' }),
+    ).rejects.toMatchObject({ code: 'NET_OFFLINE' });
+    expect(fetchMock).not.toHaveBeenCalled();
+    await expect(
+      llmGenerate({
+        config: { llm: { provider: 'ollama', model: 'm', baseUrl: 'http://localhost:11434' } },
+        prompt: 'x',
+      }),
+    ).resolves.toBe('ok');
+  });
+
+  it('liste blanche d’hôtes : un fournisseur hors liste est refusé avant tout envoi de la clé', async () => {
+    vi.stubEnv('STRIART_ALLOWED_HOSTS', 'api.anthropic.com');
+    vi.stubEnv('OPENAI_API_KEY', 'sk-test');
+    const fetchMock = okFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(
+      llmGenerate({ config: { llm: { provider: 'openai', model: 'm' } }, prompt: 'x' }),
+    ).rejects.toMatchObject({ code: 'NET_HOST_NOT_ALLOWED' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('certificat non fiable : NET_TLS_UNTRUSTED remonte tel quel (non retentable)', async () => {
+    vi.stubEnv('OPENAI_API_KEY', 'sk-test');
+    const fetchMock = vi.fn(async () => {
+      throw Object.assign(new TypeError('fetch failed'), {
+        cause: Object.assign(new Error('self signed'), { code: 'SELF_SIGNED_CERT_IN_CHAIN' }),
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(
+      llmGenerate({
+        config: { llm: { provider: 'openai', model: 'm' } },
+        prompt: 'x',
+        retries: 3,
+        retryDelayMs: 1,
+      }),
+    ).rejects.toMatchObject({ code: 'NET_TLS_UNTRUSTED' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

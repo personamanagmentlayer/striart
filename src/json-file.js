@@ -145,7 +145,8 @@ export async function writeFileAtomic(filePath, content) {
   const tmp = tempPathFor(filePath);
   let handle = null;
   try {
-    handle = await open(tmp, 'wx');
+    // 0600 : les fichiers d'état portent des prompts, des chemins, des jetons.
+    handle = await open(tmp, 'wx', 0o600);
     await handle.writeFile(content, 'utf8');
     await handle.sync();
     await handle.close();
@@ -217,6 +218,20 @@ export const UNCHANGED = Symbol('UNCHANGED');
  */
 export async function updateJsonLocked(filePath, { fallback, code }, mutator) {
   const dir = path.dirname(filePath);
+  // Mise à jour d'un enregistrement qui doit EXISTER (fallback null) dont le dossier n'existe
+  // pas encore : il n'y a rien à protéger d'une écriture concurrente (le verrou vit dans ce
+  // dossier). Le mutateur juge sur « absent » — « demande inconnue » plutôt qu'une erreur de
+  // verrou — et ne peut rien écrire : les créateurs font leur `mkdir` avant.
+  if (
+    fallback === null &&
+    !(await stat(dir).then(
+      (s) => s.isDirectory(),
+      () => false,
+    ))
+  ) {
+    const next = await mutator(null);
+    if (next === UNCHANGED) return null;
+  }
   return withStateLock(dir, async () => {
     const current = await readJson(filePath, { fallback: structuredClone(fallback), code });
     const next = await mutator(current);

@@ -79,7 +79,7 @@ describe('interopérabilité avec l’outil minisign (vecteurs produits par rsig
   it('déchiffre une clé privée rsign2 (scrypt, mot de passe vide) et signe avec', async () => {
     const publicKey = (await fixture('rsign.pub')).toString('utf8');
     const secret = {
-      key: (await fixture('rsign-empty-password.key')).toString('utf8'),
+      key: (await fixture('rsign-empty-password-TEST-ONLY.key')).toString('utf8'),
       password: '',
     };
     const data = Buffer.from('payload');

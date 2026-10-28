@@ -71,6 +71,9 @@ import {
 
 export const STATE_LOCK_FILE = 'state.lock';
 
+/** Nom du dossier d'état racine d'un dépôt (voir `striartDir`). */
+const STATE_ROOT_DIR_NAME = '.striart';
+
 /** Délai d'acquisition par défaut : un détenteur légitime tient quelques ms. */
 const DEFAULT_TIMEOUT_MS = 10_000;
 /** Verrou vide/tronqué plus vieux que ça : débris (le détenteur écrit juste après le `wx`). */
@@ -307,9 +310,27 @@ async function acquireFile(file: string, deadline: number): Promise<string> {
       handle = await open(file, 'wx');
     } catch (error) {
       if (error.code === 'ENOENT') {
+        const dir = path.dirname(file);
+        // Seul l'absence du dossier d'état RACINE (`.striart/`) veut dire « pas initialisé ». Le
+        // verrou d'un sous-dossier (`reviews/`, `collab/`…) y vit aussi : son absence veut dire
+        // « rien n'a encore été écrit là », pas « lance striart init » (hint qui ne règle rien).
+        if (path.basename(dir) === STATE_ROOT_DIR_NAME) {
+          throw new StriartError(
+            `Dossier d'état introuvable (${dir}) : lance d'abord "striart init".`,
+            {
+              code: 'NOT_INITIALIZED',
+              hint: 'striart init',
+              details: { root: path.dirname(dir) },
+            },
+          );
+        }
         throw new StriartError(
-          `Dossier d'état introuvable (${path.dirname(file)}) : lance d'abord "striart init".`,
-          { code: 'NOT_INITIALIZED', hint: 'striart init', details: { root: path.dirname(file) } },
+          `Verrou d'état impossible à créer (${file}) : le dossier n'existe pas.`,
+          {
+            code: 'STATE_LOCK_FAILED',
+            hint: 'striart doctor',
+            details: { lockFile: file, cause: 'ENOENT' },
+          },
         );
       }
       if (error.code !== 'EEXIST' && !isTransientWindowsError(error)) {

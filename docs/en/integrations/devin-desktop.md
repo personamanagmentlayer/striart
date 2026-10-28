@@ -108,8 +108,11 @@ ones.
 - **Working directory — unverified** for both agents: no `cwd` field is
   documented. Prefer Devin Local's project configuration and check the root
   in the server log.
-- The Striart extension (coming, no announced date) will be published on
-  Open VSX, from which Devin Desktop will be able to install it.
+- The Striart VS Code extension is delivered in the repository but **not
+  published** (neither Open VSX nor the Marketplace, no announced date): Devin
+  Desktop will only be able to install it from Open VSX once published; until
+  then, a `.vsix` built from the sources is installed by hand (see
+  [VS Code and Cursor](vscode-cursor.md#vs-code-extension)).
 
 ## Security
 

@@ -18,13 +18,16 @@ import { pathToFileURL } from 'node:url';
 import { styleText } from 'node:util';
 import type { Capabilities, ThemeName } from './caps.ts';
 import type { Messages } from './i18n/index.ts';
-import { displayWidth, padEnd, sanitize, truncate } from './text.ts';
+import { layoutColumns } from './render/table.ts';
+import { displayWidth, padEnd, sanitize, truncate, wrapWords } from './text.ts';
 
 export type Level = 'ok' | 'info' | 'warn' | 'error' | 'skip';
 
 type StyleFormat = Parameters<typeof styleText>[0];
 
-const THEMES: Record<ThemeName, Record<Level | 'accent' | 'muted' | 'code', StyleFormat>> = {
+export type Tone = Level | 'accent' | 'muted' | 'code';
+
+const THEMES: Record<ThemeName, Record<Tone, StyleFormat>> = {
   // Les 16 couleurs nommées suivent le thème du terminal (clair ou sombre) :
   // c'est le terminal qui garantit le contraste, pas une couleur fixe.
   default: {
@@ -72,6 +75,16 @@ const GLYPHS = {
     ellipsis: '…',
     empty: '—',
     tree: '└─',
+    // Vocabulaire d'état partagé par les tableaux de la CLI et le cockpit
+    // `watch --ui` : UNE seule source des glyphes.
+    active: '●',
+    idle: '○',
+    select: '▸',
+    rule: '─',
+    bar: '│',
+    up: '↑',
+    down: '↓',
+    spinner: ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'],
   },
   ascii: {
     ok: '+',
@@ -83,10 +96,28 @@ const GLYPHS = {
     ellipsis: '...',
     empty: '-',
     tree: '`-',
+    active: '*',
+    idle: 'o',
+    select: '>',
+    rule: '-',
+    bar: '|',
+    up: '^',
+    down: 'v',
+    spinner: ['-', '\\', '|', '/'],
   },
 };
 
 export type Glyphs = typeof GLYPHS.unicode;
+
+/** Glyphes selon la capacité Unicode (sondée UNE fois par `caps.ts`). */
+export function glyphsFor(unicode: boolean): Glyphs {
+  return unicode ? GLYPHS.unicode : GLYPHS.ascii;
+}
+
+/** Format de style (`styleText`) d'un ton pour un thème : source unique des couleurs sémantiques. */
+export function toneFormat(theme: ThemeName, tone: Tone): StyleFormat {
+  return THEMES[theme][tone];
+}
 
 export interface WritableLike {
   write(chunk: string): unknown;
@@ -136,7 +167,7 @@ export class Output {
     this.stderr = options.stderr;
     this.quiet = options.quiet;
     this.json = options.json;
-    this.glyphs = options.caps.unicode ? GLYPHS.unicode : GLYPHS.ascii;
+    this.glyphs = glyphsFor(options.caps.unicode);
     this.theme = THEMES[options.caps.theme];
   }
 
@@ -149,11 +180,11 @@ export class Output {
   }
 
   /** Style pour stdout. */
-  style(kind: Level | 'accent' | 'muted' | 'code', text: string): string {
+  style(kind: Tone, text: string): string {
     return this.paint(this.theme[kind], text, this.caps.colorStdout);
   }
 
-  private styleErr(kind: Level | 'accent' | 'muted' | 'code', text: string): string {
+  private styleErr(kind: Tone, text: string): string {
     return this.paint(this.theme[kind], text, this.caps.colorStderr);
   }
 
@@ -254,30 +285,11 @@ export class Output {
     const cells = rows.map((row) =>
       columns.map((c) => sanitize(c.value(row)) || this.glyphs.empty),
     );
-    let visible = columns.map((_, i) => i);
     const natural = columns.map((c, i) =>
       Math.max(displayWidth(c.header), ...cells.map((r) => displayWidth(r[i]))),
     );
-    const widths = [...natural];
     const gap = 2;
-    const total = () => visible.reduce((sum, i) => sum + widths[i], 0) + gap * (visible.length - 1);
-    const limit = this.caps.columns;
-    if (limit !== null) {
-      // Les colonnes sont sacrifiées de la MOINS importante à la plus
-      // importante : chacune est d'abord compressée (si elle l'accepte),
-      // puis retirée si ça ne suffit pas. Une colonne secondaire disparaît
-      // donc avant qu'une colonne importante ne soit tronquée. La première
-      // colonne (l'identifiant de la ligne) n'est jamais retirée.
-      const byPriority = [...visible]
-        .slice(1)
-        .sort((a, b) => (columns[a].priority ?? 1) - (columns[b].priority ?? 1));
-      for (const i of byPriority) {
-        if (total() <= limit) break;
-        const shrink = columns[i].shrink;
-        if (shrink) widths[i] = Math.max(shrink.min, widths[i] - (total() - limit));
-        if (total() > limit) visible = visible.filter((v) => v !== i);
-      }
-    }
+    const { visible, widths } = layoutColumns(columns, natural, this.caps.columns, gap);
     const header = visible
       .map((i, n) => {
         const text = truncate(columns[i].header, widths[i], this.glyphs.ellipsis);
@@ -322,6 +334,21 @@ export class Output {
     if (hint) this.stderr.write(`${this.formatHint(hint, 'stderr')}\n`);
   }
 
+  /**
+   * Ligne de statut NON donnée (bannière de démarrage d'une commande longue,
+   * introduction d'une session) : stderr, comme tout ce qui n'est pas le
+   * résultat. `--json` : muette (le document ou le flux porte l'information).
+   */
+  notice(level: Level, message: string, detail?: string | null): void {
+    if (this.json) return;
+    this.clearSpinner();
+    this.stderr.write(`${this.formatLine(level, message, 'stderr')}
+`);
+    if (detail)
+      this.stderr.write(`  ${detail}
+`);
+  }
+
   /** Étape de progression (stderr) : muette en `--json` et `--quiet`. */
   step(message: string): void {
     if (this.json || this.quiet) return;
@@ -348,9 +375,7 @@ export class Output {
   }
 
   private startSpinner(text: string): void {
-    const frames = this.caps.unicode
-      ? ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
-      : ['-', '\\', '|', '/'];
+    const frames = this.glyphs.spinner;
     let frame = 0;
     const startedAt = Date.now();
     if (this.caps.taskbarProgress) this.stderr.write('\u001B]9;4;3;0\u0007');
@@ -394,8 +419,32 @@ export class Output {
 
   private formatLine(level: Level, message: string, stream: 'stdout' | 'stderr'): string {
     const paint = stream === 'stdout' ? this.style.bind(this) : this.styleErr.bind(this);
-    if (this.caps.plain) return `[${this.m.levels[level]}] ${message}`;
-    return `${paint(level, `${this.glyphs[level]} ${this.m.levels[level]}`)}${this.m.levelSeparator}${message}`;
+    // Mode plain (--plain, TERM=dumb) : STRUCTURE nue (crochets, ASCII). La couleur est un autre axe,
+    // décidé une seule fois par caps (NO_COLOR > FORCE_COLOR > TERM=dumb > isTTY) : le libellé
+    // la suit comme la piste, sinon `FORCE_COLOR=1 TERM=dumb` colorerait l'un et pas l'autre.
+    const label = this.caps.plain
+      ? `[${this.m.levels[level]}]`
+      : `${this.glyphs[level]} ${this.m.levels[level]}`;
+    const separator = this.caps.plain ? ' ' : this.m.levelSeparator;
+    return `${paint(level, label)}${separator}${this.wrapMessage(message, displayWidth(label + separator), stream)}`;
+  }
+
+  /**
+   * Message long sur un terminal : retour à la ligne aux espaces avec retrait
+   * sous le message (jamais au milieu d'un mot). Hors terminal (largeur
+   * inconnue) ou texte déjà stylé : tel quel — couper une plage stylée
+   * laisserait une couleur ouverte sur la ligne suivante.
+   */
+  private wrapMessage(message: string, indent: number, stream: 'stdout' | 'stderr'): string {
+    const isTty = stream === 'stdout' ? this.caps.stdoutIsTTY : this.caps.stderrIsTTY;
+    const columns = this.caps.columns;
+    if (!isTty || columns === null || message.includes('\u001B')) return message;
+    const width = columns - indent;
+    if (width < 20) return message;
+    return message
+      .split('\n')
+      .flatMap((paragraph) => wrapWords(paragraph, width))
+      .join(`\n${' '.repeat(indent)}`);
   }
 
   private formatHint(hint: string, stream: 'stdout' | 'stderr'): string {

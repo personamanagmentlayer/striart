@@ -204,6 +204,7 @@ const TICKET_REASONS = [
   'SEMANTIC_MERGE_FAILED',
   'SEMANTIC_GATE_FAILED',
   'PROMOTION_GATE_FAILED',
+  'COMMIT_HOOK_REJECTED',
 ];
 
 const DATA_DEFS: Record<string, JsonSchema> = {
@@ -214,6 +215,149 @@ const DATA_DEFS: Record<string, JsonSchema> = {
       variant('state', 'idle', { via: { type: 'null' }, pid: { type: 'null' } }, []),
     ],
   },
+  RouterDetails: {
+    description:
+      'Router detail at launch (additive, informative: no decision depends on it). `serialized` tells why the task was serialized behind every active agent (sentinel `**`); `shared` lists bookkeeping files left out of collision detection (`tokens.router.sharedFiles`). Lists are bounded (`counts` holds the real totals); the raw model output never appears.',
+    ...obj(
+      {
+        promptVersion: nullableStr,
+        serialized: nullable(
+          obj({ kind: str(), reasons: arr(str()), code: str(), kept: int(0), total: int(0) }, [
+            'kind',
+          ]),
+        ),
+        files: arr(
+          obj(
+            {
+              path: str(),
+              confidence: { type: ['number', 'null'] },
+              source: str(),
+              reason: str(),
+              from: str(),
+            },
+            ['path', 'source'],
+          ),
+        ),
+        shared: arr(str()),
+        expansion: arr(
+          obj({ path: str(), reason: str(), from: str(), confidence: { type: 'number' } }),
+        ),
+        tree: nullable(obj({ mode: str(), total: int(0), shown: int(0), omitted: int(0) })),
+        counts: obj({ files: int(0), shared: int(0), expansion: int(0) }),
+      },
+      ['serialized', 'files', 'shared', 'expansion'],
+    ),
+  },
+  ObservedOverlap: {
+    description:
+      'A file REALLY touched (committed work, diff against the agent base) by two agents (`kind: agents`, only files the Router had not predicted for both) or by an agent while the target branch also advanced it (`kind: target`). Observed at runtime, independent of any prediction. `files` is bounded; `fileCount` is the real total.',
+    ...obj(
+      {
+        kind: { enum: ['agents', 'target'] },
+        agents: arr(str()),
+        files: arr(str()),
+        fileCount: int(0),
+        filesTruncated: bool,
+        key: str('Stable id of the signal (kind, agents, file set).'),
+      },
+      ['kind', 'agents', 'files', 'fileCount', 'key'],
+    ),
+  },
+  OverlapReport: {
+    description:
+      'Runtime overlap net (additive). Read-only: git diffs between COMMITS, never a worktree. `coverage.uncommitted` is always false: uncommitted edits are NOT seen. `cost.gitCalls` is bounded by `cost.budget` per observation; agents beyond the budget are listed in `deferred`, agents whose git facts could not be read in `errors` (stable reason only, never a git message). When the observation itself fails the value is `{unavailable: true, reason}`.',
+    oneOf: [
+      obj(
+        {
+          targetBranch: str(),
+          overlaps: arr(ref('ObservedOverlap')),
+          deferred: arr(str()),
+          errors: arr(obj({ agent: str(), reason: str() })),
+          agentsObserved: int(0),
+          ignoredShared: int(0),
+          skippedUnsafe: int(0),
+          truncated: bool,
+          coverage: obj({ committed: { const: true }, uncommitted: { const: false } }),
+          cost: obj({
+            gitCalls: int(0),
+            budget: int(0),
+            cacheHits: int(0),
+            durationMs: { type: 'number', minimum: 0 },
+          }),
+          generatedAt: str(),
+        },
+        ['targetBranch', 'overlaps', 'deferred', 'errors', 'coverage', 'cost'],
+      ),
+      obj({ unavailable: { const: true }, reason: str() }),
+    ],
+  },
+  IdleAgent: {
+    description:
+      'Idle-GC verdict for one agent (additive). `state`: active (at least one fresh signal, or a signal that could not be read — fail closed), idle (EVERY signal is older than the threshold) or protected (a guard: pending human request, open ticket, orchestration plan, merge in progress, main-repo session, removal, exclusion). `session`: live process / ended (clone kept) / never launched. `closable` is true only when the warning, the grace period, the threshold and the authorization are all met.',
+    ...obj(
+      {
+        agent: str(),
+        state: { enum: ['active', 'idle', 'protected'] },
+        stage: { enum: ['active', 'protected', 'idle', 'warned', 'closable'] },
+        session: { enum: ['live', 'ended', 'none'] },
+        host: { enum: ['acp', 'pty', 'process', 'none'] },
+        idleMs: { type: ['number', 'null'] },
+        lastActivityAt: nullableStr,
+        lastActivitySignal: nullableStr,
+        reasons: arr(str()),
+        blockers: arr(str()),
+        plan: { enum: ['none', 'warn', 'close'] },
+        closable: bool,
+        closeBlockedBy: arr(str()),
+        warnedAt: nullableStr,
+        closeNotBefore: nullableStr,
+        signals: arr(obj({ name: str(), status: str(), at: nullableStr })),
+        worktreeSkipped: bool,
+      },
+      ['agent', 'state', 'stage', 'session', 'host', 'plan', 'closable'],
+    ),
+  },
+  IdleStatus: {
+    description:
+      'Idle GC (additive, read-only): a dry-run classification of every agent plus the date of the last real sweep. When it cannot be computed the value is `{available: false, reason}`.',
+    oneOf: [
+      obj(
+        {
+          available: { const: true },
+          lastSweepAt: nullableStr,
+          generatedAt: str(),
+          enabled: bool,
+          action: { enum: ['report', 'warn', 'close'] },
+          closeAuthorized: bool,
+          authorizationError: nullableStr,
+          holds: arr(str()),
+          thresholds: obj({ warnAfterMs: int(0), closeAfterMs: int(0), graceMs: int(0) }),
+          agents: arr(ref('IdleAgent')),
+        },
+        ['available', 'enabled', 'action', 'agents'],
+      ),
+      obj({ available: { const: false }, reason: str() }),
+    ],
+  },
+  IdleSweepReport: obj(
+    {
+      generatedAt: str(),
+      dryRun: bool,
+      enabled: bool,
+      action: { enum: ['report', 'warn', 'close'] },
+      closeAuthorized: bool,
+      authorizationError: nullableStr,
+      forced: bool,
+      suspended: bool,
+      holds: arr(str()),
+      thresholds: obj({ warnAfterMs: int(0), closeAfterMs: int(0), graceMs: int(0) }),
+      agents: arr(ref('IdleAgent')),
+      warned: arr(str()),
+      closed: arr(obj({ agent: str(), host: str(), code: str() })),
+      refused: arr(obj({ agent: str(), host: str(), code: str(), detail: nullableStr })),
+    },
+    ['generatedAt', 'dryRun', 'enabled', 'action', 'agents', 'warned', 'closed', 'refused'],
+  ),
   Agent: obj(
     {
       name: str(),
@@ -233,8 +377,14 @@ const DATA_DEFS: Record<string, JsonSchema> = {
       lastMessage: nullableStr,
       sizeBytes: nullableInt,
       sizeHuman: nullableStr,
+      sizesComputedAt: {
+        type: ['string', 'null'],
+        description:
+          'When `sizeBytes` was measured (ISO 8601). Sizes are cached (at most 5 minutes old, refreshed sooner when the clone changes); activity and session state are never cached.',
+      },
       session: ref('AgentSession'),
       acpHost: ref('AcpHostStatus'),
+      routing: nullable(ref('RouterDetails')),
     },
     ['name', 'status', 'pendingCommits'],
   ),
@@ -248,6 +398,7 @@ const DATA_DEFS: Record<string, JsonSchema> = {
       blockedBy: arr(ref('Collision')),
       after: nullableStr,
       ready: bool,
+      routing: nullable(ref('RouterDetails')),
     },
     ['id', 'agent', 'status', 'files', 'blockedBy'],
   ),
@@ -258,6 +409,7 @@ const DATA_DEFS: Record<string, JsonSchema> = {
       agent: str(),
       prompt: str(),
       predictedFiles: arr(str()),
+      routing: nullable(ref('RouterDetails')),
       collisions: arr(ref('Collision')),
       command: nullableStr,
       after: nullableStr,
@@ -545,6 +697,8 @@ const DATA_DEFS: Record<string, JsonSchema> = {
     mainSession: nullable(ref('MainSessionStatus')),
     orchestration: ref('OrchestrationSnapshot'),
     reviews: arr(ref('HumanReview')),
+    overlaps: ref('OverlapReport'),
+    idle: ref('IdleStatus'),
     profiles: arr(ref('ProfileSummary')),
     config: obj({
       testCommand: str(),
@@ -563,12 +717,35 @@ const DATA_DEFS: Record<string, JsonSchema> = {
       state: ref('StriartState'),
       daemon: ref('DaemonStatus'),
       mainSession: nullable(ref('MainSessionStatus')),
+      overlaps: ref('OverlapReport'),
+      idle: ref('IdleStatus'),
     }),
   },
   GateResult: obj({ success: bool, exitCode: nullableInt, timedOut: bool, log: str() }, [
     'success',
     'timedOut',
   ]),
+  Timings: {
+    description:
+      'Durations per phase of the operation, in milliseconds (monotonic clock). Every phase is always present (0 when it does not apply); `lockHeld` is the time the main lock was HELD, `total` the whole call. Additive field: clients ignore phases they do not know.',
+    ...obj(
+      {
+        unit: { const: 'ms' },
+        route: { type: 'number', minimum: 0 },
+        lockWait: { type: 'number', minimum: 0 },
+        sync: { type: 'number', minimum: 0 },
+        merge: { type: 'number', minimum: 0 },
+        semantic: { type: 'number', minimum: 0 },
+        gate: { type: 'number', minimum: 0 },
+        commit: { type: 'number', minimum: 0 },
+        delivery: { type: 'number', minimum: 0 },
+        memory: { type: 'number', minimum: 0 },
+        lockHeld: { type: 'number', minimum: 0 },
+        total: { type: 'number', minimum: 0 },
+      },
+      ['unit', 'lockHeld', 'total'],
+    ),
+  },
   SyncResult: {
     oneOf: [
       variant('status', 'UP_TO_DATE', { agent: str(), mainHead: str() }),
@@ -597,7 +774,10 @@ const DATA_DEFS: Record<string, JsonSchema> = {
   },
   MergeResult: {
     oneOf: [
-      variant('status', 'UP_TO_DATE', { agent: str(), sha: str() }),
+      variant('status', 'UP_TO_DATE', { agent: str(), sha: str(), timings: ref('Timings') }, [
+        'agent',
+        'sha',
+      ]),
       variant(
         'status',
         'MERGED',
@@ -609,6 +789,7 @@ const DATA_DEFS: Record<string, JsonSchema> = {
           pushError: nullableStr,
           semantic: bool,
           resolvedFiles: arr(str()),
+          timings: ref('Timings'),
         },
         ['agent', 'sha', 'mergeSha'],
       ),
@@ -616,12 +797,31 @@ const DATA_DEFS: Record<string, JsonSchema> = {
         'status',
         'CONFLICT',
         {
-          reason: { enum: ['MERGE_CONFLICT', 'UNMERGEABLE_CONFLICT', 'SEMANTIC_MERGE_FAILED'] },
+          reason: {
+            enum: [
+              'MERGE_CONFLICT',
+              'UNMERGEABLE_CONFLICT',
+              'SEMANTIC_MERGE_FAILED',
+              'PROTECTED_PATHS_CHANGED',
+            ],
+          },
           agent: str(),
           sha: str(),
           conflictedFiles: arr(str()),
           ticket: ref('Ticket'),
           manualMode: bool,
+          error: str(
+            'French text of the core (kept for compatibility); `errorCode` is the contract.',
+          ),
+          errorCode: str(
+            'Stable code of the semantic merge failure (e.g. SEMANTIC_MERGE_FAILED, TOKEN_BUDGET_EXCEEDED).',
+          ),
+          errorDetails: {
+            type: 'object',
+            description:
+              'Public details of that failure (identifiers only: causeCode, provider, status…).',
+          },
+          timings: ref('Timings'),
         },
         ['reason', 'agent', 'ticket'],
       ),
@@ -634,6 +834,7 @@ const DATA_DEFS: Record<string, JsonSchema> = {
           gate: ref('GateResult'),
           ticket: ref('Ticket'),
           manualMode: bool,
+          timings: ref('Timings'),
         },
         ['agent', 'gate', 'ticket'],
       ),
@@ -648,13 +849,21 @@ const DATA_DEFS: Record<string, JsonSchema> = {
           info: obj({ name: str(), branch: str(), path: str() }, ['name']),
           predictedFiles: arr(str()),
           collisions: arr(ref('Collision')),
+          routing: nullable(ref('RouterDetails')),
+          timings: ref('Timings'),
         },
         ['info', 'predictedFiles'],
       ),
       variant(
         'status',
         'QUEUED',
-        { task: ref('QueueTask'), predictedFiles: arr(str()), collisions: arr(ref('Collision')) },
+        {
+          task: ref('QueueTask'),
+          predictedFiles: arr(str()),
+          collisions: arr(ref('Collision')),
+          routing: nullable(ref('RouterDetails')),
+          timings: ref('Timings'),
+        },
         ['task'],
       ),
     ],
@@ -699,14 +908,23 @@ const DATA_DEFS: Record<string, JsonSchema> = {
   ),
   PromoteResult: {
     oneOf: [
-      variant('status', 'UP_TO_DATE', { sha: str() }),
-      variant('status', 'PROMOTED', { sha: str(), commits: int(0), gate: ref('GateResult') }, [
-        'sha',
-      ]),
+      variant('status', 'UP_TO_DATE', { sha: str(), timings: ref('Timings') }, ['sha']),
+      variant(
+        'status',
+        'PROMOTED',
+        { sha: str(), commits: int(0), gate: ref('GateResult'), timings: ref('Timings') },
+        ['sha'],
+      ),
       variant(
         'status',
         'GATE_FAILED',
-        { sha: str(), gate: ref('GateResult'), ticket: ref('Ticket'), rolledBack: bool },
+        {
+          sha: str(),
+          gate: ref('GateResult'),
+          ticket: ref('Ticket'),
+          rolledBack: bool,
+          timings: ref('Timings'),
+        },
         ['sha', 'ticket'],
       ),
     ],
@@ -724,12 +942,29 @@ const DATA_DEFS: Record<string, JsonSchema> = {
   ),
   ManualResolutionResult: {
     oneOf: [
-      variant('status', 'ALREADY_CLEAN', { ticketId: str(), agent: str(), sha: str() }),
-      variant('status', 'GATE_FAILED', { ticketId: str(), agent: str(), gate: ref('GateResult') }),
+      variant(
+        'status',
+        'ALREADY_CLEAN',
+        { ticketId: str(), agent: str(), sha: str(), timings: ref('Timings') },
+        ['ticketId', 'agent', 'sha'],
+      ),
+      variant(
+        'status',
+        'GATE_FAILED',
+        { ticketId: str(), agent: str(), gate: ref('GateResult'), timings: ref('Timings') },
+        ['ticketId', 'agent', 'gate'],
+      ),
       variant(
         'status',
         'MERGED',
-        { ticketId: str(), agent: str(), sha: str(), mergeSha: str(), closedTickets: arr(str()) },
+        {
+          ticketId: str(),
+          agent: str(),
+          sha: str(),
+          mergeSha: str(),
+          closedTickets: arr(str()),
+          timings: ref('Timings'),
+        },
         ['ticketId', 'mergeSha'],
       ),
     ],
@@ -1125,6 +1360,19 @@ export const METHOD_SPECS: readonly MethodSpec[] = Object.freeze([
     mutating: true,
     params: [p('dryRun', bool, false)],
     data: 'PruneResult',
+    transports: BOTH,
+  },
+  {
+    name: 'workspace.gc',
+    summary:
+      'Idle GC sweep: detect idle agents, warn, and (action close or `close: true`, after the warning and grace period) cleanly close their SESSIONS. The clone and its work are always kept; no merge, no deletion. Human plane only.',
+    mutating: true,
+    params: [
+      p('dryRun', bool, false),
+      p('close', bool, false),
+      p('agent', { anyOf: [ref('AgentName'), { type: 'null' }] }, false),
+    ],
+    data: 'IdleSweepReport',
     transports: BOTH,
   },
 ]);

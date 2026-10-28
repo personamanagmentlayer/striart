@@ -70,6 +70,22 @@ const COMMANDER_CODES: Record<string, string> = {
   'commander.help': 'MISSING_COMMAND',
 };
 
+/** `--version`/`-v` parmi les options de tête (avant toute commande ou `--`). */
+export function isVersionRequest(args: string[]): boolean {
+  for (const arg of args) {
+    if (arg === '--' || !arg.startsWith('-')) return false;
+    if (arg === '--version' || arg === '-v') return true;
+  }
+  return false;
+}
+
+/** `help <x>` : le nom `x` demandé (arguments avant `--`, hors options), sinon null. */
+function helpTargetOf(args: string[]): string | null {
+  const end = args.indexOf('--');
+  const positional = (end === -1 ? args : args.slice(0, end)).filter((a) => !a.startsWith('-'));
+  return positional[0] === 'help' && positional[1] ? positional[1] : null;
+}
+
 /**
  * Options globales PRÉSUMÉES avant l'analyse, pour ce qui se rend avant
  * qu'une commande soit choisie (aide, erreur d'usage). Arguments avant `--`
@@ -197,6 +213,7 @@ const HUMAN_PLANE_COMMANDS: ReadonlySet<string> = new Set([
   'lock',
   'rollback',
   'promote',
+  'gc',
 ]);
 
 interface ErrorReport {
@@ -324,6 +341,20 @@ export async function main(argv: string[] = process.argv): Promise<void> {
   const { version } = createRequire(import.meta.url)('../../package.json') as { version: string };
   let rootPromise: Promise<string> | null = null;
 
+  // `--version --json` : un document du contrat (schemas/striart-document-v1), jamais la
+  // version nue. Les options situées AVANT la commande sont toutes des globales
+  // booléennes : elles se lisent sans ambiguïté.
+  if (json && isVersionRequest(args)) {
+    out.document({
+      schemaVersion: SCHEMA_VERSION,
+      command: 'version',
+      ok: true,
+      data: { version },
+    });
+    process.exitCode = EXIT.OK;
+    return;
+  }
+
   const dispatch = async <Input>(
     name: string,
     load: () => Promise<CommandModule<Input, unknown>>,
@@ -417,11 +448,25 @@ export async function main(argv: string[] = process.argv): Promise<void> {
   } catch (error) {
     if (error instanceof CommanderError) {
       // Aide ou version affichées : succès (commander a déjà écrit sur stdout).
-      if (error.code === 'commander.helpDisplayed' || error.code === 'commander.version') {
+      // `help`, `help <commande>` : le sous-commande `help` de commander lève
+      // `commander.help` avec exitCode 0 une fois l'aide écrite (succès). Sans
+      // exitCode 0, c'est l'aide « d'erreur » : aucune commande donnée, ou
+      // `help <inconnue>` (erreur d'usage nommant la commande).
+      if (
+        error.code === 'commander.helpDisplayed' ||
+        error.code === 'commander.version' ||
+        (error.code === 'commander.help' && error.exitCode === 0)
+      ) {
         process.exitCode = EXIT.OK;
         return;
       }
-      reportError(commanderReport(error, m, parsing), parsing);
+      const report = commanderReport(error, m, parsing);
+      const helpTarget = error.code === 'commander.help' ? helpTargetOf(args) : null;
+      if (helpTarget) {
+        report.code = 'UNKNOWN_COMMAND';
+        report.message = m.usageErrors.unknownCommand(helpTarget);
+      }
+      reportError(report, parsing);
       process.exitCode = EXIT.USAGE;
       return;
     }

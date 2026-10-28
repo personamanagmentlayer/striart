@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { simpleGit } from 'simple-git';
-import { StriartError, agentUnknownError } from './errors.js';
+import { StriartError, agentUnknownError, publicErrorDetails } from './errors.js';
 import { formatMergeSubject, parseMergeSubject } from './merge-subject.ts';
 import { loadConfig } from './config.js';
 import {
@@ -22,11 +22,15 @@ import { sweepOrphanTempFiles } from './json-file.js';
 import { striartDir } from './paths.js';
 import { DEFAULT_PROFILE, resolveAgentProfile, runAgentSession } from './session.js';
 import { prunePermissions } from './permissions.ts';
-import { detectCollisions, predictFiles } from './router.js';
+import { detectCollisions, detectCollisionsDetailed, predictFilesDetailed } from './router.js';
+import { failedKeptSessionStatus } from './session-failure.ts';
+import { publicRouterDetails } from './router-details.ts';
+import { fsSources } from './router-sources.ts';
 import { buildImportGraph, detectSemanticNeighbors } from './imports.js';
 import { computeWorkspaceWarnings } from './workspaces.js';
 import { enqueueTask, readQueue, removeTask } from './queue.js';
 import { runTestGate } from './gate.js';
+import { collectConfiguredSecretEnvNames } from './gate-env.ts';
 import {
   createConflictTicket,
   readTicketDetail,
@@ -50,6 +54,7 @@ import { readState, recordSemanticFailure, recordSemanticSuccess } from './state
 import { emitStriartEvent } from './events.js';
 import { fetchBranchToRef, incomingRef, resolveBranchHead, syncAgentWithMain } from './sync.js';
 import { refreshCloneMemories, updateMemoryAfterMerge } from './memory.js';
+import { redactSecrets, secretValuesFromEnv } from './redact-secrets.ts';
 import { logger } from './logger.js';
 import {
   assertMainLockHeld,
@@ -64,7 +69,17 @@ import { releaseAgentArtifacts } from './agent-artifacts.ts';
 import { stopPtyHost } from './pty-host.ts';
 import { findProtectedChanges, resolveProtectedPathsPolicy } from './protected-paths.ts';
 import { concludeAutonomousSession } from './autonomous-cycle.ts';
+import {
+  commitMergeBounded,
+  runCommitBounded,
+  deliverSerialized,
+  deliveryErrorText,
+  planMergeDelivery,
+  planPromotionDelivery,
+  settlePendingDeliveries,
+} from './delivery.ts';
 import { withTokenContext } from './tokens/context.ts';
+import { PhaseTimer } from './timings.ts';
 import { resolveTokensSettings } from './tokens/settings.ts';
 
 /**
@@ -79,6 +94,9 @@ function gateContainerOptions(config) {
     orphanGraceMs: config.gateOrphanGraceMs,
     maxOutputBytes: config.gateMaxOutputBytes,
     container: config.gateContainer,
+    // Environnement du gate : liste blanche, sans clé d'API (voir gate-env.ts).
+    gateEnv: config.gateEnv,
+    secretEnvNames: collectConfiguredSecretEnvNames(config),
   };
 }
 
@@ -91,7 +109,12 @@ function gateContainerOptions(config) {
  * est reporté APRÈS la libération du verrou par `runWithDeferredEffects` — dans
  * l'ordre d'émission, y compris quand l'opération échoue (un ticket créé avant
  * l'erreur doit toujours être annoncé).
- * @typedef {{events: Array<{config: import('./types.js').StriartConfig, event: import('./types.js').StriartEvent}>, memory: null | {root: string, config: import('./types.js').StriartConfig, agent: string, taskId: string|null, sha: string, diff: string}}} DeferredEffects
+ *
+ * Livraisons (push vers `origin`) : même règle. Un hook pre-push d'entreprise,
+ * une authentification ou un proxy lent ne doivent jamais geler l'orchestrateur ;
+ * le push part donc APRÈS la libération du verrou, du SHA exact testé, et son
+ * issue est reportée dans `result.delivery` / `result.pushError`.
+ * @typedef {{events: Array<{config: import('./types.js').StriartConfig, event: import('./types.js').StriartEvent}>, deliveries: Array<{config: import('./types.js').StriartConfig, request: import('./delivery.ts').DeliveryRequest}>, memory: null | {root: string, config: import('./types.js').StriartConfig, agent: string, taskId: string|null, sha: string, diff: string}, timer: PhaseTimer}} DeferredEffects
  */
 /** @type {AsyncLocalStorage<DeferredEffects>} */
 const effectsContext = new AsyncLocalStorage();
@@ -118,28 +141,152 @@ async function emitEvent(config, event) {
  * imbriquée dépose ses effets chez l'appelant le plus externe.
  * @template T
  * @param {() => Promise<T>} fn
+ * @param {{startedAt?: number, before?: Partial<Record<import('./timings.ts').PhaseName, number>>}} [options]
+ *   `startedAt` (horloge monotone) : début réel de l'opération, si des phases l'ont précédée ;
+ *   `before` : leurs durées.
  * @returns {Promise<T>}
  */
-async function runWithDeferredEffects(fn) {
+async function runWithDeferredEffects(fn, { startedAt, before } = {}) {
   if (effectsContext.getStore()) return fn();
   /** @type {DeferredEffects} */
-  const effects = { events: [], memory: null };
+  const effects = {
+    events: [],
+    deliveries: [],
+    memory: null,
+    timer: new PhaseTimer(undefined, startedAt),
+  };
+  // Phases déjà écoulées AVANT l'entrée dans l'opération (le Router de `runTask`, hors verrou).
+  for (const [phase, ms] of Object.entries(before ?? {}))
+    effects.timer.add(/** @type {any} */ (phase), ms);
   /** @type {T} */
   let result;
+  /** @type {import('./types.js').DeliveryReport[]} */
+  let deliveries;
   try {
     result = await effectsContext.run(effects, fn);
   } finally {
     for (const { config, event } of effects.events) await emitStriartEvent(config, event);
+    // Même quand l'opération échoue APRÈS le commit : le travail local existe, sa
+    // livraison (comme avant, où le push était inline) ne doit pas se perdre.
+    deliveries = await effects.timer.measure('delivery', () =>
+      runDeferredDeliveries(effects.deliveries),
+    );
+  }
+  if (deliveries.length > 0 && result && typeof result === 'object') {
+    const [report] = deliveries;
+    /** @type {any} */ (result).delivery = report;
+    /** @type {any} */ (result).pushError = deliveryErrorText(report);
   }
   if (effects.memory && result && typeof result === 'object') {
     const { root, config, agent, taskId, sha, diff } = effects.memory;
-    const memory = await withTokenContext({ root, agent, taskId }, () =>
-      updateMemoryAfterMerge({ root, config, agent, sha, diff }),
-    );
-    await refreshLiveMemory(root, config);
+    const memory = await effects.timer.measure('memory', async () => {
+      const summary = await withTokenContext({ root, agent, taskId }, () =>
+        updateMemoryAfterMerge({ root, config, agent, sha, diff }),
+      );
+      await refreshLiveMemory(root, config);
+      return summary;
+    });
     /** @type {any} */ (result).memory = memory;
   }
+  // Mesure (L8), additive : lue par `--json`, le dashboard et le banc `bench:merge`.
+  if (result && typeof result === 'object' && !Array.isArray(result)) {
+    /** @type {any} */ (result).timings = effects.timer.snapshot();
+  }
   return result;
+}
+
+/**
+ * Mesure `fn` dans la phase `phase` de l'opération en cours (aucun effet hors opération : `fn`
+ * court telle quelle). Le temps est mesuré même si `fn` throw.
+ * @template T
+ * @param {import('./timings.ts').PhaseName} phase
+ * @param {() => Promise<T> | T} fn
+ * @returns {Promise<T>}
+ */
+async function timed(phase, fn) {
+  const effects = effectsContext.getStore();
+  return effects ? effects.timer.measure(phase, fn) : fn();
+}
+
+/**
+ * `withMainLock` d'une opération MESURÉE : l'attente est comptée dans `lockWait` (de l'appel à
+ * l'entrée dans la section critique) et la section dans `lockHeld`. Réservé aux points d'entrée
+ * (la réentrance ne double pas `lockHeld` : `PhaseTimer.measure` ignore la phase imbriquée).
+ * @template T
+ * @param {string} root
+ * @param {string} label
+ * @param {() => Promise<T>} fn
+ * @param {Parameters<typeof withMainLock>[3]} [options]
+ * @returns {Promise<T>}
+ */
+function withMainLockTimed(root, label, fn, options) {
+  const timer = effectsContext.getStore()?.timer;
+  if (!timer) return withMainLock(root, label, fn, options);
+  const asked = performance.now();
+  return withMainLock(
+    root,
+    label,
+    () => {
+      timer.add('lockWait', performance.now() - asked);
+      return timer.measure('lockHeld', fn);
+    },
+    options,
+  );
+}
+
+/**
+ * Exécute les livraisons différées (le verrou est LIBRE), dans l'ordre, et
+ * annonce chaque échec (et la branche livrée en mode `branch`). Ne lève jamais :
+ * un push raté n'annule pas le merge local, il reste visible.
+ * @param {DeferredEffects['deliveries']} pending
+ * @returns {Promise<import('./types.js').DeliveryReport[]>}
+ */
+async function runDeferredDeliveries(pending) {
+  /** @type {import('./types.js').DeliveryReport[]} */
+  const reports = [];
+  for (const { config, request } of pending) {
+    const report = await deliverSerialized(request);
+    reports.push(report);
+    if (!report.pushed) {
+      logger.error(
+        { code: report.code, ref: report.ref, sha: report.sha },
+        `Livraison vers origin/${report.ref ?? '?'} échouée`,
+      );
+      await emitStriartEvent(config, {
+        type: 'delivery:failed',
+        sha: report.sha,
+        ref: report.ref,
+        code: report.code ?? 'PUSH_FAILED',
+        message:
+          `⚠️ [Striart] Livraison de ${report.sha.slice(0, 8)} vers origin/${report.ref ?? '?'} échouée (${report.code}) — le merge local reste valide. ${report.hint ?? ''}`.trim(),
+      });
+    } else if (report.mode === 'branch' && report.ref) {
+      await emitStriartEvent(config, {
+        type: 'delivery:branch',
+        sha: report.sha,
+        ref: report.ref,
+        message: `📬 [Striart] ${report.sha.slice(0, 8)} livré sur origin/${report.ref} — à approuver depuis la forge (PR/MR).`,
+      });
+    }
+  }
+  return reports;
+}
+
+/**
+ * Planifie une livraison : différée après la libération du verrou quand une
+ * opération sous verrou est en cours (toujours le cas en production). Hors
+ * opération — impossible depuis les points d'entrée publics — elle part
+ * immédiatement.
+ * @param {import('./types.js').StriartConfig} config
+ * @param {import('./delivery.ts').DeliveryRequest} request
+ */
+async function scheduleDelivery(config, request) {
+  const effects = effectsContext.getStore();
+  if (effects) {
+    effects.deliveries.push({ config, request });
+    return;
+  }
+  await runDeferredDeliveries([{ config, request }]);
 }
 
 /**
@@ -201,7 +348,30 @@ function activeAgents(registry) {
   return Object.entries(registry).map(([name, meta]) => ({
     name,
     predictedFiles: meta.predictedFiles ?? [],
+    // Clone conservé après une session en échec, sans commit : la sentinelle WHOLE_REPO ne
+    // l'attend pas (session-failure.ts) ; une collision sur fichier précis le retient toujours.
+    sessionFailed: failedKeptSessionStatus(meta),
   }));
+}
+
+/**
+ * Événement visible quand la sentinelle WHOLE_REPO n'attend plus un clone en échec : jamais
+ * silencieux. `relaxed` vient de `detectCollisionsDetailed`.
+ * @param {import('./types.js').StriartConfig} config
+ * @param {string} agent
+ * @param {Array<{agent: string, reason: 'SESSION_FAILED', status: string}>} relaxed
+ * @param {string|null} [taskId]
+ */
+async function emitSerializationRelaxed(config, agent, relaxed, taskId = null) {
+  if (relaxed.length === 0) return;
+  const names = relaxed.map((r) => `${r.agent} (${r.status})`).join(', ');
+  await emitEvent(config, {
+    type: 'task:serialization-relaxed',
+    agent,
+    taskId,
+    relaxedBlockers: relaxed,
+    message: `⚠️ [Striart] Tâche ${agent} : la sérialisation prudente (prédiction vague ou globale) n'attend pas ${names} — session terminée en échec, clone conservé sans commit à merger. Une collision sur fichier précis reste bloquante.`,
+  });
 }
 
 /**
@@ -338,6 +508,7 @@ function assertTaskAdmissible({ agent, after, registry, queue }) {
  * @returns {Promise<import('./types.js').RunResult>}
  */
 export async function runTask(params) {
+  const runStartedAt = performance.now();
   const { root } = params;
   await assertInitialized(root);
 
@@ -375,6 +546,7 @@ export async function runTask(params) {
   });
 
   const config = await loadConfig(root);
+  const routeStartedAt = performance.now();
   // Fail fast : sans branche cible, l'agent démarrerait mais aucun merge
   // ne pourrait jamais aboutir. Vérifié AVANT l'appel au Router (LLM).
   const headSha = await resolveBranchHead(simpleGit(root), config.targetBranch);
@@ -393,8 +565,8 @@ export async function runTask(params) {
   // agent (budgets perAgent/perDay, `striart usage`). Pas de taskId : la tâche
   // n'existe qu'une fois le clone créé, après la prédiction. `headSha` lie le
   // cache des prédictions à l'état de la cible : un nouveau commit l'invalide.
-  const predictedFiles = await withTokenContext({ root, agent }, () =>
-    predictFiles({
+  const prediction = await withTokenContext({ root, agent }, () =>
+    predictFilesDetailed({
       prompt: params.prompt,
       projectFiles,
       config,
@@ -405,6 +577,13 @@ export async function runTask(params) {
     }),
   );
 
+  const predictedFiles = prediction.files;
+  // Détail du Router (raison de sérialisation, tenue de livre, expansions) : ADDITIF,
+  // aucune décision ci-dessous n'en dépend — elles se prennent sur `predictedFiles`.
+  const routing = publicRouterDetails(prediction.details);
+
+  const routeMs = performance.now() - routeStartedAt;
+
   // Graphe d'imports (lecture disque, potentiellement long) : construit hors
   // verrou dès que la tâche a une chance de démarrer — pas pour une tâche que
   // l'instantané voit déjà en collision ou en attente d'un `--after`.
@@ -414,23 +593,26 @@ export async function runTask(params) {
     Boolean(params.after);
   if (!wouldQueue) graph = await tryBuildImportGraph(root, projectFiles);
 
-  return runWithDeferredEffects(() =>
-    withMainLock(
-      root,
-      `run:${params.agent ?? 'auto'}`,
-      () =>
-        runTaskLocked({
-          ...params,
-          agent,
-          generatedName,
-          config,
-          projectFiles,
-          predictedFiles,
-          graph,
-        }),
-      // `signal` n'annule que l'ATTENTE du verrou, jamais une tâche commencée.
-      { signal: params.signal ?? null },
-    ),
+  return runWithDeferredEffects(
+    () =>
+      withMainLockTimed(
+        root,
+        `run:${params.agent ?? 'auto'}`,
+        () =>
+          runTaskLocked({
+            ...params,
+            agent,
+            generatedName,
+            config,
+            projectFiles,
+            predictedFiles,
+            routing,
+            graph,
+          }),
+        // `signal` n'annule que l'ATTENTE du verrou, jamais une tâche commencée.
+        { signal: params.signal ?? null },
+      ),
+    { startedAt: runStartedAt, before: { route: routeMs } },
   );
 }
 
@@ -441,7 +623,10 @@ export async function runTask(params) {
  */
 async function tryBuildImportGraph(root, projectFiles) {
   try {
-    return await buildImportGraph(root, projectFiles);
+    // Mêmes `sources` que le Router : l'analyse de chaque fichier est mémorisée par
+    // (liste de fichiers, chemin, version) dans le cache du graphe, que le Router
+    // a déjà rempli pour CETTE prédiction — on ne relit que ce qui a changé.
+    return await buildImportGraph(root, projectFiles, fsSources(root));
   } catch (error) {
     logger.warn(
       { err: error },
@@ -472,7 +657,7 @@ async function refreshLiveMemory(root, config) {
  * Partie sous verrou de `runTask` : état frais, collision, file ou clone. Tout
  * ce qui est lent a déjà été fait (prédiction, graphe) ; les événements sont
  * différés (`emitEvent`).
- * @param {{root: string, agent: string, generatedName: boolean, prompt: string, config: import('./types.js').StriartConfig, projectFiles: string[], predictedFiles: string[], graph: any, command?: string|null, mode?: 'attended'|'autonomous', profile?: string|null, after?: string|null, reuse?: boolean, force?: boolean, allowHistoricalSecrets?: boolean}} params
+ * @param {{root: string, agent: string, generatedName: boolean, prompt: string, config: import('./types.js').StriartConfig, projectFiles: string[], predictedFiles: string[], routing?: import('./router-details.ts').PublicRouterDetails|null, graph: any, command?: string|null, mode?: 'attended'|'autonomous', profile?: string|null, after?: string|null, reuse?: boolean, force?: boolean, allowHistoricalSecrets?: boolean}} params
  * @returns {Promise<import('./types.js').RunResult>}
  */
 async function runTaskLocked({
@@ -483,6 +668,7 @@ async function runTaskLocked({
   config,
   projectFiles,
   predictedFiles,
+  routing = null,
   graph: prebuiltGraph,
   command = null,
   mode = 'attended',
@@ -503,12 +689,13 @@ async function runTaskLocked({
       : requestedAgent;
   assertTaskAdmissible({ agent, after, registry, queue });
 
-  const collisions = detectCollisions(predictedFiles, activeAgents(registry));
+  const { collisions, relaxed } = detectCollisionsDetailed(predictedFiles, activeAgents(registry));
   if (collisions.length > 0 || after) {
     const task = await enqueueTask(root, {
       agent,
       prompt,
       predictedFiles,
+      routing,
       collisions,
       command,
       after,
@@ -535,8 +722,16 @@ async function runTaskLocked({
       after,
       message: `⛔ [Striart] Tâche ${task.id} (agent ${agent}) ${cause} — mise en file d'attente.`,
     });
+    await emitSerializationRelaxed(config, agent, relaxed, task.id);
     await refreshLiveMemory(root, config);
-    return { status: 'QUEUED', task, predictedFiles, collisions };
+    return {
+      status: 'QUEUED',
+      task,
+      predictedFiles,
+      collisions,
+      routing,
+      ...(relaxed.length > 0 ? { relaxedBlockers: relaxed } : {}),
+    };
   }
 
   // Voisinage sémantique (graphe d'imports) : AVERTIT quand la tâche touche
@@ -614,14 +809,25 @@ async function runTaskLocked({
         profile,
         allowHistoricalSecrets,
       });
+  // Détail du Router au registre : la vue d'état explique pourquoi l'agent a été (ou non)
+  // sérialisé. Même verrou principal que le clone ; best effort — une panne d'écriture
+  // d'un champ purement informatif ne défait pas un clone déjà créé.
+  if (routing) {
+    await updateAgentMeta(root, agent, { routing }).catch((error) => {
+      logger.warn({ err: error, agent }, 'Détail du Router non enregistré au registre (ignoré)');
+    });
+  }
+  await emitSerializationRelaxed(config, agent, relaxed, info.taskId ?? null);
   await refreshLiveMemory(root, config);
   return {
     status: 'STARTED',
     info,
     predictedFiles,
+    routing,
     collisions: [],
     semanticWarnings,
     workspaceWarnings,
+    ...(relaxed.length > 0 ? { relaxedBlockers: relaxed } : {}),
   };
 }
 
@@ -775,6 +981,9 @@ export async function runAutonomousTask({
       onSpawn: async (pid) => {
         await updateAgentMeta(root, name, {
           sessionPid: pid ?? process.pid,
+          // Superviseur de la session (ce process) : le GC d'inactivité lui demande de fermer SA
+          // session (src/idle/close.ts) au lieu de deviner un PID.
+          sessionOwnerPid: process.pid,
           sessionStartedAt: new Date().toISOString(),
         });
       },
@@ -784,12 +993,14 @@ export async function runAutonomousTask({
     // gèlerait les rebases de ce clone jusqu'à son retrait du registre.
     // (Le contrôle de vitalité rattraperait le cas, mais un PID recyclé par
     // l'OS pourrait le faire mentir — mieux vaut nettoyer explicitement.)
-    await updateAgentMeta(root, name, { sessionPid: null }).catch((unpublishError) => {
-      logger.warn(
-        { agent: name, err: unpublishError },
-        'Dépublication du PID de session impossible',
-      );
-    });
+    await updateAgentMeta(root, name, { sessionPid: null, sessionOwnerPid: null }).catch(
+      (unpublishError) => {
+        logger.warn(
+          { agent: name, err: unpublishError },
+          'Dépublication du PID de session impossible',
+        );
+      },
+    );
     throw error;
   }
 
@@ -800,7 +1011,7 @@ export async function runAutonomousTask({
   // MERGED, mais bruyant (`warnings: ['ALREADY_INTEGRATED']`, événement dédié).
   // Sans mergeMode différé, jamais KEPT / NOTHING_STARTED / MERGE_DEFERRED
   // (cas propres au proxy ACP) : le résultat est bien un AutonomousResult.
-  return /** @type {import('./types.js').AutonomousResult} */ (
+  const outcome = /** @type {import('./types.js').AutonomousResult} */ (
     await concludeAutonomousSession({
       root,
       config,
@@ -812,6 +1023,13 @@ export async function runAutonomousTask({
       wording: 'runner',
     })
   );
+  // Sérialisation prudente allégée au départ (clone en échec non attendu) : rendu visible dans
+  // le résultat, jamais silencieux (l'événement `task:serialization-relaxed` est déjà parti).
+  if (started.relaxedBlockers?.length) {
+    outcome.relaxedBlockers = started.relaxedBlockers;
+    outcome.warnings = [...(outcome.warnings ?? []), 'SERIALIZATION_RELAXED'];
+  }
+  return outcome;
 }
 
 /**
@@ -1164,7 +1382,11 @@ async function assertMainReady(mainGit, expectedBranch) {
       { code: 'MAIN_DIRTY', hint: 'git status', details: { files: [...new Set(dirtyFiles)] } },
     );
   }
-  const currentBranch = (await mainGit.revparse(['--abbrev-ref', 'HEAD'])).trim();
+  // Branche cible sans commit (dépôt vide, ou branche inexistante) : refus classé,
+  // le même que `start`, avant tout `revparse HEAD` qui remonterait le message
+  // brut de git (« ambiguous argument 'HEAD' »).
+  await resolveBranchHead(mainGit, expectedBranch);
+  const currentBranch = await currentBranchName(mainGit);
   if (currentBranch !== expectedBranch) {
     throw new StriartError(
       `Le repo principal est sur "${currentBranch}" mais la branche attendue est "${expectedBranch}". Checkout la branche ou ajuste striart.config.`,
@@ -1174,6 +1396,38 @@ async function assertMainReady(mainGit, expectedBranch) {
         details: { currentBranch, expectedBranch },
       },
     );
+  }
+}
+
+/**
+ * Sortie d'un process de la cible (hook, signature) sans secret : valeurs exactes des
+ * variables secrètes de l'orchestrateur (dont `apiKeyEnv` des LLM configurés) puis
+ * motifs reconnus — même règle que le journal du Test Gate.
+ * @param {string} text @param {import('./types.js').StriartConfig} config
+ */
+function redactHookOutput(text, config) {
+  const extraNames = [
+    config.llm?.apiKeyEnv,
+    ...Object.values(config.llmRoles ?? {}).map((r) => r?.apiKeyEnv),
+  ].filter((n) => typeof n === 'string' && n.length > 0);
+  return redactSecrets(text, { values: secretValuesFromEnv(process.env, extraNames) });
+}
+
+/**
+ * Nom de la branche de HEAD. `--abbrev-ref HEAD` échoue sur une branche non née
+ * (aucun commit) : `symbolic-ref` la nomme quand même. HEAD détaché → « HEAD »
+ * (comme `--abbrev-ref`), donc jamais égal à une branche attendue.
+ * @param {import('simple-git').SimpleGit} git
+ */
+async function currentBranchName(git) {
+  try {
+    return (await git.revparse(['--abbrev-ref', 'HEAD'])).trim();
+  } catch {
+    // HEAD non née : la branche existe dans HEAD sans commit au bout.
+    const unborn = (
+      await git.raw(['symbolic-ref', '--short', '-q', 'HEAD']).catch(() => '')
+    ).trim();
+    return unborn || 'HEAD';
   }
 }
 
@@ -1209,31 +1463,106 @@ async function findTargetCarrier(git, sha) {
 }
 
 /**
- * Commit du merge ouvert par l'opération. Un refus de git (hook pre-commit /
- * commit-msg, identité absente) n'abandonne pas le principal en état « merging »
- * avec une erreur brute : le merge est annulé (s'il est toujours le nôtre) et
- * l'échec est nommé. Si l'annulation elle-même est refusée (état changé, verrou
- * perdu), CETTE erreur-là prime : l'état n'est plus le nôtre.
+ * Commit du merge ouvert par l'opération, hooks de la cible COMPRIS, sous le
+ * délai dur `commitTimeoutMs` (arbre de process tué). Jamais `--no-verify` : les
+ * hooks d'une entreprise ne se contournent pas.
+ *
+ * Trois issues d'échec, toutes avec le merge annulé (s'il est toujours le nôtre) :
+ *  - un hook de la cible rejette, ou hook/signature bloqué jusqu'au délai →
+ *    `COMMIT_HOOK_REJECTED`. Avec `ticketBase` (merge automatique) un ticket garde
+ *    la sortie BORNÉE du hook ; sans (résolution manuelle) le ticket d'origine reste
+ *    ouvert, intact. Ce n'est pas un échec du LLM : le compteur d'échecs sémantiques
+ *    n'est jamais touché ;
+ *  - tout autre refus de git (identité absente, signature impossible…) →
+ *    `MERGE_COMMIT_FAILED`, comme avant.
+ * Si l'annulation elle-même est refusée (état changé, verrou perdu), CETTE erreur-là
+ * prime : l'état n'est plus le nôtre.
  * @param {Parameters<typeof assertMergeIntact>[0]} integrity
  * @param {string} message
+ * @param {{config: import('./types.js').StriartConfig, ticketBase?: Omit<Parameters<typeof createConflictTicket>[1], 'reason'|'log'>, existingTicketId?: string}} options
  */
-async function commitMergeOrAbort(integrity, message) {
-  try {
-    await integrity.mainGit.commit(message);
-  } catch (error) {
-    await abortOwnMerge(integrity);
-    const cause = String(/** @type {Error} */ (error)?.message ?? error)
-      .replace(/\s+/g, ' ')
-      .slice(0, 500);
+async function commitMergeOrAbort(integrity, message, { config, ticketBase, existingTicketId }) {
+  const outcome = await commitMergeBounded({
+    root: integrity.root,
+    message,
+    timeoutMs: config.commitTimeoutMs,
+  });
+  if (outcome.ok) return;
+  await abortOwnMerge(integrity);
+  // Sortie d'un hook de la CIBLE : peut afficher un jeton. Caviardée UNE fois, ici, avant
+  // toute surface (ticket, message d'erreur, --json).
+  const output = redactHookOutput(outcome.output, config);
+  const cause = output.replace(/\s+/g, ' ').trim().slice(-500);
+
+  if (outcome.kind === 'other') {
     throw new StriartError(
       `git a refusé le commit de merge de "${integrity.agent}" (${cause}) : merge annulé, rien n'a été commité.`,
       {
         code: 'MERGE_COMMIT_FAILED',
         hint: 'git config user.name / user.email, ou corrige le hook pre-commit / commit-msg du dépôt, puis relance le merge',
         details: { agent: integrity.agent, operation: integrity.operation, cause },
-        cause: error,
       },
     );
+  }
+
+  const timedOut = outcome.kind === 'timeout';
+  const headline = timedOut
+    ? `[Striart] Le commit de merge a dépassé commitTimeoutMs (${config.commitTimeoutMs} ms) : un hook de la cible (pre-commit, commit-msg…) ou la signature est resté bloqué, l'arbre de process a été tué.`
+    : `[Striart] Un hook de la cible (pre-commit, commit-msg…) a rejeté le commit de merge (sortie ${outcome.exitCode}).`;
+  const truncationNote = outcome.truncated
+    ? '[…sortie tronquée : seule la fin est conservée…]\n'
+    : '';
+  const log = `${headline}\n${truncationNote}${output}`;
+  const ticket = ticketBase
+    ? await createConflictTicket(integrity.root, {
+        ...ticketBase,
+        reason: 'COMMIT_HOOK_REJECTED',
+        log,
+      })
+    : null;
+  const ticketId = ticket?.id ?? existingTicketId ?? null;
+  await emitEvent(config, {
+    type: 'merge:commit-rejected',
+    agent: integrity.agent,
+    ticketId,
+    timedOut,
+    message: `⛔ [Striart] Commit de merge de ${integrity.agent} ${timedOut ? 'bloqué (délai dépassé)' : 'rejeté par un hook de la cible'} — merge annulé${ticketId ? `, ticket ${ticketId}` : ''}.`,
+  });
+  throw new StriartError(
+    `${timedOut ? 'Le commit de merge' : 'Un hook de la cible a rejeté le commit de merge'} de "${integrity.agent}"` +
+      `${timedOut ? ` a dépassé ${config.commitTimeoutMs} ms (hook ou signature bloqué)` : ''}` +
+      `${cause ? ` : ${cause}` : ''}. Merge annulé, rien n'a été commité` +
+      `${ticket ? ` (ticket ${ticket.id}, sortie complète dans test-output.log)` : ''}.`,
+    {
+      code: 'COMMIT_HOOK_REJECTED',
+      hint: ticketId
+        ? `corrige ce que le hook reproche (sortie : ticket ${ticketId}), puis relance le merge ; un hook n'est jamais contourné`
+        : "corrige ce que le hook (pre-commit / commit-msg) ou la signature reproche, puis relance ; un hook n'est jamais contourné",
+      details: {
+        agent: integrity.agent,
+        operation: integrity.operation,
+        ticketId,
+        timedOut,
+        exitCode: outcome.exitCode,
+      },
+    },
+  );
+}
+
+/**
+ * Un commit de merge qui aboutit rend sans objet les tickets COMMIT_HOOK_REJECTED
+ * de l'agent (le hook ne rejette plus, ou l'humain l'a corrigé) : ils se ferment
+ * d'eux-mêmes. Jamais bloquant — le merge est déjà fait.
+ * @param {string} root @param {string} agent
+ */
+async function closeCommitHookTickets(root, agent) {
+  try {
+    const stale = (await listConflictTickets(root)).filter(
+      (t) => t.agent === agent && t.reason === 'COMMIT_HOOK_REJECTED',
+    );
+    for (const t of stale) await closeConflictTicket(root, t.id, { idempotent: true });
+  } catch (error) {
+    logger.warn({ err: error, agent }, 'Fermeture des tickets COMMIT_HOOK_REJECTED échouée');
   }
 }
 
@@ -1331,26 +1660,26 @@ async function abortOwnMerge(params) {
 
 /**
  * Post-commit partagé entre `mergeAgentCommitImpl` et
- * `applyTicketResolutionImpl` : push (si `autoPush`) et Memory Layer (si
+ * `applyTicketResolutionImpl` : livraison (si `autoPush`) et Memory Layer (si
  * `memoryLayer`). Factorisé pour que la résolution manuelle ait exactement
  * le même comportement que le merge automatique — un oubli ici privait
  * silencieusement `striart resolve --apply` du push et de la Memory Layer.
+ *
+ * La livraison n'a PAS lieu ici : elle est planifiée et part après la libération
+ * du verrou (`runWithDeferredEffects`), du SHA exact du commit de merge testé ;
+ * son issue arrive dans `result.delivery` / `result.pushError`.
  * @param {{mainGit: import('simple-git').SimpleGit, root: string, config: import('./types.js').StriartConfig, agent: string, taskId?: string|null, sha: string}} params
- * @returns {Promise<{mergeSha: string, pushError: string|null, memory: {updated: boolean, entry?: string, error?: string}|null}>}
+ * @returns {Promise<{mergeSha: string, pushError: null, memory: {updated: boolean, entry?: string, error?: string}|null}>}
  */
 async function finalizeMergeCommit({ mainGit, root, config, agent, taskId = null, sha }) {
   // Le commit de merge lui-même (sur la branche cible) — distinct de `sha`,
   // le commit de l'agent qui a été mergé. C'est lui qu'un rollback défait.
   const mergeSha = (await mainGit.revparse(['HEAD'])).trim();
-  let pushError = null;
   if (config.autoPush) {
-    try {
-      await mainGit.push('origin', config.targetBranch);
-    } catch (error) {
-      // Le merge local reste valide : on remonte l'erreur de push sans le défaire.
-      pushError = error.message;
-      logger.error({ err: error }, `Push vers origin/${config.targetBranch} échoué`);
-    }
+    await scheduleDelivery(
+      config,
+      planMergeDelivery({ root, config, agent, taskId, sha: mergeSha }),
+    );
   }
 
   // Memory Layer (advisory) : résumé LLM du merge, diffusé à tous les clones
@@ -1371,7 +1700,7 @@ async function finalizeMergeCommit({ mainGit, root, config, agent, taskId = null
       await refreshLiveMemory(root, config);
     }
   }
-  return { mergeSha, pushError, memory };
+  return { mergeSha, pushError: null, memory };
 }
 
 /**
@@ -1521,7 +1850,7 @@ async function refuseProtectedPathsMerge({
 export async function mergeAgentCommit(params) {
   // `signal` n'annule que l'ATTENTE du verrou, jamais un merge commencé.
   return runWithDeferredEffects(() =>
-    withMainLock(params.root, `merge:${params.agent}`, () => mergeAgentCommitImpl(params), {
+    withMainLockTimed(params.root, `merge:${params.agent}`, () => mergeAgentCommitImpl(params), {
       signal: params.signal ?? null,
     }),
   );
@@ -1555,7 +1884,9 @@ async function mergeAgentCommitImpl({ root, agent }) {
   /** @type {string|null} */
   let preRebaseHead = null;
   try {
-    preRebaseHead = await fetchBranchToRef(mainGit, meta.path, meta.branch, incomingRef(agent));
+    preRebaseHead = await timed('sync', () =>
+      fetchBranchToRef(mainGit, meta.path, meta.branch, incomingRef(agent)),
+    );
   } catch (error) {
     // Le fetch qui fait foi est refait après le rebase : il tranchera.
     logger.warn({ err: error }, 'Fetch du clone avant rebase échoué (refait après)');
@@ -1607,7 +1938,7 @@ async function mergeAgentCommitImpl({ root, agent }) {
   // rebase, on retombe sur le merge classique + fusion sémantique.
   let rebase = null;
   if (config.autoRebase) {
-    rebase = await syncAgentWithMain({ root, agent, config });
+    rebase = await timed('sync', () => syncAgentWithMain({ root, agent, config }));
     if (rebase.status === 'REBASED') {
       meta = (await readRegistry(root))[agent]; // baseCommit/lastMergedCommit mis à jour
     }
@@ -1618,7 +1949,9 @@ async function mergeAgentCommitImpl({ root, agent }) {
   // dans les tickets et dans lastMergedCommit. Lire la tête du clone à part
   // laissait un commit de l'agent s'intercaler entre la lecture et le fetch :
   // le SHA enregistré n'était alors plus celui mergé (audit L1).
-  const agentHead = await fetchBranchToRef(mainGit, meta.path, meta.branch, incomingRef(agent));
+  const agentHead = await timed('sync', () =>
+    fetchBranchToRef(mainGit, meta.path, meta.branch, incomingRef(agent)),
+  );
   const lastMerged = meta.lastMergedCommit ?? meta.baseCommit;
   if (agentHead === lastMerged) {
     // `lastMergedCommit` explicite : ce travail a DÉJÀ été mergé (par le watcher,
@@ -1677,12 +2010,14 @@ async function mergeAgentCommitImpl({ root, agent }) {
   // Un merge en conflit ne throw pas toujours côté simple-git avec --no-commit :
   // on vérifie l'état de conflit dans tous les cas, exception ou non.
   let mergeError = null;
-  try {
-    await mainGit.raw(['merge', agentHead, '--no-commit', '--no-ff']);
-  } catch (error) {
-    mergeError = error;
-  }
-  const conflicted = (await mainGit.status()).conflicted;
+  const conflicted = await timed('merge', async () => {
+    try {
+      await mainGit.raw(['merge', agentHead, '--no-commit', '--no-ff']);
+    } catch (error) {
+      mergeError = error;
+    }
+    return (await mainGit.status()).conflicted;
+  });
   let semantic = null;
   if (conflicted.length > 0) {
     // Les 3 versions sont extraites AVANT tout merge --abort : après, l'index est vidé.
@@ -1786,17 +2121,19 @@ async function mergeAgentCommitImpl({ root, agent }) {
     }
 
     try {
-      for (const res of resolutions) {
-        await mergeResolutionWithLlm({
-          mainGit,
-          root,
-          config,
-          agent,
-          taskId: meta.taskId,
-          res,
-          integrity: mergeIntegrity,
-        });
-      }
+      await timed('semantic', async () => {
+        for (const res of resolutions) {
+          await mergeResolutionWithLlm({
+            mainGit,
+            root,
+            config,
+            agent,
+            taskId: meta.taskId,
+            res,
+            integrity: mergeIntegrity,
+          });
+        }
+      });
     } catch (error) {
       // Verrou perdu ou état changé : le merge ouvert n'est plus (forcément) le
       // nôtre — ni l'annuler ni le compter comme un échec du LLM.
@@ -1826,6 +2163,10 @@ async function mergeAgentCommitImpl({ root, agent }) {
         status: 'CONFLICT',
         reason: 'SEMANTIC_MERGE_FAILED',
         error: error.message,
+        // Contrat stable : le texte ci-dessus est le français du noyau, localisé côté CLI par ce code.
+        ...(error instanceof StriartError
+          ? { errorCode: error.code, errorDetails: publicErrorDetails(error.details) }
+          : {}),
         manualMode: state2.manualMode,
         agent,
         sha: agentHead,
@@ -1861,12 +2202,14 @@ async function mergeAgentCommitImpl({ root, agent }) {
   // Dernière écriture de Striart dans l'index : son empreinte doit être
   // intacte au commit (garde d'index de assertMergeIntact).
   mergeIntegrity.expectedIndex = await indexFingerprint(mainGit);
-  let gate = await runTestGate({
-    cwd: root,
-    testCommand: config.testCommand,
-    timeoutMs: config.testTimeoutMs,
-    ...gateContainerOptions(config),
-  });
+  let gate = await timed('gate', () =>
+    runTestGate({
+      cwd: root,
+      testCommand: config.testCommand,
+      timeoutMs: config.testTimeoutMs,
+      ...gateContainerOptions(config),
+    }),
+  );
 
   // Retry post-gate (fusion sémantique uniquement) : le Merger reçoit le log
   // d'échec des tests et corrige sa propre fusion avant le ticket humain.
@@ -1879,18 +2222,20 @@ async function mergeAgentCommitImpl({ root, agent }) {
     for (let attempt = 1; attempt <= config.semanticGateRetries && !gate.success; attempt += 1) {
       const feedback = gate.log.slice(-GATE_FEEDBACK_MAX_CHARS);
       try {
-        for (const res of semantic.resolutions) {
-          await mergeResolutionWithLlm({
-            mainGit,
-            root,
-            config,
-            agent,
-            taskId: meta.taskId,
-            res,
-            feedback,
-            integrity: mergeIntegrity,
-          });
-        }
+        await timed('semantic', async () => {
+          for (const res of semantic.resolutions) {
+            await mergeResolutionWithLlm({
+              mainGit,
+              root,
+              config,
+              agent,
+              taskId: meta.taskId,
+              res,
+              feedback,
+              integrity: mergeIntegrity,
+            });
+          }
+        });
       } catch (error) {
         // LLM en échec pendant le retry : on garde le gate rouge courant,
         // le chemin ticket ci-dessous s'applique.
@@ -1905,12 +2250,14 @@ async function mergeAgentCommitImpl({ root, agent }) {
       }
       mergeIntegrity.expectedIndex = await indexFingerprint(mainGit);
       gateRetries = attempt;
-      gate = await runTestGate({
-        cwd: root,
-        testCommand: config.testCommand,
-        timeoutMs: config.testTimeoutMs,
-        ...gateContainerOptions(config),
-      });
+      gate = await timed('gate', () =>
+        runTestGate({
+          cwd: root,
+          testCommand: config.testCommand,
+          timeoutMs: config.testTimeoutMs,
+          ...gateContainerOptions(config),
+        }),
+      );
       logger.info(
         `Retry sémantique ${attempt}/${config.semanticGateRetries} : Test Gate ${gate.success ? 'vert' : 'rouge'}`,
       );
@@ -1963,28 +2310,42 @@ async function mergeAgentCommitImpl({ root, agent }) {
 
   // Le Test Gate (et les retries LLM) ont pu durer des minutes : avant
   // l'effet irréversible, le merge ouvert doit être toujours le nôtre.
-  await assertMergeIntact(mergeIntegrity);
-  await commitMergeOrAbort(
-    mergeIntegrity,
-    formatMergeSubject({
+  const { mergeSha, pushError, memory } = await timed('commit', async () => {
+    await assertMergeIntact(mergeIntegrity);
+    await commitMergeOrAbort(
+      mergeIntegrity,
+      formatMergeSubject({
+        agent,
+        branch: meta.branch,
+        agentSha: agentHead,
+        semanticFiles: semantic?.resolvedFiles ?? [],
+      }),
+      {
+        config,
+        ticketBase: {
+          agent,
+          branch: meta.branch,
+          sha: agentHead,
+          conflictedFiles: semantic?.resolvedFiles ?? [],
+          prompt: meta.prompt,
+        },
+      },
+    );
+    if (semantic) await recordSemanticSuccess(root);
+    await closeCommitHookTickets(root, agent);
+
+    const finalized = await finalizeMergeCommit({
+      mainGit,
+      root,
+      config,
       agent,
-      branch: meta.branch,
-      agentSha: agentHead,
-      semanticFiles: semantic?.resolvedFiles ?? [],
-    }),
-  );
-  if (semantic) await recordSemanticSuccess(root);
+      taskId: meta.taskId,
+      sha: agentHead,
+    });
 
-  const { mergeSha, pushError, memory } = await finalizeMergeCommit({
-    mainGit,
-    root,
-    config,
-    agent,
-    taskId: meta.taskId,
-    sha: agentHead,
+    await updateAgentMeta(root, agent, { lastMergedCommit: agentHead });
+    return finalized;
   });
-
-  await updateAgentMeta(root, agent, { lastMergedCommit: agentHead });
   return {
     status: 'MERGED',
     agent,
@@ -2037,7 +2398,7 @@ const MANUALLY_APPLICABLE_REASONS = new Set([
 /** @param {{root: string, ticketId: string, signal?: AbortSignal|null}} params @returns {Promise<import('./types.js').ManualResolutionResult>} */
 export async function applyTicketResolution(params) {
   return runWithDeferredEffects(() =>
-    withMainLock(
+    withMainLockTimed(
       params.root,
       `resolve-apply:${params.ticketId}`,
       () => applyTicketResolutionImpl(params),
@@ -2124,14 +2485,14 @@ async function applyTicketResolutionImpl({ root, ticketId }) {
   // Refetch avant de vérifier l'accessibilité : après un merge --abort, les
   // objets fetchés restent en général en place, mais rien ne le garantit
   // (gc). Un fetch réhydrate sans coût si c'est déjà là.
-  await fetchBranchToRef(mainGit, meta.path, meta.branch, incomingRef(ticket.agent)).catch(
-    (error) => {
+  await timed('sync', () =>
+    fetchBranchToRef(mainGit, meta.path, meta.branch, incomingRef(ticket.agent)).catch((error) => {
       // Pas bloquant : le contrôle d'accessibilité ci-dessous tranche (STALE_TICKET).
       logger.warn(
         { agent: ticket.agent, err: error.message },
         'Refetch du clone avant --apply échoué',
       );
-    },
+    }),
   );
   const shaReachable = await mainGit.raw(['cat-file', '-e', ticket.sha]).then(
     () => true,
@@ -2192,26 +2553,30 @@ async function applyTicketResolutionImpl({ root, ticketId }) {
     expectedIndex: /** @type {string | null} */ (null),
   };
   let mergeError = null;
-  try {
-    await mainGit.raw(['merge', ticket.sha, '--no-commit', '--no-ff']);
-  } catch (error) {
-    mergeError = error;
-  }
-  const status = await mainGit.status();
+  const status = await timed('merge', async () => {
+    try {
+      await mainGit.raw(['merge', ticket.sha, '--no-commit', '--no-ff']);
+    } catch (error) {
+      mergeError = error;
+    }
+    return mainGit.status();
+  });
   // Un ticket de chemins protégés se rejoue normalement SANS conflit : seul
   // « déjà mergé » le rend sans objet.
   if (alreadyMerged || (!isProtectedTicket && status.conflicted.length === 0 && !mergeError)) {
     // Déjà mergé, ou le conflit ne se reproduit plus : rien à appliquer, et
     // le ticket (et ses doublons éventuels) n'a plus de raison de rester ouvert.
     await abortMerge(mainGit, root);
-    await closeConflictTicket(root, ticketId);
+    await closeConflictTicket(root, ticketId, { idempotent: true });
     const staleDuplicates = (await listConflictTickets(root)).filter(
       (t) =>
         t.id !== ticketId &&
         t.agent === ticket.agent &&
         t.conflictedFiles.some((f) => ticket.conflictedFiles.includes(f)),
     );
-    for (const dup of staleDuplicates) await closeConflictTicket(root, dup.id);
+    for (const dup of staleDuplicates) {
+      await closeConflictTicket(root, dup.id, { idempotent: true });
+    }
     return { status: 'ALREADY_CLEAN', ticketId, agent: ticket.agent, sha: ticket.sha };
   }
 
@@ -2308,12 +2673,14 @@ async function applyTicketResolutionImpl({ root, ticketId }) {
   }
 
   mergeIntegrity.expectedIndex = await indexFingerprint(mainGit);
-  const gate = await runTestGate({
-    cwd: root,
-    testCommand: config.testCommand,
-    timeoutMs: config.testTimeoutMs,
-    ...gateContainerOptions(config),
-  });
+  const gate = await timed('gate', () =>
+    runTestGate({
+      cwd: root,
+      testCommand: config.testCommand,
+      timeoutMs: config.testTimeoutMs,
+      ...gateContainerOptions(config),
+    }),
+  );
   if (!gate.success) {
     await abortOwnMerge(mergeIntegrity);
     // Pas un échec du LLM : le compteur de fusion sémantique n'est pas touché,
@@ -2321,31 +2688,35 @@ async function applyTicketResolutionImpl({ root, ticketId }) {
     return { status: 'GATE_FAILED', ticketId, agent: ticket.agent, sha: ticket.sha, gate };
   }
 
-  await assertMergeIntact(mergeIntegrity);
-  await commitMergeOrAbort(
-    mergeIntegrity,
-    formatMergeSubject({
-      agent: ticket.agent,
-      branch: ticket.branch,
-      agentSha: ticket.sha,
-      ticketId,
-    }),
-  );
-  await recordSemanticSuccess(root);
+  const { mergeSha, pushError, memory } = await timed('commit', async () => {
+    await assertMergeIntact(mergeIntegrity);
+    await commitMergeOrAbort(
+      mergeIntegrity,
+      formatMergeSubject({
+        agent: ticket.agent,
+        branch: ticket.branch,
+        agentSha: ticket.sha,
+        ticketId,
+      }),
+      // Pas de nouveau ticket : celui qu'on applique reste ouvert, intact.
+      { config, existingTicketId: ticketId },
+    );
+    await recordSemanticSuccess(root);
 
-  const { mergeSha, pushError, memory } = await finalizeMergeCommit({
-    mainGit,
-    root,
-    config,
-    agent: ticket.agent,
-    // L'agent peut avoir disparu du registre depuis le ticket : alors sans tâche.
-    taskId: (await readRegistry(root))[ticket.agent]?.taskId ?? null,
-    sha: ticket.sha,
+    const finalized = await finalizeMergeCommit({
+      mainGit,
+      root,
+      config,
+      agent: ticket.agent,
+      // L'agent peut avoir disparu du registre depuis le ticket : alors sans tâche.
+      taskId: (await readRegistry(root))[ticket.agent]?.taskId ?? null,
+      sha: ticket.sha,
+    });
+    await updateAgentMeta(root, ticket.agent, { lastMergedCommit: ticket.sha });
+    return finalized;
   });
 
-  await updateAgentMeta(root, ticket.agent, { lastMergedCommit: ticket.sha });
-
-  await closeConflictTicket(root, ticketId);
+  await closeConflictTicket(root, ticketId, { idempotent: true });
   // Referme aussi les autres tickets ouverts du même agent portant sur (au
   // moins un) des mêmes fichiers : des tentatives successives du même
   // conflit (l'agent a recommité avant que le précédent soit traité), pas
@@ -2356,7 +2727,9 @@ async function applyTicketResolutionImpl({ root, ticketId }) {
       t.agent === ticket.agent &&
       t.conflictedFiles.some((f) => ticketFiles.has(f)),
   );
-  for (const other of otherOpenTickets) await closeConflictTicket(root, other.id);
+  for (const other of otherOpenTickets) {
+    await closeConflictTicket(root, other.id, { idempotent: true });
+  }
 
   await emitEvent(config, {
     type: 'merge:manual-resolution',
@@ -2589,7 +2962,10 @@ async function retryQueueImpl({ root }) {
 
   for (const task of await readQueue(root)) {
     const registry = await readRegistry(root);
-    const collisions = detectCollisions(task.predictedFiles, activeAgents(registry));
+    const { collisions, relaxed } = detectCollisionsDetailed(
+      task.predictedFiles,
+      activeAgents(registry),
+    );
     // Une dépendance `after` encore active ajourne la tâche, collision ou
     // pas. La file est relue à chaque itération : une tâche démarrée dans ce
     // même passage (devenue agent au registre) bloque toujours ses suivantes.
@@ -2645,7 +3021,13 @@ async function retryQueueImpl({ root }) {
       });
       continue;
     }
+    if (task.routing) {
+      await updateAgentMeta(root, task.agent, { routing: task.routing }).catch((error) => {
+        logger.warn({ err: error, agent: task.agent }, 'Détail du Router non enregistré (ignoré)');
+      });
+    }
     await removeTask(root, task.id);
+    await emitSerializationRelaxed(config, task.agent, relaxed, task.id);
     await emitEvent(config, {
       type: 'task:started',
       agent: task.agent,
@@ -2720,7 +3102,7 @@ async function reconcileImpl({ root }) {
         root,
         agent,
         { sessionPid: meta.sessionPid },
-        { sessionPid: null },
+        { sessionPid: null, sessionOwnerPid: null },
       );
       if (applied) sessionPidsCleared.push(agent);
     }
@@ -3008,6 +3390,60 @@ async function isPublishedOnOrigin(git, branch) {
   }
 }
 
+/**
+ * `git revert -m 1` du merge publié, sous le délai dur `commitTimeoutMs` : le revert
+ * crée un commit, donc signature (GPG/SSH, passphrase) et `prepare-commit-msg` de la
+ * cible tournent SOUS le verrou. Un échec ou un délai défait l'opération (`revert
+ * --abort`, verrou d'index résiduel retiré) : HEAD et l'index restent ceux d'avant.
+ * @param {{root: string, mainGit: import('simple-git').SimpleGit, config: import('./types.js').StriartConfig, agent: string, head: string}} params
+ */
+async function revertMergeBounded({ root, mainGit, config, agent, head }) {
+  const outcome = await runCommitBounded({
+    root,
+    args: ['revert', '-m', '1', '--no-edit', head],
+    timeoutMs: config.commitTimeoutMs,
+  });
+  if (outcome.ok) return;
+  await mainGit.raw(['revert', '--abort']).catch((error) => {
+    // Rien à défaire si git a refusé avant d'ouvrir l'opération ; sinon l'état résiduel
+    // est visible dans `git status` et dans ce journal.
+    logger.warn({ err: error.message }, 'revert --abort après échec du rollback');
+  });
+  // Un revert refusé au moment du commit (signature) laisse le résultat dans l'index
+  // sans état de séquenceur : `--abort` n'a alors rien à défaire. Le principal était
+  // propre (assertMainReady) et HEAD est toujours le merge annulé : retour exact.
+  await assertMainLockHeld(root);
+  if ((await mainGit.revparse(['HEAD'])).trim() === head) {
+    await mainGit.raw(['reset', '--hard', head]);
+  }
+  const cause = redactHookOutput(outcome.output, config).replace(/\s+/g, ' ').trim().slice(-500);
+  if (outcome.kind === 'other') {
+    throw new StriartError(
+      `git a refusé le revert du merge de "${agent}" (${cause}) : rien n'a été commité, HEAD est inchangé.`,
+      {
+        code: 'MERGE_COMMIT_FAILED',
+        hint: 'git config user.name / user.email, ou la signature de commit (commit.gpgsign), puis relance le rollback',
+        details: { agent, operation: 'rollback', cause },
+      },
+    );
+  }
+  const timedOut = outcome.kind === 'timeout';
+  throw new StriartError(
+    `Le revert du merge de "${agent}" ${timedOut ? `a dépassé ${config.commitTimeoutMs} ms (hook ou signature bloqué)` : 'a été rejeté par un hook de la cible'}${cause ? ` : ${cause}` : ''}. Rien n'a été commité, HEAD est inchangé.`,
+    {
+      code: 'COMMIT_HOOK_REJECTED',
+      hint: "corrige ce que le hook ou la signature reproche, puis relance le rollback ; un hook n'est jamais contourné",
+      details: {
+        agent,
+        operation: 'rollback',
+        ticketId: null,
+        timedOut,
+        exitCode: outcome.exitCode,
+      },
+    },
+  );
+}
+
 /** @returns {Promise<import('./types.js').RollbackResult>} */
 async function rollbackLastMergeImpl({ root }) {
   await assertInitialized(root);
@@ -3033,13 +3469,18 @@ async function rollbackLastMergeImpl({ root }) {
   }
   const { agent } = parsed;
 
+  // Une livraison de CE process encore en vol (push différé hors verrou) doit être
+  // terminée avant de décider « poussé ? » : sinon le rollback verrait un HEAD non
+  // publié, ferait un reset, et le push en vol publierait le travail défait.
+  await settlePendingDeliveries(root);
+
   // Poussé sur origin ? → revert (jamais de réécriture d'historique publié).
   const pushed = await isPublishedOnOrigin(mainGit, config.targetBranch);
 
   // Le verrou doit toujours être à nous avant reset --hard / revert.
   await assertMainLockHeld(root);
   if (pushed) {
-    await mainGit.raw(['revert', '-m', '1', '--no-edit', head]);
+    await revertMergeBounded({ root, mainGit, config, agent, head });
   } else {
     await mainGit.raw(['reset', '--hard', `${head}^1`]);
   }
@@ -3090,7 +3531,7 @@ async function rollbackLastMergeImpl({ root }) {
  * n'avance QUE par fast-forward après un Test Gate global. main n'est
  * jamais dans un état intermédiaire, même une milliseconde.
  *
- *   staging vert (gate global) → git push . HEAD:mainBranch (ff-only)
+ *   staging vert (gate global) → update-ref mainBranch (ff-only, compare-and-swap)
  *   staging rouge → ticket PROMOTION_GATE_FAILED + décision humaine
  *                   (--rollback pour reset --hard staging sur main :
  *                    destructif, donc jamais par défaut)
@@ -3100,7 +3541,7 @@ async function rollbackLastMergeImpl({ root }) {
  */
 export async function promoteStaging(params) {
   return runWithDeferredEffects(() =>
-    withMainLock(params.root, 'promote', () => promoteStagingImpl(params), {
+    withMainLockTimed(params.root, 'promote', () => promoteStagingImpl(params), {
       signal: params.signal ?? null,
     }),
   );
@@ -3208,12 +3649,14 @@ async function promoteStagingImpl({ root, rollback = false }) {
     );
   }
 
-  const gate = await runTestGate({
-    cwd: root,
-    testCommand: config.promoteTestCommand ?? config.testCommand,
-    timeoutMs: config.testTimeoutMs,
-    ...gateContainerOptions(config),
-  });
+  const gate = await timed('gate', () =>
+    runTestGate({
+      cwd: root,
+      testCommand: config.promoteTestCommand ?? config.testCommand,
+      timeoutMs: config.testTimeoutMs,
+      ...gateContainerOptions(config),
+    }),
+  );
   // Le gate global a pu durer longtemps : verrou toujours à nous avant tout
   // effet irréversible (reset --hard, avance de mainBranch).
   await assertMainLockHeld(root);
@@ -3266,17 +3709,40 @@ async function promoteStagingImpl({ root, rollback = false }) {
   // push interne : sémantique fast-forward-only garantie par git lui-même.
   // Le SHA EXACT qui a passé le gate, pas `HEAD` : un commit arrivé sur le
   // staging pendant le gate n'a pas été testé et ne doit pas être promu.
-  await mainGit.raw(['push', '.', `${stagingHead}:refs/heads/${config.mainBranch}`]);
-
-  let pushError = null;
-  if (config.autoPush) {
-    try {
-      await mainGit.push('origin', config.mainBranch);
-    } catch (error) {
-      pushError = error.message;
-      logger.error({ err: error }, `Push vers origin/${config.mainBranch} échoué`);
-    }
+  // `update-ref` avec l'ancienne valeur attendue (compare-and-swap) et NON `git push .` :
+  // un push vers « . » exécute les hooks pre-push de la cible (hook d'entreprise, jusqu'à
+  // une invite) SOUS le verrou principal. L'ancêtre a été vérifié plus haut (`behind` = 0),
+  // le CAS garantit que mainBranch n'a pas bougé depuis (pendant le Test Gate, par exemple).
+  try {
+    await timed('commit', () =>
+      mainGit.raw([
+        'update-ref',
+        '-m',
+        `striart promote: ${stagingHead.slice(0, 8)}`,
+        `refs/heads/${config.mainBranch}`,
+        stagingHead,
+        mainSha,
+      ]),
+    );
+  } catch (error) {
+    throw new StriartError(
+      `"${config.mainBranch}" a bougé pendant la promotion : fast-forward annulé, rien n'a été promu.`,
+      {
+        code: 'MAIN_DIVERGED',
+        hint: 'git log --oneline --graph -20',
+        details: { mainBranch: config.mainBranch, mainSha, stagingHead },
+        cause: error,
+      },
+    );
   }
+
+  // Livraison vers origin : après la libération du verrou (hook pre-push,
+  // authentification, proxy lent), du même SHA exact. `result.pushError` et
+  // `result.delivery` sont posés par runWithDeferredEffects.
+  if (config.autoPush) {
+    await scheduleDelivery(config, planPromotionDelivery({ root, config, sha: stagingHead }));
+  }
+  const pushError = null;
 
   await emitEvent(config, {
     type: 'promote:done',
@@ -3305,6 +3771,7 @@ export async function getQueueDashboard({ root }) {
       status: 'RUNNING',
       files: meta.predictedFiles ?? [],
       blockedBy: [],
+      ...(meta.routing ? { routing: meta.routing } : {}),
     });
   }
   for (const task of queue) {
@@ -3317,6 +3784,7 @@ export async function getQueueDashboard({ root }) {
       files: task.predictedFiles,
       blockedBy: collisions,
       after: task.after ?? null,
+      ...(task.routing ? { routing: task.routing } : {}),
       // Plus rien ne la retient : `striart queue --retry` (ou watch) la démarrera.
       ready:
         collisions.length === 0 &&

@@ -41,6 +41,10 @@ export function renderMergeResult(out: Output, result: MergeResult): void {
         );
       }
       if (result.pushError) out.line('warn', m.merge.pushFailed(out.untrusted(result.pushError)));
+      if (result.delivery?.pushed && result.delivery.mode === 'branch' && result.delivery.ref)
+        out.detail(
+          m.merge.deliveredBranch(out.untrusted(result.delivery.ref), out.sha(result.delivery.sha)),
+        );
       if (result.memory && !result.memory.updated) {
         out.line('warn', m.merge.memoryFailed(out.untrusted(result.memory.error ?? '')));
       }

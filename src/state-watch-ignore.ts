@@ -13,7 +13,10 @@ import path from 'node:path';
  *    pris et relâchés par chaque écriture d'état, ils déclencheraient un
  *    rafraîchissement par écriture… dont la collecte reprend le verrou
  *    (boucle d'auto-excitation) ;
- *  - `*.tmp`       écritures atomiques en cours (le rename, lui, est vu).
+ *  - `*.tmp`       écritures atomiques en cours (le rename, lui, est vu) ;
+ *  - `idle/beats/`, `idle/close/`, `idle/state.lock*` : battements de sortie des sessions (un
+ *    toutes les 10 s par session), demandes de fermeture et verrou du GC d'inactivité —
+ *    `idle/state.json`, lui, est un vrai changement d'état.
  *
  * `extraHeads` : dossiers propres à un consommateur (logs/, control/…).
  * `rel` est relatif à `.striart/` ; la racine et un chemin hors du dossier
@@ -29,7 +32,9 @@ const TRANSIENT_FILES: ReadonlySet<string> = new Set([
 
 export function isIgnoredStatePath(rel: string, extraHeads: readonly string[] = []): boolean {
   if (rel === '' || rel.startsWith('..')) return false;
-  const [head] = rel.split(path.sep);
+  const [head, sub] = rel.split(path.sep);
+  if (head === 'idle' && (sub === 'beats' || sub === 'close' || sub?.startsWith('state.lock')))
+    return true;
   return (
     COMMON_IGNORED_HEADS.has(head) ||
     extraHeads.includes(head) ||

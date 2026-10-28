@@ -4,7 +4,7 @@
 
 **Ne signalez pas une faille par issue publique.** Utilisez un canal privé :
 
-- **GitHub** (préféré) : sur le miroir public, *Security* →
+- **GitHub** (préféré) : sur la page GitHub du dépôt, *Security* →
   *Report a vulnerability* (le rapport reste privé le temps du correctif).
 - À défaut, ouvrez une issue demandant un canal privé **sans détailler la
   faille** — un moyen de contact direct vous sera fourni.
@@ -30,8 +30,8 @@ Quatre **ancres de confiance** portent le modèle, et aucune ne vit dans un
 dépôt qu'un agent ou un tiers peut modifier : (1) la **clé de signature du
 binaire natif**, épinglée dans le code publié et étendue seulement par la
 config *utilisateur* (`native.trustedKeyIds`) ; (2) la **config utilisateur**
-(`hooks.trustedRoots`, `env.allow`, `native.trustedKeyIds`) — JSON de données,
-droits vérifiés, hors du dépôt ; (3) le **jeton d'instance** du dashboard et du
+(`hooks.trustedRoots`, `env.allow`, `native.trustedKeyIds`, `network`,
+`gate.envAllow`, `idle.closeRoots`) — JSON de données, droits vérifiés, hors du dépôt ; (3) le **jeton d'instance** du dashboard et du
 Control Protocol (32 octets aléatoires, fichier 0600 / ACL utilisateur, jamais
 en URL ni en cookie) — le dashboard est en outre servi sous un nom d'hôte
 propre à l'instance ; (4) le **registre des clones** (`agents.json`), d'où se
@@ -46,6 +46,9 @@ Sources d'entrée non fiables, traitées comme telles :
 | Prompt de tâche (issue, fichier…) | donnée, jamais code | substitué en élément d'`argv`, `shell: false` |
 | Sortie du LLM Router (chemins prédits) | donnée bruitée | filtrée : ni absolu ni `..` (`isSafeProjectPath`) |
 | Sortie du LLM Merger (code fusionné) | proposition à valider | **Test Gate bloquant** avant tout commit |
+| Ce que le Router **envoie** au fournisseur du LLM : l'arbre des fichiers suivis, la carte des candidats (symboles et première ligne de documentation de fichiers du dépôt), la demande | contenu du dépôt qui quitte la machine dès que le LLM est distant | Ollama local par défaut ; un fichier correspondant à `secretPatterns` n'est **jamais lu** ; les lignes de la carte passent par le caviardage de secrets (`redactSecrets`) ; au-delà de `tokens.router.maxScanFiles` aucun contenu n'est lu (chemins seuls) ; HTTPS exigé hors boucle locale (`src/net.ts`) ; une liste tronquée est déclarée au LLM |
+| Fichiers touchés lus par le filet de chevauchement (`git diff --name-only` entre commits des clones, `overlap`) | chemins produits par un agent, donc non fiables | lecture seule (jamais l'index ni le worktree) ; `isSafeProjectPath`, caractères de contrôle écartés ; chemins caviardés dans les messages ; bornes `overlap.*` ; rebase anticipé jamais sur une session vivante |
+| Signaux d'inactivité lus par le GC (`.striart/idle/`, `host.output` de l'hôte de pty, journaux, reflog du clone) | écrits par des process de la machine, y compris celui d'un agent | lecture stricte et bornée (taille, PID de l'hôte, horodatage ISO à la milliseconde) ; toute anomalie rend l'agent **actif** (fail closed) — un agent qui falsifie ces signaux ne peut que se garder lui-même en vie |
 | Nom d'agent, id de ticket (CLI, URL) | identifiant contraint | validé par motif, chemins reconstruits du registre |
 | Requêtes HTTP du dashboard | potentiellement pilotées par un site tiers **ou par un autre compte local** (la boucle locale est joignable de tous les comptes) | **jeton obligatoire** (lien de connexion à usage unique → cookie `HttpOnly; SameSite=Strict`), contrôle du `Host`, `Sec-Fetch-Site`, `Origin`, en-tête anti-CSRF `X-Striart` |
 | stdin du serveur MCP | JSON-RPC d'un hôte — et, derrière lui, d'un agent | borné (1 Mo/ligne, appliqué pendant la lecture), parse isolé ; outils mutants **bornés au clone appelant**, aucun outil d'arbitrage humain |
@@ -63,12 +66,16 @@ Sources d'entrée non fiables, traitées comme telles :
 | Requêtes de l'éditeur au proxy `striart acp` | client ACP = interface humaine, mais message à contraindre | méthodes servies listées (`fs/*` et `terminal/*` jamais adressés à l'éditeur), dossier de session borné à `--root`, message entrant borné (8 Mo), option figée après le premier prompt |
 | Registre ACP (document JSON) et archive de binaire téléchargée | distant, non fiable | https obligatoire (`redirect: error`), document borné (5 Mo), version **exacte** (jamais `latest`, plage ni option déguisée en paquet) et restreinte à un segment de chemin sûr (`[0-9A-Za-z][0-9A-Za-z._+-]{0,63}` : jamais de sortie du dossier `.striart/acp-agents/`), empreinte sha256 publiée exigée et vérifiée, arbre extrait **revérifié** (lien symbolique, lien dur ou chemin sortant → `ACP_EXTRACT_UNSAFE`, extraction supprimée), variables d'environnement du registre refusées hors `acpRegistry.allowEnv` ; métadonnées seules par défaut, téléchargement par décision explicite |
 | Événement lu sur stdin par `striart hook` (envoyé par l'outil de coding) | JSON d'un outil, jamais de confiance | entrée et chemins bornés (4096 caractères, 256 fichiers), réponse **neutre** sur toute anomalie, jamais de blocage ; la config d'un dépôt n'est lue qu'en données hors racine de confiance |
-| Config UTILISATEUR (`hooks.trustedRoots`) | données de l'utilisateur, jamais exécutées | JSON strict, clé inconnue refusée, droits vérifiés (POSIX), racine du système de fichiers refusée ; toute anomalie = **aucune confiance** |
+| Config UTILISATEUR (`hooks.trustedRoots`, `env.allow`, `native.trustedKeyIds`, `network`, `gate.envAllow`, `idle.closeRoots`) | données de l'utilisateur, jamais exécutées | JSON strict, clé inconnue refusée, droits vérifiés (POSIX), racine du système de fichiers refusée ; toute anomalie = **aucune confiance** (et, pour `network`, les appels sortants non locaux sont refusés) |
 | Binaire natif `striart-native` et son manifeste | code exécuté, livré par un paquet npm | manifeste signé (minisign/Ed25519), SHA-256 et taille vérifiés avant chaque exécution, jamais exécuté si altéré ; la **clé** signataire doit figurer dans une liste de confiance **hors du paquet** (clé épinglée dans le code + `native.trustedKeyIds` de la config utilisateur), sinon `NATIVE_INTEGRITY_FAILED` ; manifeste de clé jetable (`ephemeral`) refusé à l'exécution ; sortie JSON validée positivement |
 | `.env` de la racine du dépôt | donnée non fiable livrée avec un dépôt — une variable y devient héritée par **tous** les enfants (daemons, sessions, hôte de pty, hooks) | `util.parseEnv` (jamais `loadEnvFile`) + **liste blanche** ; liste noire (`NODE_*`, `LD_*`, `PATH*`, `STRIART_NATIVE_BIN`…) non relâchable ; jamais écrasé sur une variable du shell ; rien chargé dans un clone d'agent ni une session ; seule la config **utilisateur** (`env.allow`) étend la liste |
 | Journal de session d'un agent (blocs `striart-verdict-<jeton>` / `striart-handoff-<jeton>`) | contient aussi les sorties d'outils, donc le contenu de fichiers écrits par un autre rôle | seule la balise portant le jeton aléatoire du tour (128 bits, connu du seul briefing du tour) est acceptée ; sans jeton valide, rien (fail closed) ; lecture linéaire du journal |
 | Schéma de formulaire, titre et options d'une demande de permission d'un agent ACP | données d'un agent, évaluées/affichées côté humain | motif de schéma analysé structurellement (refus des formes à retour arrière exponentiel : ReDoS) ; titre (8 192 octets), 16 options au plus, noms neutralisés (contrôles, bidi, caractères invisibles) |
 | Journaux de session lus par MCP (`striart://…`) | contenu d'un agent, borné au clone appelant | nom de fichier reconnu par motif exact `session-<agent>-<8 hex>.log` : un agent `auth` ne lit pas `session-auth-ui-…` |
+| Destinations des appels sortants (`llm.baseUrl`, `ollamaHost`, URL de webhook, `acpRegistry.url`) | écrites dans la config d'un dépôt, donc non fiables | point d'entrée unique `src/net.ts` : HTTPS exigé hors boucle locale, aucune redirection suivie, liste blanche d'hôtes et mode hors ligne **de l'utilisateur** (voir « Appels sortants et réseau d'entreprise ») |
+| Réglages réseau (proxy, CA, TLS minimal, hors ligne, liste blanche) | décision de l'utilisateur ; un dépôt hostile voudrait les poser | environnement du shell et config **utilisateur** seulement ; le `.env` d'un dépôt les refuse, la config d'un dépôt n'a pas de clé `network` |
+| Tests exécutés par le Test Gate (`testCommand`) | code que l'agent a pu écrire ou modifier | environnement réduit à une **liste blanche** (`gateEnv`) : ni clé d'API, ni webhook, ni jeton |
+| Sorties d'outils (Test Gate, sessions d'agents, hooks de la cible, journaux) | peuvent contenir des secrets | caviardage par le contenu et par valeurs exactes avant écriture (voir « Confidentialité des données locales ») |
 
 ## Périmètre — ce que Striart promet
 
@@ -95,7 +102,9 @@ contourner est une vulnérabilité à signaler :
   `STRIART_*`…), et la clé ne part qu'en HTTPS (boucle locale exemptée) —
   `LLM_CONFIG_INVALID` sinon ; `llm.allowAnyApiKeyEnv` et
   `llm.allowInsecureTransport` sont les relâchements explicites, affichés par
-  `doctor`. Le `.env` de la racine du dépôt est lui aussi une donnée **non
+  `doctor` — le second ne suffit plus, seul, pour un hôte distant en HTTP : la
+  couche réseau exige aussi que l'hôte figure dans `network.allowInsecureHosts`
+  de la config **utilisateur**. Le `.env` de la racine du dépôt est lui aussi une donnée **non
   fiable** : il est filtré par une liste blanche (noms `*_API_KEY`, webhooks,
   variables d'affichage), une liste noire non relâchable (`NODE_*`, `LD_*`,
   `PATH*`, `GIT_*`, `*_PROXY`, `STRIART_NATIVE_BIN`, `STRIART_CONFIG_HOME`…)
@@ -132,7 +141,14 @@ contourner est une vulnérabilité à signaler :
   — le serveur de développement d'un agent, par exemple — qui pourrait le
   rejouer. L'adresse `localhost` nue n'est plus servie (403) ;
   `dashboardHostname: 'localhost'` est un relâchement journalisé et affiché par
-  `doctor`.
+  `doctor`. **Contenu servi** : la page est rendue dans la langue de l'instance
+  sous une CSP stricte (`default-src 'none'`, `connect-src 'self'`, script et
+  feuille de style identifiés **par empreinte SHA-256, une par langue** — ni
+  `unsafe-inline`, ni source externe), avec `X-Frame-Options: DENY`,
+  `Referrer-Policy: no-referrer`, `Cache-Control: no-store` et
+  `nosniff` ; tout le texte variable est écrit par le client via `textContent`
+  ou un gabarit échappant. `/favicon.ico` répond 204 sans donnée ni session (le
+  navigateur le demande de lui-même, y compris sur la page « connexion requise »).
   `dashboardAllowedHosts` (vide par défaut) relâche **uniquement** le contrôle
   `Host` — pour un tunnel web (Codespaces) ou un proxy inverse —, avec des
   motifs stricts (jamais `*`, ni IP publique, ni IPv6) ; jeton, cookie,
@@ -340,11 +356,179 @@ contourner est une vulnérabilité à signaler :
   l'usage entrée/sortie rapporté par un agent ACP est une information non
   fiable (seul le coût est plafonnable). Une comptabilité qui échoue n'est
   jamais silencieuse : journalisée sous `TOKEN_ACCOUNTING_FAILED`, et refusée si
-  `tokens.onAccountingError` vaut `fail`. Tout appel LLM authentifié
-  (`fetch` avec `x-api-key`, `api-key` ou `Authorization`) est émis en
-  `redirect: 'error'` : une redirection ne transporte jamais la clé vers un
-  autre hôte.
+  `tokens.onAccountingError` vaut `fail`. Aucun appel sortant ne suit de
+  redirection (`redirect: 'error'`, sauf le suivi borné des archives du registre
+  ACP, revérifié saut par saut) : une redirection ne transporte jamais une clé
+  vers un autre hôte.
 
+### Appels sortants et réseau d'entreprise
+
+Striart émet des appels sortants vers : le LLM (Ollama, OpenAI-compatible,
+Anthropic, Azure), les webhooks de notification, la sonde Ollama de
+`init`/`doctor`, le registre ACP (document) et ses archives de binaire. Ils
+passent **tous** par `src/net.ts` ; un test unitaire échoue si un autre module de
+`src/` appelle `fetch()` ou `http(s).request()` (seul le client navigateur du
+dashboard, qui parle à son propre serveur, y échappe). Engagements :
+
+- **HTTPS exigé hors boucle locale, avec ou sans clé d'API**
+  (`NET_INSECURE_TRANSPORT`) ; la seule exception est un hôte déclaré dans
+  `network.allowInsecureHosts` de la config **utilisateur** (relâchement
+  journalisé une fois par hôte et affiché par `doctor`). `localhost`, `127.x` et
+  `[::1]` sont exemptés de toute la politique distante.
+- **La vérification TLS n'est jamais coupée** : `NODE_TLS_REJECT_UNAUTHORIZED=0`
+  dans l'environnement fait refuser l'appel (`NET_INSECURE_TRANSPORT`, raison
+  `TLS_VERIFICATION_DISABLED`) ; une chaîne non fiable donne `NET_TLS_UNTRUSTED`
+  avec la piste « ajouter la CA d'entreprise ».
+- **Aucune redirection n'est suivie** (`NET_REDIRECT_REFUSED`). Seul le registre
+  ACP a droit à un suivi borné (3 sauts) pour ses archives, et chaque saut repasse
+  par tous les contrôles (liste blanche, HTTPS, hors ligne).
+- **Liste blanche d'hôtes et mode hors ligne** (`network.allowedHosts`,
+  `network.offline`, `STRIART_ALLOWED_HOSTS`, `STRIART_OFFLINE`) : décisions de
+  l'utilisateur ; avec deux sources, la plus restrictive gagne (hors ligne = l'une
+  OU l'autre, liste blanche = intersection, TLS = le plus strict).
+- **Proxy d'entreprise : fail closed.** Un proxy configuré mais inapplicable sur
+  ce Node refuse l'appel (`NET_PROXY_UNSUPPORTED`) au lieu de sortir en direct.
+  Un proxy SOCKS est refusé (`NET_PROXY_UNSUPPORTED`, raison `SCHEME`) ;
+  `ALL_PROXY` n'est pas lue. L'authentification du proxy se donne par `STRIART_PROXY_AUTH`,
+  jamais en config ; elle n'est jamais transmise aux sessions d'agents.
+- **Les réglages réseau sont des décisions de l'utilisateur, jamais d'un dépôt.**
+  Ils vivent dans le shell et dans la config utilisateur ; le filtre du `.env`
+  refuse `*_PROXY`, `NODE_*`, `STRIART_OFFLINE`, `STRIART_ALLOWED_HOSTS`,
+  `STRIART_TLS_MIN_VERSION`, `STRIART_PROXY_AUTH` et `STRIART_CA_FILE`, et même
+  `env.allow` ne peut pas les viser. Une config utilisateur illisible ne rend
+  jamais le réseau « sain » : les appels distants sont refusés.
+
+**Limites assumées.** (1) La couche contrôle le **nom d'hôte**, pas l'adresse IP
+résolue : un hôte autorisé dont le DNS est détourné (DNS rebinding) n'est pas
+détecté, et un webhook vers une adresse locale reste possible (pas de filtre
+SSRF sur la destination). (2) `ALL_PROXY` et SOCKS ne sont pas supportés.
+(3) Pas de test de bout en bout avec un vrai proxy HTTPS ni, pour
+`network.caFile` transmis aux sessions, avec un outil d'agent réel. (4) Les
+variables de proxy ordinaires (`HTTP(S)_PROXY`, `NO_PROXY`) sont **héritées telles
+quelles** par les sessions d'agents, identifiants d'URL compris : un mot de passe
+mis dans l'URL de `HTTPS_PROXY` est visible de l'outil lancé (préférer
+`STRIART_PROXY_AUTH`, quand le Node le permet). (5) `network.caFile` devient
+`NODE_EXTRA_CA_CERTS` d'une session **sauf** si le shell en a déjà posé un autre
+(le shell gagne, le fait est journalisé) ; l'`env` d'un profil d'agent (config du
+dépôt) est appliqué *après* et peut donc le remplacer — le profil est du
+config-as-code (voir « Frontières de confiance »).
+
+### Confidentialité des données locales
+
+- **`.striart/` est réservé à l'utilisateur** (`privateStateDir: true`, défaut) :
+  dossiers `0700` et fichiers `0600` (POSIX), DACL **protégée** (héritage coupé)
+  limitée au SID de l'utilisateur, posée par `icacls` et vérifiée en SDDL
+  (Windows). Il contient du code source (versions des tickets), des sorties
+  d'outils, les prompts de la file et les jetons du Control Protocol. Un
+  resserrement impossible (système de fichiers sans permissions, propriétaire
+  étranger, `icacls` en échec) est un **refus** (`STATE_UNPROTECTED`), jamais un
+  repli silencieux ; `privateStateDir: false` est le relâchement explicite,
+  journalisé et affiché par `doctor`. La protection est posée avant de prendre le
+  verrou principal (jamais dessous), une fois par racine et par process, et migre
+  de façon idempotente un `.striart/` préexistant. `agents/` et `removing/` ne
+  sont **jamais parcourus** : leurs objets git sont des hardlinks partagés avec le
+  dépôt principal — changer leur ACL changerait aussi celle du principal — ; leur
+  confidentialité reste celle du dépôt. Limite : un process du **même utilisateur**
+  reste hors modèle (voir « Hors périmètre »).
+- **Le Test Gate ne reçoit pas vos secrets.** Il exécute `testCommand`, donc des
+  tests que l'agent a pu écrire. Son environnement est une **liste blanche**
+  (chemins, locale, proxy et CA pour `npm install`, `NODE_*`, `npm_config_*`…) sans
+  ce dont le nom ressemble à un secret ; les clés d'API (`*_API_KEY`), les URL de
+  webhook et les variables que la config désigne pour les porter (`apiKeyEnv`,
+  `urlEnv`) en sont **toujours** retirées, ainsi que `STRIART_SESSION`. Le dépôt
+  peut *demander* des variables (`gateEnv`) ; seule la config **utilisateur**
+  (`gate.envAllow`) les *autorise* — une demande non couverte est écartée et
+  annoncée en tête du journal du gate (noms seulement). `gateEnv: 'inherit'`
+  (tout l'environnement) est un relâchement explicite affiché par `doctor`.
+- **Les journaux et sorties d'outils sont caviardés avant écriture**
+  (`src/redact-secrets.ts`) : par le **contenu** (clés de fournisseurs à format
+  connu, JWT, en-têtes `Authorization`, identifiants dans une URL, URL de webhook,
+  blocs de clé privée, affectations `…KEY=valeur`) et par **valeurs exactes**
+  (clés d'API et URL de webhook de l'environnement, `env` d'un profil). Appliqué
+  au journal du Test Gate, aux journaux de session et de session ACP, aux
+  tickets, à la sortie des hooks de la cible (ticket, message d'erreur et
+  `--json`) et aux journaux pino. Coût borné (motifs sans imbrication, tranches de
+  256 Kio). **Défense en profondeur, pas une garantie** : un secret sans forme
+  reconnaissable n'est trouvé que par sa valeur exacte (≥ 8 caractères), et un
+  secret à cheval sur deux tranches d'une même ligne géante échappe aux motifs.
+
+### Livraison vers `origin` et hooks de la cible
+
+- **Un hook de la cible n'est jamais contourné.** Le commit de merge exécute les
+  hooks du dépôt (`pre-commit`, `pre-merge-commit`, `prepare-commit-msg`,
+  `commit-msg`) et la signature, sans `--no-verify` ; un rejet annule le merge
+  (`COMMIT_HOOK_REJECTED`). La promotion avance `mainBranch` par un
+  compare-and-swap (`update-ref`) et non par un `git push .`, qui exécuterait les
+  hooks `pre-push` de la cible sous le verrou.
+- **Le push est borné et sans invite.** Il est fait hors du verrou principal, du
+  SHA exact testé, jamais en force, sous un délai dur (`pushTimeoutMs`) qui tue
+  l'**arbre** de process (le hook est un petit-fils de git), sans terminal ni
+  invite (`GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`), avec un environnement
+  purgé de toute variable `GIT_*` héritée, et les jetons d'URL de remote caviardés
+  dans tout message. Son authentification est celle de git lui-même (credential
+  helper, agent SSH).
+- **En mode `delivery: 'branch'`, la forge reste l'autorité d'approbation.**
+  Striart ne fait jamais avancer la branche cible distante : il pousse
+  `striart/<agent>/<tâche>` (ou `striart/promote/…`), à approuver depuis la forge.
+  Le nom de la branche est dérivé de motifs validés, jamais d'une donnée brute.
+- **Fenêtre résiduelle assumée** : un `rollback` lancé par un *autre* process
+  pendant un push en vol n'est pas empêché ; la divergence détectée est rapportée
+  (`PUSH_SUPERSEDED`, `PUSH_NON_FAST_FORWARD`), jamais en silence.
+
+### GC d'inactivité : fermer une session, jamais un clone
+
+`striart gc` et le balayage de `striart watch` (`src/idle/`) peuvent **terminer
+des process sur la machine** (l'hôte d'une session ACP ou de terminal, le process
+d'une session autonome) : c'est la seule exception à « un clone dont la session
+vit est intouchable », et elle est encadrée.
+
+- **L'autorisation de fermer est celle de l'utilisateur, jamais du dépôt.** La
+  config du dépôt choisit la politique (`idle.action`, seuils bornés) ; sans
+  `idle.closeRoots` dans la config **utilisateur** (hors dépôt, droits vérifiés,
+  fail closed si illisible), `close` dégrade en avertissement. Un dépôt hostile
+  ne peut donc pas obtenir, par un fichier commité, qu'on termine des process chez
+  qui l'ouvre. Il peut désactiver la détection (`idle.enabled: false`) ou en
+  durcir les seuils dans leurs bornes ; le premier est un relâchement affiché par
+  `doctor`, et une fermeture reste douce et sans perte (voir ci-dessous).
+  `striart.config.*` est un chemin protégé : un agent ne peut pas le modifier par
+  un merge.
+- **Aucune donnée n'est supprimée ni intégrée** : ni clone, ni registre, ni
+  branche, ni rebase, ni merge ; le travail non commité reste en place.
+- **Gradation obligatoire** : avertissement (journal, webhooks — noms d'agent et
+  durées seulement) *après* la dernière activité, délai de grâce, inactivité
+  minimale, puis une **revérification fraîche** de tous les signaux et gardes
+  juste avant d'agir. Une demande humaine en attente, un ticket ouvert, un plan
+  d'orchestration, un merge en cours, la session du repo principal, une
+  suppression en cours ou une exclusion protègent un agent ; une source de
+  contexte illisible, ou l'état du GC illisible, interdit toute fermeture.
+- **Jamais un kill à l'aveugle.** Hôtes ACP et de terminal : leur protocole
+  d'arrêt propre ; session autonome : demande d'arrêt sur disque au process qui la
+  supervise (il tient le handle du sous-process), **aucun kill** s'il vit sans
+  répondre (`IDLE_CLOSE_NOT_ACKNOWLEDGED`) ; seul un agent *orphelin* est arrêté
+  (SIGTERM puis kill d'arbre) et seulement après vérification de son identité par
+  l'heure de création (`IDLE_CLOSE_UNVERIFIED` sinon, jamais un PID recyclé), relue
+  juste avant le kill. Ni soi-même, ni son parent, ni la session du principal.
+- **Un terminal dont la sortie n'est pas observée n'est pas fermé** (hôte natif
+  antérieur qui ne publie pas `host.output`, programme silencieux) — sauf
+  relâchement explicite `idle.closePty`, affiché par `doctor`.
+- **Bornes** : au plus `idle.maxClosuresPerSweep` fermetures par balayage ; une
+  reprise de veille neutralise le balayage ; `--dry-run` n'écrit rien.
+- **Aucun pouvoir ajouté à l'agent** : le serveur MCP n'expose aucun outil de GC ;
+  côté plan humain, `workspace.gc` du Control Protocol est refusé dans une session
+  d'agent comme le reste du plan.
+
+**Limites assumées.** (1) `striart gc` (y compris `--close` et `--dry-run`) est refusé dans une session
+d'agent comme les autres commandes du plan humain ; cette garde est *advisory*
+(`STRIART_SESSION` est effaçable par un process du même utilisateur) : même
+contournement, en cas d'usage délibéré, que pour `resolve` ou `merge`. (2) L'identité d'un agent orphelin
+repose sur l'heure de création du process ; entre la dernière vérification et le
+kill subsiste une fenêtre minuscule, non nulle. (3) « Inactif » est une
+inférence de signaux de fichiers et de journaux : un agent qui calcule longtemps
+sans rien écrire ni sortir peut être jugé inactif, d'où l'avertissement, la
+grâce, des seuils de l'ordre de l'heure par défaut et la conservation du clone
+et du travail (une fermeture peut coûter un calcul en cours, jamais le code).
+
+## Frontières de confiance — à connaître avant d'activer certains modes
 ## Frontières de confiance — à connaître avant d'activer certains modes
 
 Ces points ne sont pas des failles : ce sont des **décisions de conception**
@@ -579,9 +763,18 @@ accepter.
   (une variable héritée d'un hook ou d'un IDE ne peut plus détourner git),
   au prix de ce cas d'usage.
 - **Le webhook part vers l'URL que vous configurez.** `notifiers` peut pointer
-  vers n'importe quelle URL, y compris interne (pas de filtre SSRF) : c'est
-  votre config, pour votre usage. Ne mettez pas dans `notifiers` une URL reçue
-  d'un tiers.
+  vers n'importe quelle URL, y compris interne (pas de filtre SSRF sur la
+  destination) : c'est votre config, pour votre usage. La couche réseau exige
+  HTTPS hors boucle locale et applique la liste blanche et le mode hors ligne de
+  l'utilisateur, mais ne contrôle pas l'adresse IP résolue. Ne mettez pas dans
+  `notifiers` une URL reçue d'un tiers.
+- **L'`env` d'un profil d'agent est du config-as-code, et il passe en dernier.**
+  Il est appliqué à la session après l'environnement réseau de Striart : un
+  dépôt dont la config est exécutée peut donc, pour la session de son agent,
+  remplacer `NODE_EXTRA_CA_CERTS` posé depuis `network.caFile`. Cela ne touche
+  ni les appels de l'orchestrateur (qui n'héritent jamais d'un profil) ni la
+  politique réseau, mais c'est une raison de plus de ne pas charger la config
+  d'un dépôt qu'on n'a pas lue.
 
 ## Chaîne d'approvisionnement
 
@@ -624,11 +817,40 @@ accepter.
   `keyId` à ses utilisateurs (`native.trustedKeyIds`).
   `node-pty`, qui exigeait un script d'installation à approuver et des
   prébuilds par version de Node, a été retiré.
+- **L'extension VS Code n'est pas publiée** (`extensions/vscode/`, `"private": true`,
+  version `0.1.0`). Elle n'a **aucune dépendance d'exécution** (bundle esbuild
+  autonome), son propre `package-lock.json` et des devDependencies en versions
+  exactes ; l'artefact `.vsix` produit par `npm run package` n'est ni signé ni
+  publié, et son installation depuis une source quelconque reste un acte de
+  l'utilisateur. Dans un espace de travail non approuvé (Workspace Trust) elle
+  ne démarre **aucun** process : `striart api` charge la config du dépôt, qui est
+  du code. Le binaire se résout depuis les réglages **utilisateur** seulement
+  (`striart.binaryPath`, `striart.nodePath`, portée machine), en `argv` avec
+  `shell: false` ; tout texte venu d'un agent est affiché comme texte non fiable.
+  Le CI rejoue son lint et ses tests (job `vscode-extension`).
+- **La fixture de signature des tests ne protège rien.**
+- **La fixture de signature des tests ne protège rien.** Le dépôt versionne une
+  clé minisign d'essai à mot de passe **vide**, nommée
+  `tests/fixtures/minisign/rsign-empty-password-TEST-ONLY.key` (commentaire de la
+  clé : « TEST ONLY … protects nothing, never reuse »), pour tester le
+  déchiffrement scrypt et la signature. Elle n'a aucun rapport avec la clé de
+  signature des archives, qui n'existe qu'en secret de CI.
 - **Audit des dépendances** : `npm audit --audit-level=high` est bloquant en
-  CI. Dernier état relevé, au 2026-10-21 : 0 vulnérabilité (simple-git 4.0.2,
-  vitest et `@vitest/coverage-v8` 4.1.11, vite 8.3.4 ; nodemon retiré). Il n'a
-  **pas** été rejoué depuis le retrait de `node-pty` et l'arrivée des
-  dépendances de la vague du 2026-10-24.
+  CI. Dernier état relevé, au 2026-10-26 (`npm audit`, arbre installé) : 0
+  vulnérabilité (simple-git 4.0.2, vitest et `@vitest/coverage-v8` 4.1.12,
+  vite 8.3.5 ; nodemon et `node-pty` retirés). La base d'avis évolue : ce
+  relevé est daté, non permanent.
+- **Bancs réels `bench:router` et `bench:merger`** (`scripts/`, hors du paquet
+  publié — `files` ne couvre pas `scripts/` —, opt-in, hors `npm test`) : ils
+  lisent `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` et `GROQ_API_KEY` dans le `.env`
+  de la racine (parsé, jamais exécuté ; seules ces trois clés sont retenues)
+  et font de vrais appels à un fournisseur cloud. Le banc Router envoie
+  l'arbre des fichiers, la carte des candidats (symboles, première ligne de
+  documentation) et des demandes **du dépôt courant**, et la génération de son
+  corpus (`scripts/bench-router-corpus.ts`) envoie les **diffs** des commits (chemins
+  masqués) : ne pas les lancer sur un dépôt confidentiel vers un fournisseur qui
+  n'a pas votre accord ; le banc Merger n'envoie que ses cas d'or synthétiques.
+  `bench:merge` n'a aucun appel réseau.
 
 ## Hors périmètre
 

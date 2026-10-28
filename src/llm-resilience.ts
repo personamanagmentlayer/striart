@@ -84,6 +84,24 @@ export function llmResilienceRelaxations(
       ];
 }
 
+/**
+ * Causes stables d'un échec d'appel LLM (`details.causeCode` de LLM_FAILED et dérivés). Le catalogue
+ * anglais les rend ; le français reste le texte du noyau. Un code inconnu d'un client plus ancien se
+ * rend par repli sur `details.cause`.
+ */
+export const LLM_CAUSE_CODES = [
+  'TRANSPORT',
+  'TIMEOUT',
+  'HTTP_4XX',
+  'HTTP_5XX',
+  'TRUNCATED',
+  'FILTERED',
+  'REFUSED',
+  'INVALID_JSON',
+  'INVALID_RESPONSE',
+] as const;
+export type LlmCauseCode = (typeof LLM_CAUSE_CODES)[number];
+
 /** Erreur HTTP/transport d'un appel LLM, avec ce qu'il faut pour décider du retry. */
 export class LlmCallError extends Error {
   readonly status: number | null;
@@ -91,6 +109,10 @@ export class LlmCallError extends Error {
   readonly retryable: boolean;
   /** Défaut du fournisseur (disponibilité) — compte pour le disjoncteur. */
   readonly providerFault: boolean;
+  /** Cause STABLE (contrat `--json`/MCP/dashboard) ; `message` reste le texte français du noyau. */
+  readonly causeCode: LlmCauseCode | null;
+  /** Précision courte et non sensible de la cause (ex. code réseau `ECONNREFUSED`). */
+  readonly causeDetail: string | null;
 
   constructor(
     message: string,
@@ -99,11 +121,15 @@ export class LlmCallError extends Error {
       retryAfterMs = null,
       retryable,
       providerFault = retryable,
+      causeCode = null,
+      causeDetail = null,
     }: {
       status?: number | null;
       retryAfterMs?: number | null;
       retryable: boolean;
       providerFault?: boolean;
+      causeCode?: LlmCauseCode | null;
+      causeDetail?: string | null;
     },
   ) {
     super(message);
@@ -112,6 +138,8 @@ export class LlmCallError extends Error {
     this.retryAfterMs = retryAfterMs;
     this.retryable = retryable;
     this.providerFault = providerFault;
+    this.causeCode = causeCode;
+    this.causeDetail = causeDetail;
   }
 }
 

@@ -1113,6 +1113,63 @@
       },
       "x-mutating": true,
       "x-transports": ["stdio", "http"]
+    },
+    {
+      "name": "workspace.gc",
+      "summary": "Idle GC sweep: detect idle agents, warn, and (action close or `close: true`, after the warning and grace period) cleanly close their SESSIONS. The clone and its work are always kept; no merge, no deletion. Human plane only.",
+      "paramStructure": "by-name",
+      "params": [
+        {
+          "name": "dryRun",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          }
+        },
+        {
+          "name": "close",
+          "required": false,
+          "schema": {
+            "type": "boolean"
+          }
+        },
+        {
+          "name": "agent",
+          "required": false,
+          "schema": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentName"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      ],
+      "result": {
+        "name": "document",
+        "schema": {
+          "allOf": [
+            {
+              "$ref": "#/components/schemas/ResultDocument"
+            },
+            {
+              "properties": {
+                "command": {
+                  "const": "workspace.gc"
+                },
+                "data": {
+                  "$ref": "#/components/schemas/IdleSweepReport"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "x-mutating": true,
+      "x-transports": ["stdio", "http"]
     }
   ],
   "x-notifications": [
@@ -1397,6 +1454,554 @@
           }
         ]
       },
+      "RouterDetails": {
+        "description": "Router detail at launch (additive, informative: no decision depends on it). `serialized` tells why the task was serialized behind every active agent (sentinel `**`); `shared` lists bookkeeping files left out of collision detection (`tokens.router.sharedFiles`). Lists are bounded (`counts` holds the real totals); the raw model output never appears.",
+        "type": "object",
+        "properties": {
+          "promptVersion": {
+            "type": ["string", "null"]
+          },
+          "serialized": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string"
+                  },
+                  "reasons": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "code": {
+                    "type": "string"
+                  },
+                  "kept": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "total": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "required": ["kind"]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "confidence": {
+                  "type": ["number", "null"]
+                },
+                "source": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "from": {
+                  "type": "string"
+                }
+              },
+              "required": ["path", "source"]
+            }
+          },
+          "shared": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "expansion": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "from": {
+                  "type": "string"
+                },
+                "confidence": {
+                  "type": "number"
+                }
+              },
+              "required": ["path", "reason", "from", "confidence"]
+            }
+          },
+          "tree": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string"
+                  },
+                  "total": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "shown": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "omitted": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "required": ["mode", "total", "shown", "omitted"]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "files": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "shared": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "expansion": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": ["files", "shared", "expansion"]
+          }
+        },
+        "required": ["serialized", "files", "shared", "expansion"]
+      },
+      "ObservedOverlap": {
+        "description": "A file REALLY touched (committed work, diff against the agent base) by two agents (`kind: agents`, only files the Router had not predicted for both) or by an agent while the target branch also advanced it (`kind: target`). Observed at runtime, independent of any prediction. `files` is bounded; `fileCount` is the real total.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "enum": ["agents", "target"]
+          },
+          "agents": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "fileCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "filesTruncated": {
+            "type": "boolean"
+          },
+          "key": {
+            "type": "string",
+            "description": "Stable id of the signal (kind, agents, file set)."
+          }
+        },
+        "required": ["kind", "agents", "files", "fileCount", "key"]
+      },
+      "OverlapReport": {
+        "description": "Runtime overlap net (additive). Read-only: git diffs between COMMITS, never a worktree. `coverage.uncommitted` is always false: uncommitted edits are NOT seen. `cost.gitCalls` is bounded by `cost.budget` per observation; agents beyond the budget are listed in `deferred`, agents whose git facts could not be read in `errors` (stable reason only, never a git message). When the observation itself fails the value is `{unavailable: true, reason}`.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "targetBranch": {
+                "type": "string"
+              },
+              "overlaps": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ObservedOverlap"
+                }
+              },
+              "deferred": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "errors": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "agent": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["agent", "reason"]
+                }
+              },
+              "agentsObserved": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "ignoredShared": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "skippedUnsafe": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "truncated": {
+                "type": "boolean"
+              },
+              "coverage": {
+                "type": "object",
+                "properties": {
+                  "committed": {
+                    "const": true
+                  },
+                  "uncommitted": {
+                    "const": false
+                  }
+                },
+                "required": ["committed", "uncommitted"]
+              },
+              "cost": {
+                "type": "object",
+                "properties": {
+                  "gitCalls": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "budget": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "cacheHits": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "durationMs": {
+                    "type": "number",
+                    "minimum": 0
+                  }
+                },
+                "required": ["gitCalls", "budget", "cacheHits", "durationMs"]
+              },
+              "generatedAt": {
+                "type": "string"
+              }
+            },
+            "required": ["targetBranch", "overlaps", "deferred", "errors", "coverage", "cost"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "unavailable": {
+                "const": true
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": ["unavailable", "reason"]
+          }
+        ]
+      },
+      "IdleAgent": {
+        "description": "Idle-GC verdict for one agent (additive). `state`: active (at least one fresh signal, or a signal that could not be read — fail closed), idle (EVERY signal is older than the threshold) or protected (a guard: pending human request, open ticket, orchestration plan, merge in progress, main-repo session, removal, exclusion). `session`: live process / ended (clone kept) / never launched. `closable` is true only when the warning, the grace period, the threshold and the authorization are all met.",
+        "type": "object",
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "state": {
+            "enum": ["active", "idle", "protected"]
+          },
+          "stage": {
+            "enum": ["active", "protected", "idle", "warned", "closable"]
+          },
+          "session": {
+            "enum": ["live", "ended", "none"]
+          },
+          "host": {
+            "enum": ["acp", "pty", "process", "none"]
+          },
+          "idleMs": {
+            "type": ["number", "null"]
+          },
+          "lastActivityAt": {
+            "type": ["string", "null"]
+          },
+          "lastActivitySignal": {
+            "type": ["string", "null"]
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "blockers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "plan": {
+            "enum": ["none", "warn", "close"]
+          },
+          "closable": {
+            "type": "boolean"
+          },
+          "closeBlockedBy": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "warnedAt": {
+            "type": ["string", "null"]
+          },
+          "closeNotBefore": {
+            "type": ["string", "null"]
+          },
+          "signals": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "at": {
+                  "type": ["string", "null"]
+                }
+              },
+              "required": ["name", "status", "at"]
+            }
+          },
+          "worktreeSkipped": {
+            "type": "boolean"
+          }
+        },
+        "required": ["agent", "state", "stage", "session", "host", "plan", "closable"]
+      },
+      "IdleStatus": {
+        "description": "Idle GC (additive, read-only): a dry-run classification of every agent plus the date of the last real sweep. When it cannot be computed the value is `{available: false, reason}`.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "available": {
+                "const": true
+              },
+              "lastSweepAt": {
+                "type": ["string", "null"]
+              },
+              "generatedAt": {
+                "type": "string"
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "action": {
+                "enum": ["report", "warn", "close"]
+              },
+              "closeAuthorized": {
+                "type": "boolean"
+              },
+              "authorizationError": {
+                "type": ["string", "null"]
+              },
+              "holds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "thresholds": {
+                "type": "object",
+                "properties": {
+                  "warnAfterMs": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "closeAfterMs": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "graceMs": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "required": ["warnAfterMs", "closeAfterMs", "graceMs"]
+              },
+              "agents": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/IdleAgent"
+                }
+              }
+            },
+            "required": ["available", "enabled", "action", "agents"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "available": {
+                "const": false
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": ["available", "reason"]
+          }
+        ]
+      },
+      "IdleSweepReport": {
+        "type": "object",
+        "properties": {
+          "generatedAt": {
+            "type": "string"
+          },
+          "dryRun": {
+            "type": "boolean"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "action": {
+            "enum": ["report", "warn", "close"]
+          },
+          "closeAuthorized": {
+            "type": "boolean"
+          },
+          "authorizationError": {
+            "type": ["string", "null"]
+          },
+          "forced": {
+            "type": "boolean"
+          },
+          "suspended": {
+            "type": "boolean"
+          },
+          "holds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "thresholds": {
+            "type": "object",
+            "properties": {
+              "warnAfterMs": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "closeAfterMs": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "graceMs": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": ["warnAfterMs", "closeAfterMs", "graceMs"]
+          },
+          "agents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IdleAgent"
+            }
+          },
+          "warned": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "closed": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "agent": {
+                  "type": "string"
+                },
+                "host": {
+                  "type": "string"
+                },
+                "code": {
+                  "type": "string"
+                }
+              },
+              "required": ["agent", "host", "code"]
+            }
+          },
+          "refused": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "agent": {
+                  "type": "string"
+                },
+                "host": {
+                  "type": "string"
+                },
+                "code": {
+                  "type": "string"
+                },
+                "detail": {
+                  "type": ["string", "null"]
+                }
+              },
+              "required": ["agent", "host", "code", "detail"]
+            }
+          }
+        },
+        "required": [
+          "generatedAt",
+          "dryRun",
+          "enabled",
+          "action",
+          "agents",
+          "warned",
+          "closed",
+          "refused"
+        ]
+      },
       "Agent": {
         "type": "object",
         "properties": {
@@ -1441,11 +2046,25 @@
           "sizeHuman": {
             "type": ["string", "null"]
           },
+          "sizesComputedAt": {
+            "type": ["string", "null"],
+            "description": "When `sizeBytes` was measured (ISO 8601). Sizes are cached (at most 5 minutes old, refreshed sooner when the clone changes); activity and session state are never cached."
+          },
           "session": {
             "$ref": "#/components/schemas/AgentSession"
           },
           "acpHost": {
             "$ref": "#/components/schemas/AcpHostStatus"
+          },
+          "routing": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RouterDetails"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": ["name", "status", "pendingCommits"]
@@ -1494,6 +2113,16 @@
           },
           "ready": {
             "type": "boolean"
+          },
+          "routing": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RouterDetails"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": ["id", "agent", "status", "files", "blockedBy"]
@@ -1518,6 +2147,16 @@
             "items": {
               "type": "string"
             }
+          },
+          "routing": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RouterDetails"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "collisions": {
             "type": "array",
@@ -1559,7 +2198,8 @@
               "GATE_FAILED",
               "SEMANTIC_MERGE_FAILED",
               "SEMANTIC_GATE_FAILED",
-              "PROMOTION_GATE_FAILED"
+              "PROMOTION_GATE_FAILED",
+              "COMMIT_HOOK_REJECTED"
             ]
           },
           "conflictedFiles": {
@@ -2370,6 +3010,12 @@
               "$ref": "#/components/schemas/HumanReview"
             }
           },
+          "overlaps": {
+            "$ref": "#/components/schemas/OverlapReport"
+          },
+          "idle": {
+            "$ref": "#/components/schemas/IdleStatus"
+          },
           "profiles": {
             "type": "array",
             "items": {
@@ -2414,6 +3060,8 @@
           "mainSession",
           "orchestration",
           "reviews",
+          "overlaps",
+          "idle",
           "profiles",
           "config"
         ]
@@ -2455,9 +3103,24 @@
                 "type": "null"
               }
             ]
+          },
+          "overlaps": {
+            "$ref": "#/components/schemas/OverlapReport"
+          },
+          "idle": {
+            "$ref": "#/components/schemas/IdleStatus"
           }
         },
-        "required": ["agents", "queue", "tickets", "state", "daemon", "mainSession"]
+        "required": [
+          "agents",
+          "queue",
+          "tickets",
+          "state",
+          "daemon",
+          "mainSession",
+          "overlaps",
+          "idle"
+        ]
       },
       "GateResult": {
         "type": "object",
@@ -2476,6 +3139,60 @@
           }
         },
         "required": ["success", "timedOut"]
+      },
+      "Timings": {
+        "description": "Durations per phase of the operation, in milliseconds (monotonic clock). Every phase is always present (0 when it does not apply); `lockHeld` is the time the main lock was HELD, `total` the whole call. Additive field: clients ignore phases they do not know.",
+        "type": "object",
+        "properties": {
+          "unit": {
+            "const": "ms"
+          },
+          "route": {
+            "type": "number",
+            "minimum": 0
+          },
+          "lockWait": {
+            "type": "number",
+            "minimum": 0
+          },
+          "sync": {
+            "type": "number",
+            "minimum": 0
+          },
+          "merge": {
+            "type": "number",
+            "minimum": 0
+          },
+          "semantic": {
+            "type": "number",
+            "minimum": 0
+          },
+          "gate": {
+            "type": "number",
+            "minimum": 0
+          },
+          "commit": {
+            "type": "number",
+            "minimum": 0
+          },
+          "delivery": {
+            "type": "number",
+            "minimum": 0
+          },
+          "memory": {
+            "type": "number",
+            "minimum": 0
+          },
+          "lockHeld": {
+            "type": "number",
+            "minimum": 0
+          },
+          "total": {
+            "type": "number",
+            "minimum": 0
+          }
+        },
+        "required": ["unit", "lockHeld", "total"]
       },
       "SyncResult": {
         "oneOf": [
@@ -2609,6 +3326,9 @@
               },
               "sha": {
                 "type": "string"
+              },
+              "timings": {
+                "$ref": "#/components/schemas/Timings"
               }
             },
             "required": ["status", "agent", "sha"]
@@ -2642,6 +3362,9 @@
                 "items": {
                   "type": "string"
                 }
+              },
+              "timings": {
+                "$ref": "#/components/schemas/Timings"
               }
             },
             "required": ["status", "agent", "sha", "mergeSha"]
@@ -2653,7 +3376,12 @@
                 "const": "CONFLICT"
               },
               "reason": {
-                "enum": ["MERGE_CONFLICT", "UNMERGEABLE_CONFLICT", "SEMANTIC_MERGE_FAILED"]
+                "enum": [
+                  "MERGE_CONFLICT",
+                  "UNMERGEABLE_CONFLICT",
+                  "SEMANTIC_MERGE_FAILED",
+                  "PROTECTED_PATHS_CHANGED"
+                ]
               },
               "agent": {
                 "type": "string"
@@ -2672,6 +3400,21 @@
               },
               "manualMode": {
                 "type": "boolean"
+              },
+              "error": {
+                "type": "string",
+                "description": "French text of the core (kept for compatibility); `errorCode` is the contract."
+              },
+              "errorCode": {
+                "type": "string",
+                "description": "Stable code of the semantic merge failure (e.g. SEMANTIC_MERGE_FAILED, TOKEN_BUDGET_EXCEEDED)."
+              },
+              "errorDetails": {
+                "type": "object",
+                "description": "Public details of that failure (identifiers only: causeCode, provider, status…)."
+              },
+              "timings": {
+                "$ref": "#/components/schemas/Timings"
               }
             },
             "required": ["status", "reason", "agent", "ticket"]
@@ -2696,6 +3439,9 @@
               },
               "manualMode": {
                 "type": "boolean"
+              },
+              "timings": {
+                "$ref": "#/components/schemas/Timings"
               }
             },
             "required": ["status", "agent", "gate", "ticket"]
@@ -2736,6 +3482,19 @@
                 "items": {
                   "$ref": "#/components/schemas/Collision"
                 }
+              },
+              "routing": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RouterDetails"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "timings": {
+                "$ref": "#/components/schemas/Timings"
               }
             },
             "required": ["status", "info", "predictedFiles"]
@@ -2760,6 +3519,19 @@
                 "items": {
                   "$ref": "#/components/schemas/Collision"
                 }
+              },
+              "routing": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RouterDetails"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "timings": {
+                "$ref": "#/components/schemas/Timings"
               }
             },
             "required": ["status", "task"]
@@ -2919,6 +3691,9 @@
               },
               "sha": {
                 "type": "string"
+              },
+              "timings": {
+                "$ref": "#/components/schemas/Timings"
               }
             },
             "required": ["status", "sha"]
@@ -2938,6 +3713,9 @@
               },
               "gate": {
                 "$ref": "#/components/schemas/GateResult"
+              },
+              "timings": {
+                "$ref": "#/components/schemas/Timings"
               }
             },
             "required": ["status", "sha"]
@@ -2959,6 +3737,9 @@
               },
               "rolledBack": {
                 "type": "boolean"
+              },
+              "timings": {
+                "$ref": "#/components/schemas/Timings"
               }
             },
             "required": ["status", "sha", "ticket"]
@@ -3005,6 +3786,9 @@
               },
               "sha": {
                 "type": "string"
+              },
+              "timings": {
+                "$ref": "#/components/schemas/Timings"
               }
             },
             "required": ["status", "ticketId", "agent", "sha"]
@@ -3023,6 +3807,9 @@
               },
               "gate": {
                 "$ref": "#/components/schemas/GateResult"
+              },
+              "timings": {
+                "$ref": "#/components/schemas/Timings"
               }
             },
             "required": ["status", "ticketId", "agent", "gate"]
@@ -3050,6 +3837,9 @@
                 "items": {
                   "type": "string"
                 }
+              },
+              "timings": {
+                "$ref": "#/components/schemas/Timings"
               }
             },
             "required": ["status", "ticketId", "mergeSha"]

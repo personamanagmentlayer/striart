@@ -112,7 +112,7 @@ export function createRotatingFileSink(
   { maxBytes, generations }: LogRotation,
 ): { write: (chunk: string | Uint8Array) => void; close: () => void } {
   // null : descripteur fermé, réouverture à retenter.
-  let fd: number | null = openSync(file, 'a');
+  let fd: number | null = openSync(file, 'a', 0o600);
   let size = fstatSync(fd).size;
   let nextRotationAt = maxBytes;
 
@@ -125,7 +125,7 @@ export function createRotatingFileSink(
   /** Réouvre le journal ; false (et `fd` reste null) si l'ouverture échoue. */
   const reopen = () => {
     try {
-      fd = openSync(file, 'a');
+      fd = openSync(file, 'a', 0o600);
       size = fstatSync(fd).size;
       return true;
     } catch (error) {

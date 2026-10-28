@@ -22,13 +22,14 @@ export async function readQueue(root) {
   return readJson(queuePath(root), { fallback: [], code: 'QUEUE_CORRUPT' });
 }
 
-/** @param {string} root @param {{agent: string, prompt: string, predictedFiles: string[], collisions: import('./types.js').Collision[], command?: string|null, after?: string|null, reuse?: boolean, allowHistoricalSecrets?: boolean}} task @returns {Promise<import('./types.js').QueueTask>} */
+/** @param {string} root @param {{agent: string, prompt: string, predictedFiles: string[], routing?: import('./router-details.ts').PublicRouterDetails|null, collisions: import('./types.js').Collision[], command?: string|null, after?: string|null, reuse?: boolean, allowHistoricalSecrets?: boolean}} task @returns {Promise<import('./types.js').QueueTask>} */
 export async function enqueueTask(
   root,
   {
     agent,
     prompt,
     predictedFiles,
+    routing = null,
     collisions,
     command = null,
     after = null,
@@ -42,6 +43,8 @@ export async function enqueueTask(
     agent,
     prompt,
     predictedFiles,
+    // Détail du Router (additif, informatif) : pourquoi cette tâche attend.
+    ...(routing ? { routing } : {}),
     collisions,
     command,
     // Dépendance déclarée : la tâche ne part pas tant que ce travail

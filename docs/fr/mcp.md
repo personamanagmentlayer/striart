@@ -34,7 +34,7 @@ dashboard. Chaque outil porte ses annotations MCP (`readOnlyHint`,
 
 | Outil | Nature | Rôle |
 |---|---|---|
-| `striart_status` | lecture | La même vue que `striart status --json` (source unique `status.ts`) : agents (statut, session, mode, branche, commits en attente), file, tickets, état du mode manuel, daemon du watcher, `mainSession`, `orchestration` et `tokens`. |
+| `striart_status` | lecture | La même vue que `striart status --json` (source unique `status.ts`) : agents (statut, session, mode, branche, commits en attente), file, tickets, état du mode manuel, daemon du watcher, `mainSession`, `orchestration`, `tokens`, `overlaps` (chevauchements observés) et `idle` (verdict du GC d'inactivité, en lecture seule — aucun outil MCP ne ferme une session). |
 | `striart_queue` | lecture | La file du scheduler et ses blocages. |
 | `striart_ticket` | lecture | Détail 3-way d'un ticket de conflit : métadonnées, versions BASE / OURS / THEIRS de chaque fichier (bornées), tentative LLM, fin du log du Test Gate. Contenu = code d'agent, donc donnée non fiable. Vue MCP Apps si l'hôte la prend en charge. |
 | `striart_run` | mutation (niveau orchestrateur) | Lancer une tâche via le Router (ou la mettre en file). |

@@ -1,0 +1,485 @@
+{
+  "generatedAt": "2026-10-26T18:42:34.998Z",
+  "generator": {
+    "model": "claude-haiku-5-5",
+    "promptVersion": "vague-task-v1"
+  },
+  "headAtGeneration": "dd3dc738110319a4cdc7245a5bbc2faaf8c87fac",
+  "tuneShare": 0.6,
+  "cases": [
+    {
+      "sha": "035dbe51646d1792503cf3ea4801bcb789b24431",
+      "split": "tune",
+      "task": "Augmenter la taille des files du hôte de pty pour que les clients lents ne soient pas évincés par un simple retard de CI, et rendre les échecs de tests ACP et le message d'erreur sur les ACL plus diagnostiquables."
+    },
+    {
+      "sha": "0449a7b8dbff626f366d94bfcaef19b8e054187f",
+      "split": "tune",
+      "task": "Renforcer la sécurité du dashboard local contre le DNS rebinding : le contrôle d'hôte doit s'appliquer à toutes les requêtes, lectures comprises, et pas seulement aux actions, avec les tests qui vont avec."
+    },
+    {
+      "sha": "0abe913c8d7e452c455dbc87d297d26f5b91626f",
+      "split": "test",
+      "task": "Ajouter une synchronisation des clones agents avec la branche principale avant chaque merge, en signalant clairement les cas où le rebase est reporté ou en conflit, et notifier sur un canal externe quand une tâche est bloquée."
+    },
+    {
+      "sha": "1149e77ec0fe5a51461781b687782f0a557b2692",
+      "split": "test",
+      "task": "Ajouter un bouton au tableau de bord pour lancer une nouvelle tâche à partir d'un texte saisi, avec refus si le texte est vide, et couvrir ce comportement par un test d'intégration ; en parallèle, rendre le nettoyage des dossiers temporaires des tests tolérant aux échecs sous Windows et allonger les délais des tests."
+    },
+    {
+      "sha": "129b2e6fc6bd9f21b50ecc1b346c78a6cb1b0bdb",
+      "split": "tune",
+      "task": "Ajouter une détection des cas où un fichier supprimé des deux côtés réapparaît sous deux noms après un merge propre, avec un avertissement non bloquant pour que l'humain puisse vérifier le doublon."
+    },
+    {
+      "sha": "1648579fa3643344df717839a93af619d9415926",
+      "split": "tune",
+      "task": "Peut-on ajouter un contrôle périodique qui signale le retard des clones agents par rapport à main, sans toucher à leurs dossiers de travail, et éviter les déclenchements de merge en double quand une référence est réécrite avec le même commit ?"
+    },
+    {
+      "sha": "1b7d376920fdc0991b8a704dc927599615526d1b",
+      "split": "test",
+      "task": "Poser le socle de l'outil : structure du projet, configuration par défaut et commande d'initialisation qui prépare le dossier de travail pour les agents."
+    },
+    {
+      "sha": "2349e8a1ef7f0f21dff196c4dd59b4899a298256",
+      "split": "tune",
+      "task": "Un ticket qui ne reprend que la mise en forme du code, sans nouveau comportement : on veut que le formatage du projet soit conforme à la règle de largeur de ligne, en ramenant les appels trop longs sur plusieurs lignes et en harmonisant les guillemets."
+    },
+    {
+      "sha": "236b5f4bbef545b184070a4e56c053758d47b8ca",
+      "split": "test",
+      "task": "Permettre de lancer un agent de coding en mode autonome, sans surveillance humaine, en gardant son clone uniquement quand tout ne s'est pas passé comme prévu."
+    },
+    {
+      "sha": "24b8ec17165b5ee5983c443cde098ccb29c7d88d",
+      "split": "tune",
+      "task": "Exclure du export public le dossier de CI propre à l'instance privée, puisqu'il n'a aucun intérêt sur la plateforme publique."
+    },
+    {
+      "sha": "2a1fc5ef83b7fe16b408488fcc7f873ce6b9a3b9",
+      "split": "tune",
+      "task": "Un clone dont une session autonome est en cours doit rester intouchable (ni rebase, ni suppression, même forcée), sans qu'un PID resté après un crash ne le verrouille indéfiniment ; et le watcher ne doit plus merger les commits intermédiaires d'un agent autonome."
+    },
+    {
+      "sha": "2b895179457d0adee7d67d914fe4fbab74291821",
+      "split": "test",
+      "task": "Faire en sorte que le driver de test consomme tout le flux jusqu'au silence avant les vérifications, pour que le contrôle de rejeu soit fiable, et corriger la vérification de chemin du clone quand il est désigné par un lien symbolique, tout en gardant intacte la protection contre l'écriture hors du clone et dans le dossier .git."
+    },
+    {
+      "sha": "2bfe458c0dd07076cb3497c847eb6e916871d4e8",
+      "split": "tune",
+      "task": "Le clone d'un agent expose les secrets commités par erreur (par exemple un fichier d'environnement ou une clé) : il faudrait qu'ils n'arrivent pas dans le worktree, sans que cela apparaisse comme une modification à commiter."
+    },
+    {
+      "sha": "2cbe82d48e7e22b87bf4a660c6a94b47f73f9a41",
+      "split": "tune",
+      "task": "Le routeur qui prédit les fichiers à modifier renvoie trop de fichiers voisins, ce qui bloque inutilement les autres agents ; il faudrait qu'il se limite à ceux que la tâche touche réellement."
+    },
+    {
+      "sha": "38a1da8470eb2b0042c55083bdd3c21b1193e8fc",
+      "split": "tune",
+      "task": "Une tâche qui reste bloquée en file d'attente, même quand son agent bloquant a disparu : faire en sorte que la file se débloque d'elle-même, sans attendre une action manuelle."
+    },
+    {
+      "sha": "39177827324800a731d39cc5433c9fa77639c359",
+      "split": "tune",
+      "task": "Ajouter un tableau de bord web local en lecture seule qui affiche l'état des agents, la file d'attente, les conflits et les logs du contrôle qualité, avec les tests d'intégration correspondants."
+    },
+    {
+      "sha": "3c07155b4f279b7144e45fa505bcfa52ab127598",
+      "split": "tune",
+      "task": "Ajouter à la fixture de flux une pause optionnelle entre des blocs d'écriture, pour qu'un lecteur lent puisse suivre sur une machine chargée, et rendre la reprise sur verrou git transitoire plus robuste dans le faux agent de test."
+    },
+    {
+      "sha": "3f4f2a5e2449641a4e5b7714e9c55c48ae78f837",
+      "split": "tune",
+      "task": "Le verrou inter-processus qui ne se libère pas après un crash bloque toutes les opérations suivantes : il faudrait que striart détecte un verrou orphelin et le récupère proprement."
+    },
+    {
+      "sha": "40bc54e3dd93114056a7cbc52445237d7b41db9c",
+      "split": "tune",
+      "task": "Ajouter la possibilité pour Striart de gérer un terminal interactif par agent, détaché du processus CLI, avec arrêt propre lorsqu'un agent est stoppé et sans jamais faire échouer l'arrêt si ce terminal n'existe pas ou est déjà mort."
+    },
+    {
+      "sha": "41bcd30fc07af634c3ffe09e1a11c120d285876b",
+      "split": "tune",
+      "task": "Ajouter une lecture de fichiers d'état JSON tolérante : un fichier absent doit donner une valeur par défaut, un fichier corrompu doit signaler une erreur claire avec un code choisi par l'appelant, et l'écriture doit être atomique pour qu'un crash ne laisse jamais un fichier à moitié écrit."
+    },
+    {
+      "sha": "455ec65fc15d1da2d66de679c8e49770ab1adcef",
+      "split": "tune",
+      "task": "Permettre de choisir l'outil de coding propre à chaque agent, et de lui ouvrir directement un terminal dans son espace de travail au lancement, en gardant ce choix même quand la tâche est mise en file d'attente."
+    },
+    {
+      "sha": "46718f544666334975e2dc816e8fc90a50bf59fb",
+      "split": "test",
+      "task": "Faire en sorte que les codes de sortie rendus par Windows s'affichent sous forme d'entiers signés lisibles dans les logs et les résultats des tests et des sessions autonomes, sans changer la notion de succès."
+    },
+    {
+      "sha": "4878add4c9f2c9ae516ae6a046a3c1d3db27d881",
+      "split": "tune",
+      "task": "Permettre à la commande de nettoyage de libérer aussi les agents encore actifs quand ils n'ont rien de non mergé, tout en protégeant le travail en attente sauf demande explicite d'abandon."
+    },
+    {
+      "sha": "4a5ffd8eea225b631313d8372cd99e97f4a92e8c",
+      "split": "tune",
+      "task": "Ajouter une commande de rétention qui nettoie automatiquement l'espace de travail : les clones d'agents arrêtés et inactifs depuis un certain temps, ainsi que les tickets de conflit résolus anciens, sans jamais toucher aux agents encore actifs ni aux tickets ouverts. Il faut aussi pouvoir prévisualiser ce qui serait supprimé avant de lancer réellement le nettoyage."
+    },
+    {
+      "sha": "4acb6a9cd8f1f04c62c598c64ee7759ca5c0cc7d",
+      "split": "test",
+      "task": "Rendre le module de parsing des plans pleinement typé, en gardant le projet sans étape de compilation."
+    },
+    {
+      "sha": "4ae111dd5512e11142b87fe9f1c1ee934f894cf1",
+      "split": "tune",
+      "task": "Ajouter une commande de merge d'un agent derrière une vérification de tests, avec un ticket de conflit créé en cas d'échec, et une commande pour retirer un agent du registre sans supprimer son clone."
+    },
+    {
+      "sha": "4dbca2f2500b5e775ff9f4bf2e518749456b2345",
+      "split": "tune",
+      "task": "Ajouter un filtre pour ne déclencher un merge que sur les branches de tâche, et ne logger les retards d'agents que lorsque leur état change, tout en resynchronisant aussi l'agent qui vient d'être mergé."
+    },
+    {
+      "sha": "4ecddb3141d648b20d91691b845902f821ae7c29",
+      "split": "test",
+      "task": "Ajouter un stash automatique pendant le rebase des agents, uniquement quand leurs fichiers modifiés ne chevauchent pas les commits entrants, et ne rien toucher sinon."
+    },
+    {
+      "sha": "53af020c3c151181e0f4f4c56454b1b366259588",
+      "split": "test",
+      "task": "Empêcher de toucher à un clone tant qu'une session autonome y travaille encore : ni synchronisation, ni merge, ni retrait ou suppression, même en forçant, avec un message clair et une reprise automatique dès que la session est terminée."
+    },
+    {
+      "sha": "562b37a88671499009e2b21543304611b0b05145",
+      "split": "tune",
+      "task": "Permettre de personnaliser les prompts du Router et du Merger depuis la configuration, en garantissant qu'un template oubliant une donnée essentielle soit refusé dès le chargement plutôt qu'échouer silencieusement."
+    },
+    {
+      "sha": "56bb69542523e0c0430bd2d264c3125fbbcd7954",
+      "split": "test",
+      "task": "Ajouter un verrou inter-processus pour que les opérations mutantes (run, merge, sync, stop, promote) ne se marchent pas dessus quand plusieurs processus tournent, en nettoyant automatiquement les verrous laissés par un processus mort."
+    },
+    {
+      "sha": "59323fec62352f86e638e5ef13d1c668d8da1eee",
+      "split": "test",
+      "task": "Une demande de ticket en une phrase : ajouter au dashboard une mise à jour en direct des données, sans rechargement périodique, avec une reconnexion automatique si la connexion tombe."
+    },
+    {
+      "sha": "5bf2acdb5efc851904dcb8fe6529324ddeeb75a3",
+      "split": "tune",
+      "task": "Faire en sorte que le graphe d'imports du Router couvre aussi Python, Ruby, PHP, ainsi que les workspaces Cargo, Go et Maven, en se limitant aux références relatives, faute de connaître la configuration de build."
+    },
+    {
+      "sha": "5f99bb1157671b51c36eb6379e0ca90ec2d125db",
+      "split": "tune",
+      "task": "Ajouter un mode arrière-plan au watcher pour qu'il tourne sans bloquer le terminal, avec la possibilité de vérifier son état, de l'arrêter, et de gérer proprement le cas où il a planté sans se fermer."
+    },
+    {
+      "sha": "60f72a42b6e7c85063760b04d47a0f3febd630fe",
+      "split": "test",
+      "task": "Il faudrait pouvoir relancer un agent arrêté sur une nouvelle tâche sans recloner, en repartant du main à jour, tout en évitant qu'un travail non commité ou non mergé soit détruit par accident."
+    },
+    {
+      "sha": "630631ac01d40dfc710c31c5d307bd82a8fd4872",
+      "split": "tune",
+      "task": "Afficher dans l'état des agents si une session de coding est en cours sur leur clone, et ne pas supprimer à la légère un clone qui semble encore utilisé lors du nettoyage, avec une fenêtre de présence réglable."
+    },
+    {
+      "sha": "681f38fe8bec3abcace4258e8313461ab71f41dd",
+      "split": "tune",
+      "task": "Ajouter un test qui vérifie que le script embarqué dans la page du dashboard est syntaxiquement valide et que ses références aux éléments HTML et ses actions correspondent bien à ce que le serveur expose, car ces erreurs passent aujourd'hui inaperçues en CI."
+    },
+    {
+      "sha": "6b61da123baa8a0a316751437e5a628839e00637",
+      "split": "tune",
+      "task": "Rendre la commande de version affichée automatiquement synchronisée avec le package, et mettre à jour les descriptions du CLI pour refléter qu'il fonctionne avec n'importe quel agent de coding IA et que la file d'attente montre aussi les agents en cours."
+    },
+    {
+      "sha": "6cda77d7c9ad629796d33e5b2afcedc709182eab",
+      "split": "test",
+      "task": "Ajouter une seconde chance à la fusion automatique : quand les tests rejettent la fusion du LLM, lui redonner l'erreur pour qu'il corrige avant de passer la main à un humain."
+    },
+    {
+      "sha": "76e05d35d24581527d7f1e50739c1631862d1bf7",
+      "split": "tune",
+      "task": "Rendre le nom de l'agent optionnel dans la commande de lancement en le dérivant automatiquement de la description de la tâche, avec un suffixe pour éviter les doublons."
+    },
+    {
+      "sha": "778d63b753f43428aa2bd91147062e4da0d311e8",
+      "split": "tune",
+      "task": "Ajouter un script de synchronisation qui exporte le dépôt privé vers la version publique sans les éléments personnels, avec un contrôle qui bloque l'export si une information personnelle fuit."
+    },
+    {
+      "sha": "7e00e4b5f6d7301b0e82f901300cb2e595c81220",
+      "split": "tune",
+      "task": "Ajouter une fusion automatique assistée par IA pour les conflits de merge, avec retour à un ticket pour l'humain si elle échoue, et un blocage après plusieurs échecs consécutifs."
+    },
+    {
+      "sha": "7f0bc846e89e87a6664dfc72c0609befece8b728",
+      "split": "tune",
+      "task": "Quand un agent touche un fichier importé par les fichiers d'un autre agent, il faut signaler le lien à l'utilisateur sans jamais bloquer le démarrage, et rendre l'avertissement clair sur l'absence de conflit Git."
+    },
+    {
+      "sha": "84345e81b9f816b0bea48389d252319ae5df403f",
+      "split": "test",
+      "task": "Ajouter à l'export un réglage qui remplace automatiquement la section d'installation du README par une version publique, et qui refuse d'exporter si le marqueur est introuvable."
+    },
+    {
+      "sha": "8a78ac2064fbd46aa13d94746e853cffcc783889",
+      "split": "tune",
+      "task": "Ajouter une politique de permissions « demander à l'humain » pour les sessions d'agent, avec un délai d'attente après lequel la demande est refusée par défaut, et l'afficher dans le dashboard."
+    },
+    {
+      "sha": "8c3fde287a88371e5de99bc635cc81da339146e4",
+      "split": "tune",
+      "task": "Ajouter un avertissement dans le Router lorsque deux agents travaillent sur des packages d'un monorepo liés par une dépendance déclarée, sans jamais bloquer le parallélisme entre packages indépendants."
+    },
+    {
+      "sha": "8cbb4b043df49f1716721cd0ae93147c03d9fc23",
+      "split": "tune",
+      "task": "Faire passer les notifications du projet par un bus d'événements interne, où chaque abonné est isolé pour qu'un consommateur défaillant ne bloque jamais le cycle de merge ni les autres abonnés."
+    },
+    {
+      "sha": "8cbde9b846440f67c88a1f87a5732429d58400a0",
+      "split": "test",
+      "task": "Mettre la documentation en phase avec l'état actuel du projet : recompter les tests unitaires après l'ajout de dix-neuf nouveaux tests, et retirer de la doc publique toute mention d'une installation depuis un registre npm, qui n'est pas encore en place."
+    },
+    {
+      "sha": "930b688e97f4dd86a1f82264bab611405fd02f9c",
+      "split": "tune",
+      "task": "Faire en sorte que chaque agent voie dans son espace de travail la liste des zones que les autres tâches actives ou en file sont susceptibles de toucher, sans jamais se voir lui-même, et que cette information disparaisse dès qu'une tâche s'arrête ou est fusionnée. Les mises à jour ne doivent rien coûter de plus à l'exécution ni bloquer l'opération en cours en cas d'échec."
+    },
+    {
+      "sha": "93f3bf57f42a0fa25c31a7d9d31ebcd01e79b8ef",
+      "split": "tune",
+      "task": "Ajouter la prise en charge des réponses JSON enrobées dans un bloc de code markdown par les fournisseurs sans mode JSON natif, en gardant le comportement inchangé pour tout le reste, et mettre à jour les modèles par défaut des fournisseurs cloud ainsi que deux nouveaux bancs d'évaluation du routeur et de la fusion."
+    },
+    {
+      "sha": "96273b58a6e74109ceb89bfafe2cce8fb75f0ee4",
+      "split": "tune",
+      "task": "Peux-tu faire en sorte que la synchronisation d'un agent ne reporte plus à tort le rebase quand un renommage local non commité touche un fichier, et que la commande de résolution de conflits permette de clore un ticket explicitement, tout en gardant son historique ?"
+    },
+    {
+      "sha": "984df3abcba274cf014ca4075dc52b34b855d0fa",
+      "split": "test",
+      "task": "Faire en sorte que les fichiers soumis à une transformation JSON soient traités comme les autres fichiers transformés lors du rapatriement des modifications publiques."
+    },
+    {
+      "sha": "9a135e7870561d89912e2d613c468b1b508395f3",
+      "split": "tune",
+      "task": "Il faudrait que la vérification de signature rejette toute forme non canonique du jeton, et que les tests de socket utilisent une racine temporaire au chemin assez court pour tenir sous la limite de l'OS."
+    },
+    {
+      "sha": "9a1a21452c76ed3a8727b5deaf473e82433039b2",
+      "split": "tune",
+      "task": "Ajouter un linting et un formatage automatiques au projet, branchés sur la CI, tout en laissant le typecheck comme filet principal, et nettoyer au passage les imports et initialisations inutilisés."
+    },
+    {
+      "sha": "9b2747dcc891cfb26325e7c4a526667516aba3fd",
+      "split": "test",
+      "task": "Pour éviter qu'un test bloqué ne fige toute la chaîne de merges, il faut que le Test Gate abandonne au-delà d'un délai configurable, tue réellement le process et le considère comme en échec, avec un message clair dans le log ; et que l'humain soit prévenu quand un agent reste bloqué sur une base obsolète et touche les mêmes fichiers que les commits entrants."
+    },
+    {
+      "sha": "9c7e8d5fdecdfdcdd57bfe15363384eca774ee67",
+      "split": "test",
+      "task": "Ajouter une exemption pour un fichier d'exclusion de paquet à la règle qui interdit les références internes dans la version publique, en mettant à jour le commentaire pour expliquer pourquoi cette exclusion est inerte côté public."
+    },
+    {
+      "sha": "9dd57a1625c9e72f1d1ff6a0f2879cfee34671df",
+      "split": "tune",
+      "task": "Ajouter au tableau de bord une vue des fichiers les plus disputés, qui combine les verrous actifs, les tâches en attente qui les prédisent et l'historique des conflits (y compris ceux déjà résolus), pour repérer les zones à risque avant qu'elles ne provoquent des conflits."
+    },
+    {
+      "sha": "9e4d9eaa49ac4ac1945bea4ae0526a4a144710d0",
+      "split": "tune",
+      "task": "Ajouter un contrôle à la publication du paquet npm qui refuse l'archive si elle embarque de la documentation interne ou des consignes d'agents, tout en laissant passer le README, le changelog et la licence."
+    },
+    {
+      "sha": "9e9c071da13aeb395b98b6babf6f919de8c48c3c",
+      "split": "tune",
+      "task": "Le test d'authentification sur Windows doit accepter que le compte administrateur local apparaisse sous un nom court dans l'environnement de CI, sans pour autant laisser passer un autre utilisateur."
+    },
+    {
+      "sha": "a0c03677169467c6c0a044452176cbf2a5f97ba8",
+      "split": "tune",
+      "task": "Permettre de lancer le tableau de bord en arrière-plan comme le watcher, avec un suivi de son état et un arrêt propre, sans que les deux processus se gênent."
+    },
+    {
+      "sha": "a11ce402313e76b747885e744865a57d6122c2cd",
+      "split": "tune",
+      "task": "Corriger le test de fumée du paquet npm sous Linux pour qu'il utilise le binaire musl statique déjà contrôlé par le job de build, au lieu de tenter de reconstruire un binaire glibc refusé par la distribution."
+    },
+    {
+      "sha": "a1b73009dd9f4e2e719ff0bc6912702f828dd81f",
+      "split": "tune",
+      "task": "Ajouter une commande permettant d'annuler le dernier merge d'agent sur la branche principale, sans réécrire l'historique si ce merge a déjà été publié, et en permettant de re-merger proprement le travail de l'agent si besoin."
+    },
+    {
+      "sha": "a25b4b373e8cc78a2f341c674f41fbcc10472b14",
+      "split": "test",
+      "task": "Ajouter la possibilité de notifier plusieurs canaux en parallèle (Slack, Discord, endpoint générique), en gardant l'ancien canal unique, avec l'URL lue depuis une variable d'environnement pour ne pas exposer le secret dans la config."
+    },
+    {
+      "sha": "a374a672b61b41f94e5b19c1ff43f483060118ad",
+      "split": "test",
+      "task": "Le driver ne doit pas arrêter de lire le flux pendant que le programme écrit encore : il faut attendre la fin du flux avant de passer à la suite du test, sinon le client lent est évincé."
+    },
+    {
+      "sha": "a3a929d68b2c0ea6898d565fb0b9bac00ee9cfc7",
+      "split": "test",
+      "task": "Ajouter au tableau de bord des boutons de pilotage (relancer la file, défaire le dernier merge, clore un ticket de conflit) protégés contre les requêtes forgées depuis un autre site, avec des tests qui vérifient le refus sans en-tête, l'effet réel de la clôture de ticket, la remontée des erreurs métier et l'affichage de l'historique des merges."
+    },
+    {
+      "sha": "a6d0fbfe36513806f4d3382c787ad98b242bfcef",
+      "split": "test",
+      "task": "Ajouter la possibilité de configurer, pour chaque profil d'agent, ses propres variables d'environnement et son propre délai, avec une commande pour lister les profils et une validation des profils dès la revue d'un plan."
+    },
+    {
+      "sha": "a95016b87b61e4153982be9e7ffbfeb80c4a7681",
+      "split": "tune",
+      "task": "Ajouter un moyen de déclarer une suite de tâches avec leurs dépendances dans un fichier versionné avec le code, qu'on puisse relire avant de le lancer et rejouer, sans qu'il exécute quoi que ce soit de spécial."
+    },
+    {
+      "sha": "aae2667094bd39e4f7f7cd5bcad633de00580794",
+      "split": "test",
+      "task": "Il faudrait que le mode autonome puisse piloter un agent via un protocole standard plutôt qu'en simple ligne de commande, avec un contrôle des demandes de permission et des accès disque limités au clone."
+    },
+    {
+      "sha": "b0a929c18d6a943fca4d8d0c79cdd289c8ebe52f",
+      "split": "test",
+      "task": "Il faudrait qu'on puisse promouvoir le staging vers main en lançant d'abord les tests d'intégration complets, avec un fast-forward de main seulement si ces tests passent, et un rollback du staging uniquement sur demande explicite."
+    },
+    {
+      "sha": "b309c98a8563dd04f3ad8bd059614362cf4f9cf0",
+      "split": "test",
+      "task": "Peux-tu ajouter un serveur MCP à Striart pour que Claude Code et Cursor puissent piloter l'orchestrateur, en s'assurant qu'un agent lancé par Striart ne puisse pas à son tour engendrer d'autres agents ?"
+    },
+    {
+      "sha": "b8b5862d37cec2586e963804feb6c84172fb28e0",
+      "split": "tune",
+      "task": "Permettre à un relecteur humain, depuis le tableau de bord, d'ouvrir un conflit et de voir d'un coup les versions du fichier concerné, la tentative du LLM et le log du Test Gate, avec un accès refusé aux identifiants inconnus."
+    },
+    {
+      "sha": "b9d586c3f4bc2613504f0366fb094f2dae8e20d0",
+      "split": "tune",
+      "task": "Ajouter le support des commandes shell réelles préfixées par \"!\" dans le champ de saisie, avec la même confiance que le bus d'agents, et améliorer la gestion des erreurs de verrou du pty."
+    },
+    {
+      "sha": "b9fd443b3812db6514a63aefd9f7bee07e87dd7f",
+      "split": "test",
+      "task": "Rendre l'échec d'un test de surveillance du dossier de configuration plus parlant : il doit montrer quels événements ont déclenché un rafraîchissement inattendu."
+    },
+    {
+      "sha": "bb28c6880ad20ad52e91812d43b2d8646a1daaf8",
+      "split": "test",
+      "task": "Ajouter une CI qui tourne sur l'instance de forge auto-hébergée, en reprenant les vérifications existantes, et rendre testables en process les zones de code jusqu'ici couvertes à tort, pour mieux refléter la couverture réelle."
+    },
+    {
+      "sha": "bcb48830d2f40dbf50442f316fc428bc38bfe4f6",
+      "split": "test",
+      "task": "Je voudrais que le ticket couvre la mise à jour de la documentation publique du projet : le changelog, le guide de contribution et les blocs de CI, pour qu'ils reflètent fidèlement le fonctionnement actuel, sans détails internes du mainteneur."
+    },
+    {
+      "sha": "c5cb73525509245b5430fa5e4825b08d5bb5b79e",
+      "split": "test",
+      "task": "Permettre de choisir librement le modèle d'IA utilisé pour le routage et la fusion, en gardant le local par défaut, tout en gardant les clés d'accès hors du fichier de configuration."
+    },
+    {
+      "sha": "c5f9c5615f0e41ceb9323e11d9eedd82538f9f4a",
+      "split": "tune",
+      "task": "Une demande pour que le tableau de bord indique clairement quels agents tournent en mode autonome (avec leur profil) et qu'il signale quand le processus de surveillance ne tourne pas, pour éviter d'attendre des fusions qui n'arriveront pas."
+    },
+    {
+      "sha": "c9b048ddecb8aee3be93a39143687059b49bcfcf",
+      "split": "test",
+      "task": "Ajouter une commande de diagnostic qui vérifie d'un coup l'état de l'environnement (outils, dépôt, configuration, connexion au modèle, verrous et tickets en attente) et indique clairement ce qui bloque, avec un export lisible par la CI."
+    },
+    {
+      "sha": "ca16d645cadf384a8f2c57a8b7a117f46b3f00c3",
+      "split": "tune",
+      "task": "Empêcher la maintenance automatique de Git dans les dépôts temporaires des tests, pour éviter les échecs intermittents de copie de fichiers en CI quand un clone local est utilisé."
+    },
+    {
+      "sha": "cc1e81966db7948f09d42c7b62ffecc9f9a86e8b",
+      "split": "tune",
+      "task": "Ajouter une commande qui prédit les fichiers qu'une tâche va toucher et, en cas de chevauchement avec un agent déjà actif, met la tâche en file d'attente au lieu de lancer l'agent tout de suite."
+    },
+    {
+      "sha": "cd166f8ae2cac796a34ffd620d36b647e44b3b63",
+      "split": "test",
+      "task": "Ajouter au tableau de bord un mode autonome avec choix d'un profil, une action de déverrouillage de la fusion sémantique, une synchronisation des agents avec la branche principale et des tests couvrant ces actions, en refusant les requêtes avec un profil inconnu."
+    },
+    {
+      "sha": "cd6db70ce4e5c458ba23030dbd9f7790f244bc6d",
+      "split": "tune",
+      "task": "Rendre les échecs des tests de timeout et de statut d'équipe plus parlants : afficher le détail complet du rapport ou de l'état au lieu d'un simple compteur ou d'un statut, pour voir directement quel processus a été tué ou pourquoi le commit a été refusé."
+    },
+    {
+      "sha": "d2d0b992bd6e0b832a11e12101ccfd8b4941817c",
+      "split": "test",
+      "task": "Faut-il qu'un conflit de fichier impossible à fusionner par le LLM parte directement en ticket humain, sans tentative de fusion sémantique ni compteur d'échec ?"
+    },
+    {
+      "sha": "d337e5eb924e54c31b28b1d470139c680a66e7dc",
+      "split": "tune",
+      "task": "Ajouter une mémoire partagée qui résume après chaque merge les changements d'API, pour que les autres agents les connaissent sans attendre un conflit, en restant optionnelle et sans jamais bloquer un merge."
+    },
+    {
+      "sha": "d3a54d7261c8dea4cb072f02d98473cad340dd2e",
+      "split": "tune",
+      "task": "Il faudrait que la liste de contrôle qui bloque les mentions internes à l'export tolère une occurrence d'un motif interdit dans le fichier de règles d'exclusion npm, sans qu'il soit nécessaire de l'exempter partout ailleurs."
+    },
+    {
+      "sha": "d4797927a3dab17725e4ba869a667464b112fe02",
+      "split": "tune",
+      "task": "Ajouter une interface de suivi en temps réel dans le terminal pour piloter les agents supervisés, avec un message clair quand une commande n'est pas supportée en mode interactif."
+    },
+    {
+      "sha": "daa0ba7a831ebeedc5a96a30c8eac1d2f9ee589d",
+      "split": "tune",
+      "task": "Quand on lance Striart sur un projet tout neuf, rien ne se passe comme prévu : il faut un premier commit pour que la doc soit à jour, et le bon branchement de la branche cible reste à vérifier."
+    },
+    {
+      "sha": "ded14ebc5c234377052f33549adc2c92b45431e8",
+      "split": "test",
+      "task": "Le watcher ne devrait plus merger les agents en mode autonome : leur merge doit rester réservé à la fin de leur session, sans intervenir pendant qu'ils travaillent."
+    },
+    {
+      "sha": "e4988541315d7d2d1b7247944b3a0cca2fc8972c",
+      "split": "tune",
+      "task": "Ajouter une vérification de types JSDoc au projet : annoter les fonctions exportées qui manipulent les contrats de données et brancher un check de types dans la CI, sans passer par une étape de compilation."
+    },
+    {
+      "sha": "eeb757265fbf58e3f7dece2f92a70765a9280b00",
+      "split": "tune",
+      "task": "Ajouter la possibilité de déclarer qu'une tâche ne doit démarrer qu'après la fin d'un autre travail, avec un refus immédiat si la référence est inconnue ou si les dépendances forment une boucle."
+    },
+    {
+      "sha": "f23b6ae6970854b263286cb75889f18a8c07e05d",
+      "split": "tune",
+      "task": "Ajouter une commande d'historique des merges et rollbacks Striart, reconstruite depuis le graphe Git, avec une sortie lisible et une option JSON pour la CI, et l'ajouter aussi à la commande de statut."
+    },
+    {
+      "sha": "f351a9946acc50fc028b8481b7564a3281b240a8",
+      "split": "tune",
+      "task": "Il faudrait que l'arrêt d'un conteneur tue d'abord les processus enfants avant leurs parents, pour éviter qu'un processus stoppé ne soit comptabilisé à tort comme déjà disparu."
+    },
+    {
+      "sha": "f8cde43bfe95e0b5e96428218ff9444ad6fee568",
+      "split": "tune",
+      "task": "Renommer le compte propriétaire de la forge interne : mettre à jour le nom du paquet npm, les URLs de clone et de registre dans la doc et la configuration, et noter le changement dans le changelog, tout en gardant le filtre qui empêche de publier les anciens identifiants sur le miroir public."
+    },
+    {
+      "sha": "fed1413af7e0ae5e79627f30a6042bc1051ca700",
+      "split": "test",
+      "task": "Permettre aux agents de travailler sur de gros projets sans saturer le disque, avec un moyen de voir l'espace utilisé par agent et de libérer celui des agents arrêtés."
+    }
+  ],
+  "manualEdits": {
+    "reason": "4 tâches reformulées à la main pour ne contenir aucun motif interdit par la synchronisation vers le miroir public (noms de forge, d'ancien compte, dossier de consignes) ; le sens et le niveau de vague sont conservés.",
+    "shas": ["9c7e8d5f", "bb28c688", "d3a54d72", "f8cde43b"]
+  }
+}

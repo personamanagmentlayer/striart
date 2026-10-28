@@ -1,6 +1,7 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import { StriartError } from './errors.js';
 import { logger } from './logger.js';
+import { isLoopbackHost, netFetch } from './net.ts';
 import { llmConfigForRole } from './orchestration/llm-roles.ts';
 import { LLM_ROLE_NAMES } from './orchestration/settings.ts';
 import {
@@ -104,7 +105,6 @@ function assertSafeApiKeyEnv(name, allowAny) {
   );
 }
 
-const LOOPBACK_HOST_RE = /^(localhost|127(\.\d{1,3}){3}|\[::1\])$/i;
 const warnedHosts = new Set();
 
 /**
@@ -123,13 +123,13 @@ function assertKeySafeBaseUrl(provider, baseUrl, allowInsecure) {
       details: { reason: 'BASE_URL_INVALID', provider },
     });
   }
-  const loopback = LOOPBACK_HOST_RE.test(url.hostname);
+  const loopback = isLoopbackHost(url.hostname);
   if (url.protocol !== 'https:' && !loopback && !allowInsecure) {
     throw new StriartError(
       `llm.baseUrl : la clé d'API ne part pas en clair vers ${url.hostname} (HTTPS requis hors boucle locale).`,
       {
         code: 'LLM_CONFIG_INVALID',
-        hint: 'Utilise https://, ou llm.allowInsecureTransport: true en connaissance de cause.',
+        hint: 'Utilise https:// ; pour un hôte interne en clair : llm.allowInsecureTransport: true ET l’hôte dans network.allowInsecureHosts (config utilisateur), en connaissance de cause.',
         details: { reason: 'INSECURE_BASE_URL', provider, host: url.hostname },
       },
     );
@@ -229,13 +229,14 @@ function httpError(label, res) {
     status: res.status,
     retryAfterMs,
     retryable: isRetryableStatus(res.status),
+    causeCode: res.status >= 500 ? 'HTTP_5XX' : 'HTTP_4XX',
   });
 }
 
 function truncatedError(label) {
   return new LlmCallError(
     `${label} : réponse coupée par la limite de longueur de sortie (plafond tokens.budgets.perCall.maxOutputTokens ou limite du modèle)`,
-    { retryable: false, providerFault: false },
+    { retryable: false, providerFault: false, causeCode: 'TRUNCATED' },
   );
 }
 
@@ -249,8 +250,12 @@ function accountingCatch(error) {
   logAccountingFailure(error, 'llm-call-record');
 }
 
+// Tous les appels passent par src/net.ts : redirect 'error' imposé (x-api-key / api-key /
+// Authorization ne partent jamais vers un hôte cible de redirection, S-M5), HTTPS hors
+// boucle locale, liste blanche d'hôtes, mode offline, proxy et CA d'entreprise.
 async function requestOllama(resolved, { prompt, format, signal, maxOutputTokens }) {
-  const res = await fetch(`${resolved.baseUrl}/api/generate`, {
+  const res = await netFetch(`${resolved.baseUrl}/api/generate`, {
+    purpose: 'llm',
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -261,8 +266,6 @@ async function requestOllama(resolved, { prompt, format, signal, maxOutputTokens
       ...(maxOutputTokens && { options: { num_predict: maxOutputTokens } }),
     }),
     signal,
-    // Jamais de redirection : x-api-key / api-key / Authorization partiraient vers l'hôte cible (S-M5).
-    redirect: 'error',
   });
   if (!res.ok) throw httpError('Ollama', res);
   const data = await res.json();
@@ -296,13 +299,15 @@ function parseChatCompletion(label, data) {
     throw new LlmCallError(`${label} : réponse filtrée par le fournisseur (content_filter)`, {
       retryable: false,
       providerFault: false,
+      causeCode: 'FILTERED',
     });
   }
   return { text, usage: fromOpenAi(data.usage) };
 }
 
 async function requestOpenAi(resolved, { prompt, format, signal, maxOutputTokens }) {
-  const res = await fetch(`${resolved.baseUrl}/chat/completions`, {
+  const res = await netFetch(`${resolved.baseUrl}/chat/completions`, {
+    purpose: 'llm',
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -315,8 +320,6 @@ async function requestOpenAi(resolved, { prompt, format, signal, maxOutputTokens
       ...(maxOutputTokens && { [openAiMaxTokensField(resolved)]: maxOutputTokens }),
     }),
     signal,
-    // Jamais de redirection : x-api-key / api-key / Authorization partiraient vers l'hôte cible (S-M5).
-    redirect: 'error',
   });
   if (!res.ok) throw httpError(`L'API`, res);
   return parseChatCompletion(`L'API`, await res.json());
@@ -347,7 +350,8 @@ async function requestAnthropic(resolved, { prompt, signal, maxOutputTokens, cac
         : []),
     ];
   }
-  const res = await fetch(`${resolved.baseUrl}/v1/messages`, {
+  const res = await netFetch(`${resolved.baseUrl}/v1/messages`, {
+    purpose: 'llm',
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -360,8 +364,6 @@ async function requestAnthropic(resolved, { prompt, signal, maxOutputTokens, cac
       messages: [{ role: 'user', content }],
     }),
     signal,
-    // Jamais de redirection : x-api-key / api-key / Authorization partiraient vers l'hôte cible (S-M5).
-    redirect: 'error',
   });
   if (!res.ok) throw httpError(`L'API Anthropic`, res);
   const data = await res.json();
@@ -375,6 +377,7 @@ async function requestAnthropic(resolved, { prompt, signal, maxOutputTokens, cac
     throw new LlmCallError(`L'API Anthropic a refusé la requête (stop_reason: refusal)`, {
       retryable: false,
       providerFault: false,
+      causeCode: 'REFUSED',
     });
   }
   return { text, usage: fromAnthropic(data.usage) };
@@ -386,7 +389,8 @@ async function requestAzure(resolved, { prompt, format, signal, maxOutputTokens 
   // model et apiVersion viennent de la config : encodés, jamais concaténés bruts
   // (un « ../ » ou un « & » ne doit pas réécrire le chemin ni la requête).
   const url = `${resolved.baseUrl}/openai/deployments/${encodeURIComponent(resolved.model)}/chat/completions?api-version=${encodeURIComponent(resolved.apiVersion)}`;
-  const res = await fetch(url, {
+  const res = await netFetch(url, {
+    purpose: 'llm',
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -398,8 +402,6 @@ async function requestAzure(resolved, { prompt, format, signal, maxOutputTokens 
       ...(maxOutputTokens && { max_completion_tokens: maxOutputTokens }),
     }),
     signal,
-    // Jamais de redirection : x-api-key / api-key / Authorization partiraient vers l'hôte cible (S-M5).
-    redirect: 'error',
   });
   if (!res.ok) throw httpError('Azure OpenAI', res);
   return parseChatCompletion('Azure OpenAI', await res.json());
@@ -433,6 +435,23 @@ export function fillPromptTemplate(template, vars) {
 }
 
 /**
+ * Déballe un JSON rendu dans UN bloc de code markdown (```json … ```). Les
+ * fournisseurs sans mode JSON natif (Anthropic) enrobent volontiers leur réponse
+ * malgré la consigne « uniquement du JSON » ; la rejeter coûterait un appel payant
+ * (observé avec claude-haiku sur le Router : 4 échecs sur 4). Strictement
+ * limité à un bloc unique couvrant TOUTE la réponse : rien d'autre n'est deviné
+ * (texte autour, plusieurs blocs → inchangé, et `transform` rejette comme avant).
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+export function unwrapJsonResponse(text) {
+  const match = /^\s*```[A-Za-z0-9_-]*[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*```\s*$/.exec(text);
+  if (!match || match[1].includes('```')) return text;
+  return match[1];
+}
+
+/**
  * Message d'erreur SANS donnée sensible : une URL peut porter des identifiants
  * (userinfo, jeton en query) et un message d'erreur de bibliothèque HTTP
  * recopie souvent l'URL ou un fragment de clé. On n'expose que le motif.
@@ -457,22 +476,24 @@ function classifyError(error) {
   if (error instanceof LlmCallError) return error;
   const name = error?.name;
   if (name === 'TimeoutError' || name === 'AbortError') {
-    return new LlmCallError('délai dépassé', { retryable: true });
+    return new LlmCallError('délai dépassé', { retryable: true, causeCode: 'TIMEOUT' });
   }
   if (error instanceof TypeError) {
     // fetch() lève un TypeError pour toute panne de transport (DNS, refus, reset).
-    return new LlmCallError(
-      `panne de transport (${/** @type {any} */ (error).cause?.code ?? error.message})`,
-      {
-        retryable: true,
-      },
-    );
+    const detail = /** @type {any} */ (error).cause?.code ?? error.message;
+    return new LlmCallError(`panne de transport (${detail})`, {
+      retryable: true,
+      causeCode: 'TRANSPORT',
+      causeDetail: sanitizeErrorText(detail).slice(0, 80),
+    });
   }
   // Réponse 200 mal formée / champ manquant : retentée (comportement historique),
-  // sans incriminer la disponibilité du fournisseur.
+  // sans incriminer la disponibilité du fournisseur. Un JSON illisible (corps du fournisseur ou
+  // sortie validée par `transform`) est distingué des autres malformations.
   return new LlmCallError(error?.message ?? String(error), {
     retryable: true,
     providerFault: false,
+    causeCode: error instanceof SyntaxError ? 'INVALID_JSON' : 'INVALID_RESPONSE',
   });
 }
 
@@ -553,7 +574,7 @@ export async function llmGenerate({
     const cached = await cacheGet(scope.root, cacheId);
     if (cached !== null) {
       try {
-        const value = transform(cached);
+        const value = transform(format === 'json' ? unwrapJsonResponse(cached) : cached);
         await recordCacheHit(scope, Date.now() - started);
         return value;
       } catch {
@@ -620,6 +641,13 @@ export async function llmGenerate({
         cacheControl,
       });
     } catch (error) {
+      // Refus de la politique réseau (hors ligne, hôte non autorisé, HTTPS, CA, redirection) :
+      // décision de l'utilisateur ou erreur d'environnement, jamais une panne du fournisseur —
+      // ni retentée, ni comptée au disjoncteur, ni enveloppée dans LLM_FAILED.
+      if (error instanceof StriartError && /^(NET_|USER_CONFIG_)/.test(error.code)) {
+        breakerRelease(circuit);
+        throw error;
+      }
       lastError = classifyError(error);
       if (lastError.providerFault) breakerFailure(circuit, resilience.breaker);
       else breakerRelease(circuit);
@@ -650,7 +678,7 @@ export async function llmGenerate({
     let value;
     let rejection = null;
     try {
-      value = transform(reply.text);
+      value = transform(format === 'json' ? unwrapJsonResponse(reply.text) : reply.text);
     } catch (error) {
       rejection = error;
     }
@@ -686,6 +714,8 @@ export async function llmGenerate({
       model: resolved.model,
       host: hostOf(resolved.baseUrl),
       attempts: attemptsMade,
+      ...(lastError?.causeCode ? { causeCode: lastError.causeCode } : {}),
+      ...(lastError?.causeDetail ? { causeDetail: lastError.causeDetail } : {}),
       ...(lastError?.status ? { status: lastError.status } : {}),
     },
   });

@@ -38,6 +38,7 @@ function makeCtx(m = en) {
   const out = {
     step: () => {},
     warn: () => {},
+    notice: () => {},
     line: (level, text, hint) => lines.push({ level, text, hint }),
     detail: (text) => lines.push({ level: 'detail', text }),
     print: () => {},

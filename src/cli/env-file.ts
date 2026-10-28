@@ -61,6 +61,19 @@ const DENY_PATTERNS: readonly RegExp[] = Object.freeze([
   /^STRIART_SESSION$/i,
   /^STRIART_DAEMON$/i,
   /^STRIART_TOKENS_/i,
+  // Politique réseau (src/net.ts) : décision de l'utilisateur (shell ou config
+  // utilisateur), jamais d'un dépôt — sinon il rouvrirait une liste blanche
+  // d'hôtes, couperait le mode offline ou volerait l'authentification du proxy.
+  /^STRIART_(?:OFFLINE|ALLOWED_HOSTS|TLS_|PROXY_|CA_)/i,
+]);
+
+/** Noms exacts de la politique réseau : aucun motif d'extension ne peut les viser. */
+const NETWORK_POLICY_ENV_NAMES: readonly string[] = Object.freeze([
+  'STRIART_OFFLINE',
+  'STRIART_ALLOWED_HOSTS',
+  'STRIART_TLS_MIN_VERSION',
+  'STRIART_PROXY_AUTH',
+  'STRIART_CA_FILE',
 ]);
 
 const NAME_RE = /^[A-Z][A-Z0-9_]{0,127}$/;
@@ -78,6 +91,8 @@ export function validateEnvAllowPattern(pattern: string): string | null {
   const probe = pattern.replace('*', 'X');
   if (isDeniedEnvName(probe) || isDeniedEnvName(pattern.replace('*', '')))
     return 'cible une variable dangereuse (liste noire non relâchable)';
+  if (NETWORK_POLICY_ENV_NAMES.some((name) => matchesExtension(name, pattern)))
+    return 'cible la politique réseau de Striart (liste noire non relâchable)';
   return null;
 }
 

@@ -145,7 +145,9 @@ are described in
   `PLAN_INVALID` refusal names the faulty task (position, `id`) and field; in
   `--json`, `error.details.reason` gives the cause as a stable sub-code
   (`PROMPT_MISSING`, `AFTER_FORWARD`, `DUPLICATE_ID`… — list in
-  [Commands](commands.md#machine-output---json)).
+  [Commands](commands.md#machine-output---json)). A plan with no `version:`
+  line gives `VERSION_MISSING` (expected: `version: 1` or `version: 2`), a plan
+  of any other version `UNSUPPORTED_VERSION`.
 
 Full commented example:
 [`examples/plan.example.yaml`](../../examples/plan.example.yaml).

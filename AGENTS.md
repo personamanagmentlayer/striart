@@ -16,7 +16,7 @@ branch.
 
 ## Setup
 
-Requirements: Node.js 22.18 or later (22 or 24 LTS recommended), Git, and a
+Requirements: Node.js 22.21 or later (22 or 24 LTS recommended), Git, and a
 Rust toolchain (via rustup; the pinned version in `native/rust-toolchain.toml`
 installs itself) to build the native binary.
 
@@ -45,6 +45,10 @@ npm run native:test      # cargo test, when you touch native/
 
 `npm test` runs the unit and integration projects together. `npm run test:pack`
 builds and installs the published package and needs network access.
+`npm run test:e2e` runs the dashboard end-to-end suite (Playwright and axe,
+browser required) and is not part of `npm test`; `npm run bench:router` and
+`npm run bench:merger` make real calls to a cloud LLM provider with keys read
+from `.env` (opt-in).
 
 ## Code conventions
 
@@ -82,7 +86,10 @@ builds and installs the published package and needs network access.
   Gate, LLM call).
 - Nothing is committed to the target branch unless the Test Gate passes.
 - Agents use full clones, never Git worktrees; only the orchestrator pushes.
-- A clone whose session is alive is never rebased, merged or deleted.
+- A clone whose session is alive is never rebased, merged or deleted. The only
+  exception concerns the *session*, never the clone or its work: the idle GC
+  (`src/idle/`) may cleanly close the session of a forgotten agent, only when the
+  user's own configuration authorizes it, after a warning and a grace period.
 - LLM output is untrusted content: Router paths are filtered, merged code goes
   through the Test Gate.
 - A lock (main or state) is never broken if its holder may be alive — only on

@@ -245,6 +245,7 @@ pub fn run(spec: &PtyHostSpec) -> Result<i32, NativeError> {
     let own_pid = std::process::id();
     // Reliquats d'un hôte mort (le verrou garantit qu'aucun vivant n'existe).
     let _ = std::fs::remove_file(&paths.pid);
+    let _ = std::fs::remove_file(&paths.output);
     files::remove_if_owned(&paths.stop, own_pid);
 
     // 2. Programme résolu AVANT d'ouvrir quoi que ce soit (échec net).
@@ -307,12 +308,13 @@ pub fn run(spec: &PtyHostSpec) -> Result<i32, NativeError> {
     let reader = pty
         .take_reader()
         .ok_or_else(|| NativeError::failure("PTY_SPAWN_FAILED", "pty output unavailable"))?;
+    let beat = files::OutputBeat::new(paths.output.clone(), own_pid, files::OUTPUT_BEAT_INTERVAL);
     let reader_thread = {
         let hub = Arc::clone(&hub);
         let ended = Arc::clone(&output_ended);
         std::thread::Builder::new()
             .name("pty-output".into())
-            .spawn(move || pump_output(reader, &hub, &ended))
+            .spawn(move || pump_output(reader, &hub, &ended, beat))
             .map_err(|e| NativeError::failure("PTY_SPAWN_FAILED", format!("thread: {e}")))?
     };
     if let Some(initial) = &spec.initial {
@@ -399,6 +401,7 @@ pub fn run(spec: &PtyHostSpec) -> Result<i32, NativeError> {
     hub.close_all();
     listener.shutdown();
     files::remove_if_owned(&paths.pid, own_pid);
+    files::remove_if_owned(&paths.output, own_pid);
     files::remove_if_owned(&paths.stop, own_pid);
     log_event(
         "stopped",
@@ -501,13 +504,26 @@ fn close_pty(pty: &Arc<Pty>, output_ended: &AtomicBool, grace_ms: u64) -> bool {
     gone
 }
 
-fn pump_output(mut reader: std::fs::File, hub: &Hub, ended: &AtomicBool) {
+fn pump_output(
+    mut reader: std::fs::File,
+    hub: &Hub,
+    ended: &AtomicBool,
+    mut beat: files::OutputBeat,
+) {
     let mut buffer = vec![0u8; OUTPUT_CHUNK_BYTES];
     let mut carry: Vec<u8> = Vec::new();
     loop {
         match reader.read(&mut buffer) {
             Ok(0) => break,
             Ok(n) => {
+                // Dernière sortie du pty, publiée pour le GC d'inactivité (host.output) :
+                // un échec d'écriture est journalisé une fois, jamais fatal.
+                if let Some(error) = beat.record(Instant::now(), SystemTime::now()) {
+                    log_event(
+                        "output-beat-failed",
+                        vec![("error", crate::json::Json::Str(error.to_string()))],
+                    );
+                }
                 carry.extend_from_slice(&buffer[..n]);
                 let keep = replay::incomplete_utf8_suffix_len(&carry);
                 let ready = carry.len() - keep;

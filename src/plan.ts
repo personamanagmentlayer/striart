@@ -78,6 +78,11 @@ export function validatePlan(doc: unknown): StriartPlan {
   // stricte (src/orchestration/plan-schema.ts). Le v1 garde exactement sa
   // sémantique : aucune clé v2 n'y est lue.
   if (plan.version === 2) return validatePlanV2(plan);
+  if (plan.version === undefined) {
+    throw invalid('la clé "version" est absente (attendu : "version: 1" ou "version: 2").', {
+      reason: 'VERSION_MISSING',
+    });
+  }
   if (plan.version !== 1) {
     throw invalid(
       `version de plan non supportée : ${JSON.stringify(plan.version)} (attendu : 1 ou 2).`,

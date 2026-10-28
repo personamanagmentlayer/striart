@@ -74,3 +74,14 @@ export async function emitStriartEvent(config, event) {
 onStriartEvent(async (config, event) => {
   if (event.message) await notify(config, event.message);
 });
+
+/**
+ * Publie un événement de MESURE qui n'a pas de configuration d'origine (le verrou principal n'en
+ * porte pas) : mêmes abonnés, mêmes garanties d'isolation. Le pont webhook l'ignore (pas de
+ * `message`). Ne rejette jamais ; l'appelant ne l'attend pas (le bus informe, il ne décide pas).
+ * @param {Extract<import('./types.js').StriartEvent, {type: 'lock:contention'}>} event
+ * @returns {Promise<void>}
+ */
+export function emitLockContention(event) {
+  return emitStriartEvent(/** @type {import('./types.js').StriartConfig} */ ({}), event);
+}

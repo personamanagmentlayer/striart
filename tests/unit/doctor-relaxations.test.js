@@ -13,12 +13,17 @@ describe('collectRelaxations — synthèse des protections relâchées (doctor)'
       }),
     ).toEqual({
       names: [],
+      policies: [],
       unreadable: [],
     });
   });
 
   it('config absente : rien à synthétiser', () => {
-    expect(collectRelaxations({ config: null })).toEqual({ names: [], unreadable: [] });
+    expect(collectRelaxations({ config: null })).toEqual({
+      names: [],
+      policies: [],
+      unreadable: [],
+    });
   });
 
   it('mcp.scope orchestrator', () => {
@@ -158,5 +163,31 @@ describe('collectRelaxations — synthèse des protections relâchées (doctor)'
         config: { secretPatterns: [], pty: { shell: 'pwsh' }, terminal: { launcher: 'custom' } },
       }),
     ).toEqual(['pty.shell', 'secretPatterns', 'terminal.launcher']);
+  });
+});
+
+describe('collectRelaxations — réseau (config UTILISATEUR / environnement)', () => {
+  it('network.allowInsecureHosts non vide : HTTP en clair autorisé vers ces hôtes', () => {
+    expect(
+      collectRelaxations({
+        config: null,
+        userNetwork: { allowInsecureHosts: ['gpu.corp.example'] },
+      }).names,
+    ).toContain('network.allowInsecureHosts');
+    expect(
+      collectRelaxations({ config: null, userNetwork: { allowInsecureHosts: [] } }).names,
+    ).toEqual([]);
+  });
+
+  it('vérification TLS coupée (NODE_TLS_REJECT_UNAUTHORIZED=0) : relâchement nommé', () => {
+    expect(collectRelaxations({ config: null, tlsVerificationDisabled: true }).names).toContain(
+      'env.NODE_TLS_REJECT_UNAUTHORIZED',
+    );
+  });
+
+  it('config utilisateur illisible : bloc réseau non évaluable, jamais compté sûr', () => {
+    expect(collectRelaxations({ config: null, userNetworkUnreadable: true }).unreadable).toContain(
+      'network',
+    );
   });
 });

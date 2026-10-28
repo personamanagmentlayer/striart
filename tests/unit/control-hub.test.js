@@ -231,6 +231,37 @@ describe('hub du protocole de contrôle', () => {
     });
   });
 
+  it('lock:contention (mesure du verrou, L8) ne déclenche ni recollecte ni notice', async () => {
+    const { emitStriartEvent } = await import('../../src/events.js');
+    hub = new ControlHub({
+      root: '/r',
+      collect: async () => ({ generatedAt: 'x', agents: [] }),
+      watchDisk: false,
+      debounceMs: 1,
+    });
+    const t = fakeTransport('coalesce');
+    const { activate } = await hub.subscribe(t, { initial: 'return' });
+    activate();
+    const before = hub.stats().collections;
+    await emitStriartEvent(
+      {},
+      {
+        type: 'lock:contention',
+        operation: 'merge',
+        waitedMs: 12,
+        holder: { operation: 'resolve-apply', ageMs: 30 },
+        queued: 2,
+      },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(hub.stats().collections).toBe(before);
+    expect(t.frames.filter((f) => f.method === 'control.notice')).toEqual([]);
+    // Un événement ordinaire, lui, recollecte toujours.
+    await emitStriartEvent({}, { type: 'merge:manual-mode', message: 'mode manuel' });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(hub.stats().collections).toBeGreaterThan(before);
+  });
+
   it('close() déconnecte tous les abonnés et se désabonne du bus', async () => {
     hub = new ControlHub({ root: '/r', collect: async () => ({ agents: [] }), watchDisk: false });
     const t = fakeTransport('disconnect');

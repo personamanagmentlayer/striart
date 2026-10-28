@@ -38,6 +38,61 @@ const list = (value: unknown): string => (Array.isArray(value) ? value.join(', '
 const because = (value: unknown): string => (value ? `: ${str(value)}` : '.');
 /** Same, when another sentence follows. */
 const becauseThen = (value: unknown): string => (value ? `: ${str(value)}.` : '.');
+/**
+ * Causes d'un échec LLM : la couche `llm.js` les rédige en français (référence) et ne
+ * porte pas de code de cause stable. Les formes connues sont rendues en anglais ; une
+ * cause inconnue reste affichée telle quelle (aucune information perdue).
+ */
+const LLM_CAUSES: Array<[RegExp, (...groups: string[]) => string]> = [
+  [/^délai dépassé$/, () => 'timed out'],
+  [/^panne de transport \((.*)\)$/, (detail) => `transport failure (${detail})`],
+  [/^(.+) a répondu HTTP (\d+)$/, (label, status) => `${label} answered HTTP ${status}`],
+  [
+    /^(.+) : réponse coupée par la limite de longueur de sortie \((.*)\)$/,
+    (label) =>
+      `${label}: response cut by the output length limit (tokens.budgets.perCall.maxOutputTokens or the model limit)`,
+  ],
+  [
+    /^(.+) : réponse filtrée par le fournisseur \(content_filter\)$/,
+    (label) => `${label}: response filtered by the provider (content_filter)`,
+  ],
+  [
+    /^L'API Anthropic a refusé la requête \(stop_reason: refusal\)$/,
+    () => 'the Anthropic API refused the request (stop_reason: refusal)',
+  ],
+];
+const llmCauseText = (value: unknown): string => {
+  const text = str(value);
+  for (const [pattern, render] of LLM_CAUSES) {
+    const match = pattern.exec(text);
+    if (match) return render(...match.slice(1));
+  }
+  return text;
+};
+/**
+ * Stable `details.causeCode` of an LLM failure (src/llm-resilience.ts `LLM_CAUSE_CODES`) rendered
+ * in English. An unknown code (a newer core than this catalogue) falls back to the free text, so
+ * no information is lost.
+ */
+const LLM_CAUSE_CODES: Record<string, (d: Record<string, unknown>) => string> = {
+  TRANSPORT: (d) => `transport failure${d.causeDetail ? ` (${str(d.causeDetail)})` : ''}`,
+  TIMEOUT: () => 'timed out',
+  HTTP_4XX: (d) => `the provider answered HTTP ${str(d.status)}`,
+  HTTP_5XX: (d) => `the provider answered HTTP ${str(d.status)}`,
+  TRUNCATED: () =>
+    'response cut by the output length limit (tokens.budgets.perCall.maxOutputTokens or the model limit)',
+  FILTERED: () => 'response filtered by the provider (content_filter)',
+  REFUSED: () => 'the provider refused the request (stop_reason: refusal)',
+  INVALID_JSON: () => 'the response is not valid JSON',
+  INVALID_RESPONSE: () => 'the response is malformed (missing field or unexpected content)',
+};
+const llmCause = (d: Record<string, unknown>): string => {
+  const render = typeof d.causeCode === 'string' ? LLM_CAUSE_CODES[d.causeCode] : undefined;
+  return render ? render(d) : llmCauseText(d.cause);
+};
+/** `: <cause>` of an LLM failure (stable code first, free text as the fallback), or a bare full stop. */
+const llmBecause = (d: Record<string, unknown>): string =>
+  d.causeCode || d.cause ? `: ${llmCause(d)}` : '.';
 /** ` (provider:model)` of an LLM failure, when known. */
 const llmTarget = (d: Record<string, unknown>): string =>
   d.provider ? ` (${str(d.provider)}${d.model ? `:${str(d.model)}` : ''})` : '';
@@ -48,6 +103,7 @@ const planTask = (d: Record<string, unknown>): string =>
 const PLAN_REASONS: Record<string, (d: Record<string, unknown>) => string> = {
   YAML: (d) => `the file is not valid YAML${because(d.cause)}`,
   NOT_AN_OBJECT: () => 'the plan must be a YAML object (version + tasks).',
+  VERSION_MISSING: () => '"version" is missing (expected: "version: 1" or "version: 2").',
   UNSUPPORTED_VERSION: (d) => `unsupported plan version ${str(d.version)} (expected: 1 or 2).`,
   // Plan version 2 (orchestration modes).
   UNKNOWN_KEY: (d) =>
@@ -259,6 +315,8 @@ const ERRORS: Record<string, (d: Record<string, unknown>) => string> = {
     `unknown subscription "${str(d.subscriptionId)}" on this connection.`,
   CONTROL_TOKEN_UNPROTECTED: (d) =>
     `cannot restrict the dashboard token file to the current user (${str(d.reason)}): refused, no token is left readable by others.`,
+  STATE_UNPROTECTED: (d) =>
+    `cannot restrict ${str(d.path)} to the current user (${str(d.reason)}): refused, local data (code, logs, tickets) would stay readable by other accounts. Fix the permissions, or on a file system without permissions set privateStateDir: false (explicit, shown by "striart doctor").`,
   CONTROL_UNAUTHENTICATED: () => 'dashboard session missing or expired: sign in again.',
   CONTROL_VERSION_UNSUPPORTED: (d) =>
     `unsupported Striart Control Protocol version ${str(d.requested)} (supported: ${list(d.supported)}).`,
@@ -271,6 +329,20 @@ const ERRORS: Record<string, (d: Record<string, unknown>) => string> = {
   DAEMON_SPAWN_FAILED: (d) => `the ${str(d.name)} daemon could not be launched${because(d.cause)}`,
   MERGE_COMMIT_FAILED: (d) =>
     `git refused the merge commit for "${str(d.agent)}"${becauseThen(d.cause)} The merge was cancelled and the main repository is clean: fix the cause (pre-commit / commit-msg hook, git identity) and run the merge again.`,
+  COMMIT_HOOK_REJECTED: (d) =>
+    `a hook of the target repository (pre-commit, commit-msg…) or the commit signature ${d.timedOut ? 'blocked until the commitTimeoutMs deadline (its process tree was killed)' : 'rejected the merge commit'} for "${str(d.agent)}"${d.ticketId ? ` (ticket ${str(d.ticketId)} keeps the hook output)` : ''}. The merge was cancelled and nothing was committed: fix what the hook reports and run the merge again. Hooks are never bypassed (no --no-verify).`,
+  DELIVERY_REF_INVALID: () =>
+    'no delivery branch name can be derived (invalid agent name): nothing was pushed. Use a valid agent name (letters, digits, dashes, underscores).',
+  IDLE_CLOSE_BLOCKED: (d) =>
+    `the idle session was NOT closed: a guard forbids it (${str(d.detail)}). The session is left untouched, with its clone and work.`,
+  IDLE_CLOSE_UNVERIFIED: (d) =>
+    `the idle session was NOT closed: its process cannot be identified (${str(d.detail)}). Nothing is killed blindly; check the process and stop it by hand if it is really forgotten.`,
+  IDLE_CLOSE_NOT_ACKNOWLEDGED: () =>
+    'the idle session was NOT closed: the process that supervises it did not acknowledge the stop request. The session is left untouched.',
+  IDLE_CLOSE_FAILED: (d) =>
+    `closing the idle session failed (${str(d.detail)}): the session may still be running; its clone and work are intact.`,
+  IDLE_STATE_CORRUPT: (d) =>
+    `the idle GC state file is corrupt${because(d.cause)} Delete .striart/idle/state.json: warnings will restart from zero.`,
   TICKETS_UNREADABLE: (d) =>
     `the conflict tickets folder (${str(d.path)}) cannot be read${because(d.cause)}`,
   TICKET_PATH_UNSAFE: (d) =>
@@ -323,7 +395,7 @@ const ERRORS: Record<string, (d: Record<string, unknown>) => string> = {
       'invalid LLM configuration',
       'invalid LLM configuration (see striart doctor).',
     ),
-  LLM_FAILED: (d) => `the LLM did not answer correctly${llmTarget(d)}${because(d.cause)}`,
+  LLM_FAILED: (d) => `the LLM did not answer correctly${llmTarget(d)}${llmBecause(d)}`,
   LOCK_PID_DEAD: (d) =>
     `PID ${str(d.pid)} is not a live process: the reservation would protect nothing.`,
   LOCK_PID_EPHEMERAL: (d) =>
@@ -366,7 +438,7 @@ const ERRORS: Record<string, (d: Record<string, unknown>) => string> = {
     `--agent ${str(d.agent)} contradicts the clone of agent "${str(d.cwdAgent)}" designated by the working directory.`,
   MCP_SCOPE_DENIED: (d) =>
     `outside the scope of this MCP server${d.boundAgent ? ` (bound to agent "${str(d.boundAgent)}")` : ''}: start it from the agent's clone or with --agent, or set mcp.scope: 'orchestrator' outside any clone.`,
-  MEMORY_FAILED: (d) => `the shared memory update failed${llmTarget(d)}${because(d.cause)}`,
+  MEMORY_FAILED: (d) => `the shared memory update failed${llmTarget(d)}${llmBecause(d)}`,
   MERGE_ABORT_FAILED: () =>
     'git merge --abort failed: the main repository is stuck mid-merge. Manual action required ("git merge --abort", then check "git status").',
   MERGE_STATE_CHANGED: (d) =>
@@ -457,7 +529,7 @@ const ERRORS: Record<string, (d: Record<string, unknown>) => string> = {
   ORCHESTRATION_STATE_CORRUPT: (d) =>
     `orchestration state file is corrupted: ${str(d.path)}${because(d.cause)}`,
   RACE_JUDGE_FAILED: (d) =>
-    `the race judge did not produce a valid ranking${llmTarget(d)}${because(d.cause)}`,
+    `the race judge did not produce a valid ranking${llmTarget(d)}${llmBecause(d)}`,
   ORCHESTRATE_USAGE: (d) =>
     d.reason === 'OPTION_NOT_FOR_MODE'
       ? `option ${str(d.option)} does not apply to "orchestrate ${str(d.mode)}".`
@@ -580,10 +652,10 @@ const ERRORS: Record<string, (d: Record<string, unknown>) => string> = {
   REUSE_UNMERGED: (d) =>
     `the clone of "${str(d.name)}" holds commits missing from main: rewriting them would lose them.`,
   ROUTER_FAILED: (d) =>
-    `the Router could not predict the touched files${llmTarget(d)}${because(d.cause)}`,
+    `the Router could not predict the touched files${llmTarget(d)}${llmBecause(d)}`,
   SECRETS_EXCLUSION_FAILED: (d) =>
     `excluding secrets from the clone of "${str(d.name)}" failed (git 2.35+ is required for sparse-checkout --no-cone)${becauseThen(d.cause)} Update git, or disable explicitly with secretPatterns: [] in striart.config.`,
-  SEMANTIC_MERGE_FAILED: (d) => `the semantic merge failed${llmTarget(d)}${because(d.cause)}`,
+  SEMANTIC_MERGE_FAILED: (d) => `the semantic merge failed${llmTarget(d)}${llmBecause(d)}`,
   SESSION_LIVE: (d) =>
     `a session is running in the clone of "${str(d.agent)}" (PID ${str(d.pid)}).`,
   SESSION_LOG_UNAVAILABLE: (d) =>
@@ -612,6 +684,28 @@ const ERRORS: Record<string, (d: Record<string, unknown>) => string> = {
     `the Striart user config is invalid (${str(d.reason)}${d.key ? `, key ${str(d.key)}` : ''}): it is ignored, no root is trusted.`,
   USER_CONFIG_UNSAFE: (d) =>
     `the Striart user config ${str(d.path)} is writable by group or others, or not owned by you: it is ignored (chmod 600).`,
+  NET_OFFLINE: (d) =>
+    `offline mode: the outbound call to ${str(d.host)} (${str(d.purpose)}) is refused. Remove network.offline (user config) or STRIART_OFFLINE to allow the network.`,
+  NET_HOST_NOT_ALLOWED: (d) =>
+    `host ${str(d.host)} is not in the network allow-list (${str(d.purpose)}). Add it to network.allowedHosts (user config) or STRIART_ALLOWED_HOSTS if intended.`,
+  NET_INSECURE_TRANSPORT: (d) =>
+    d.reason === 'TLS_VERIFICATION_DISABLED'
+      ? `NODE_TLS_REJECT_UNAUTHORIZED=0 disables TLS verification: the call to ${str(d.host)} is refused. Unset it and add the corporate CA instead (NODE_EXTRA_CA_CERTS).`
+      : `HTTPS is required outside the loopback: ${str(d.host)} will not be reached in clear text (${str(d.purpose)}). Use https://, or list the host in network.allowInsecureHosts (user config) knowingly.`,
+  NET_REDIRECT_REFUSED: (d) =>
+    d.reason === 'TOO_MANY'
+      ? `too many redirects (${str(d.purpose)}): refused.`
+      : `${str(d.host)} answered with a redirect: refused (none is ever followed). Fix the URL to point at the right address directly.`,
+  NET_URL_INVALID: (d) =>
+    d.reason === 'SCHEME'
+      ? `scheme ${str(d.protocol)} refused for an outbound call (http and https only).`
+      : 'invalid outbound URL.',
+  NET_PROXY_UNSUPPORTED: (d) =>
+    `a corporate proxy is configured but inactive on this Node (${str(d.reason)}): the call to ${str(d.host)} is refused rather than bypassing the proxy. Start striart with NODE_USE_ENV_PROXY=1 (Node >= 22.21 / 24.5) or use Node >= 24.14 / 25.4.`,
+  NET_TLS_UNTRUSTED: (d) =>
+    `untrusted certificate for ${str(d.host)} (${str(d.certCode)}). Add the corporate CA: NODE_EXTRA_CA_CERTS=<file.pem> (read at startup), node --use-system-ca / NODE_USE_SYSTEM_CA=1, or network.caFile (user config). Never NODE_TLS_REJECT_UNAUTHORIZED=0.`,
+  NET_CA_INVALID: (d) =>
+    `the corporate CA file is unusable (${str(d.reason)}): network.caFile must be a PEM file containing "BEGIN CERTIFICATE".`,
   HOOK_TOOL_UNKNOWN: (d) =>
     `unknown hook tool "${str(d.tool)}" (claude, codex, copilot, gemini, cline).`,
   HOOK_SCOPE_REQUIRED: () =>
@@ -652,6 +746,7 @@ const DOCTOR_LABELS: Record<string, string> = {
   config: 'Configuration',
   branch: 'Target branch',
   llm: 'LLM (Router/Merger)',
+  network: 'Network',
   secrets: 'Historical secrets',
   lock: 'Main lock',
   'state-lock': 'State lock',
@@ -664,8 +759,26 @@ const DOCTOR_LABELS: Record<string, string> = {
   profiles: 'Agent profiles',
   tokens: 'Tokens and cost',
   orchestration: 'Orchestration',
+  idle: 'Idle GC',
   dashboard: 'Dashboard (hosts)',
+  'state-privacy': 'Local data (.striart/)',
+  'gate-env': 'Test Gate environment',
+  delivery: 'Delivery',
+  performance: 'Performance',
   relaxations: 'Relaxed protections',
+};
+
+/** `delivery` doctor line (policy information, not a relaxation). */
+const deliveryDetail = (p: Record<string, unknown>): string => {
+  const seconds = (ms: unknown) => `${Math.round(Number(ms) / 1000)} s`;
+  let mode = 'autoPush is off: nothing is delivered to origin';
+  if (p.autoPush) {
+    mode =
+      p.delivery === 'branch'
+        ? 'BRANCH delivery: the tested commit goes to a review branch (PR/MR), never to the target branch'
+        : 'delivery by pushing the target branch';
+  }
+  return `${mode}; push timeout ${seconds(p.pushTimeoutMs)} (pushTimeoutMs), merge commit timeout ${seconds(p.commitTimeoutMs)} (commitTimeoutMs)`;
 };
 
 /** Fragments of the main-lock doctor lines (src/lock.js readMainLockStatus). */
@@ -735,6 +848,44 @@ const DOCTOR_DETAILS: Record<string, (p: Record<string, unknown>) => string> = {
     `ollama unreachable at ${str(p.url)}: striart run (Router) and the semantic merge are unavailable`,
   'llm.noKey': (p) => `${str(p.provider)}:${str(p.model)}: variable ${str(p.env)} is not set`,
   'llm.invalid': (p) => str(p.message),
+  'llm.networkRefused': (p) => `ollama at ${str(p.url)}: ${str(p.code)} - ${str(p.message)}`,
+  'network.userConfigUnreadable': (p) =>
+    `user config unreadable (${str(p.code)}): network policy cannot be evaluated, non-local outbound calls are refused`,
+  'network.envInvalid': (p) => str(p.message),
+  'network.policy': (p) =>
+    [
+      p.offline ? 'offline (no non-local call: NET_OFFLINE)' : null,
+      Array.isArray(p.allowedHosts) && p.allowedHosts.length > 0
+        ? `allowed hosts: ${p.allowedHosts.map((l: unknown) => list(l)).join(' ∩ ')}`
+        : null,
+    ]
+      .filter(Boolean)
+      .join('; '),
+  'network.direct': () => 'no proxy configured: direct connections',
+  'network.proxyActive': (p) =>
+    `proxy active (${str(p.source)}, ${p.mechanism === 'runtime' ? 'applied at runtime' : 'NODE_USE_ENV_PROXY at startup'}): ${str(p.proxy)}${p.noProxy ? `; bypass: ${str(p.noProxy)}` : ''}`,
+  'network.proxyInactive': (p) =>
+    `proxy configured (${str(p.proxy)}) but INACTIVE on this Node (${str(p.problem)}): remote calls are refused (NET_PROXY_UNSUPPORTED)`,
+  'network.tls': (p) =>
+    [
+      p.tlsMinVersion ? `minimum version ${str(p.tlsMinVersion)}` : null,
+      p.caFile ? `corporate CA network.caFile ${str(p.caFile)}` : null,
+      p.extraCaCerts ? `NODE_EXTRA_CA_CERTS ${str(p.extraCaCerts)}` : null,
+      p.systemCa ? 'system CA (--use-system-ca)' : null,
+    ]
+      .filter(Boolean)
+      .join('; '),
+  'network.insecure': (p) =>
+    `protection RELAXED: ${[
+      Array.isArray(p.allowInsecureHosts) && p.allowInsecureHosts.length > 0
+        ? `plain HTTP allowed to: ${list(p.allowInsecureHosts)} (network.allowInsecureHosts)`
+        : null,
+      p.tlsVerificationDisabled
+        ? 'TLS verification disabled (NODE_TLS_REJECT_UNAUTHORIZED=0): remote calls are refused'
+        : null,
+    ]
+      .filter(Boolean)
+      .join('; ')}`,
   'secrets.ok': () => 'none',
   'secrets.disabled': () =>
     'secret exclusion from clones and the historical-secrets scan are disabled (secretPatterns: [])',
@@ -795,6 +946,53 @@ const DOCTOR_DETAILS: Record<string, (p: Record<string, unknown>) => string> = {
   'dashboard.hostsStrict': () => 'Host limited to the loopback (127.0.0.1, localhost, [::1])',
   'dashboard.hostnameLocalhost': () =>
     'dashboardHostname is "localhost": the session cookie is sent by the browser to every localhost:* server (RFC 6265 section 8.5), e.g. an agent dev server that could replay it. Logged at every dashboard start.',
+  'state-privacy.ok': (p) =>
+    `${str(p.inspected)} item(s) of .striart/ restricted to the current user`,
+  'state-privacy.open': (p) =>
+    `${str(p.count)} item(s) of .striart/ readable by other accounts: ${
+      Array.isArray(p.examples)
+        ? p.examples.map((e: { path?: unknown }) => str(e?.path)).join(', ')
+        : ''
+    }`,
+  'state-privacy.relaxed': () =>
+    'protection RELAXED: .striart/ is not restricted to the current user (privateStateDir: false)',
+  'state-privacy.unreadable': (p) =>
+    `permissions of .striart/ could not be evaluated (${str(p.cause)})`,
+  'gate-env.filtered': (p) =>
+    `filtered environment: ${str(p.passed)} variable(s) passed, ${str(p.removedSecrets)} secret(s) removed, ${str(p.requested)} requested by the repository`,
+  'gate-env.inherit': () =>
+    'protection RELAXED: the Test Gate receives the WHOLE orchestrator environment, API keys included (gateEnv: "inherit")',
+  'gate-env.refused': (p) =>
+    `variables requested by the repository (gateEnv) but not allowed by the user config: ${list(p.names)}`,
+  'network.allProxyIgnored': () =>
+    'ALL_PROXY is not supported: the variable is ignored (Striart only reads HTTPS_PROXY, HTTP_PROXY and NO_PROXY), connections will NOT go through that proxy',
+  'delivery.push': (p) => deliveryDetail(p),
+  'delivery.branch': (p) => deliveryDetail(p),
+  'performance.stateLock': (p) => {
+    if (p.failed) return `state lock latency could not be measured: ${str(p.cause)}`;
+    if (Number(p.samples) === 0)
+      return 'state lock not obtained during the measurement: another process holds it or the disk does not answer';
+    const base = `atomic write under the state lock: median ${str(p.medianMs)} ms, worst ${str(p.maxMs)} ms (${str(p.samples)} sample(s))`;
+    if (p.level === 'alert')
+      return `${base} — above ${Number(p.alertMs) / 1000} s: operations that write state queue up behind it`;
+    if (p.level === 'slow') return `${base} — above the ${str(p.budgetMs)} ms budget`;
+    return `${base} — within the ${str(p.budgetMs)} ms budget`;
+  },
+  'performance.gitStatus': (p) => {
+    if (p.timedOut)
+      return 'git status of the main repository did not answer within the measurement window';
+    if (p.failed) return 'git status of the main repository failed';
+    const slow = Number(p.ms) > Number(p.warnMs);
+    return `git status of the main repository: ${str(p.ms)} ms${slow ? ` (above ${str(p.warnMs)} ms: status, the dashboard and merge guards suffer)` : ''}`;
+  },
+  'performance.stateDirSize': (p) =>
+    `.striart/: ${formatBytes(Number(p.sizeBytes ?? 0))} on disk${p.complete ? '' : ' (walk stopped at the time limit: partial size)'}`,
+  'performance.agentCount': (p) => `${str(p.count)} registered agent(s)`,
+  'performance.oldestLock': (p) =>
+    p.ageMs === null
+      ? 'no lock held'
+      : `${p.kind === 'main' ? 'main' : 'state'} lock held for ${Math.round(Number(p.ageMs) / 1000)} s${p.holder ? ` by "${str(p.holder)}"` : ''}${Number(p.ageMs) > 5 * 60_000 ? ': everything else waits (long Test Gate or LLM call, or a frozen holder)' : ''}`,
+  'performance.unreadable': (p) => `performance measurements failed: ${str(p.message)}`,
   'relaxations.some': (p) =>
     [
       Number(p.count) > 0 ? `${str(p.count)} protection(s) relaxed: ${list(p.names)}` : null,
@@ -815,6 +1013,16 @@ const DOCTOR_DETAILS: Record<string, (p: Record<string, unknown>) => string> = {
   'tokens.stalePrices': (p) =>
     `stale prices in tokens.pricing: ${list(p.stale)} — displayed costs may be wrong`,
   'tokens.unreadable': (p) => `usage ledger unreadable (${str(p.cause)})`,
+  'idle.relaxed': (p) =>
+    `protection RELAXED: ${list(p.keys)} — idle GC settings that lower a guard (see "striart gc").`,
+  'idle.closeAuthorized': () =>
+    'automatic closing of idle sessions is ON and authorized by the user config (warning, grace period; the clone and its work are always kept)',
+  'idle.closeUnauthorized': (p) =>
+    p.error
+      ? `idle.action: 'close' requested but the user config is unreadable (${str(p.error)}): no session will be closed`
+      : "idle.action: 'close' requested but this repository is not in idle.closeRoots of the user config: no session will be closed (warning only)",
+  'idle.ok': (p) =>
+    `idle agents are detected and reported (action: ${str(p.action)}); no session is closed automatically`,
   'orchestration.ok': () =>
     'orchestrated modes at safe defaults: race losers kept, reviewers verified read-only, nothing starts after a failure',
   'profiles.relaxed': (p) =>
@@ -859,6 +1067,12 @@ const DOCTOR_HINTS: Record<string, (p: Record<string, unknown>) => string> = {
     'fix targetBranch in striart.config (existing branches: git branch --list)',
   'llm.noKey': (p) => `set ${str(p.env)} (shell or .env file)`,
   'llm.invalid': () => 'fix llm in striart.config',
+  'network.proxyInactive': (p) =>
+    p.problem === 'SCHEME'
+      ? 'use an http:// or https:// proxy URL'
+      : 'start striart with NODE_USE_ENV_PROXY=1 (Node >= 22.21 / 24.5) or move to Node >= 24.14 / 25.4',
+  'network.insecure': () =>
+    'remove network.allowInsecureHosts / NODE_TLS_REJECT_UNAUTHORIZED if this is not intended',
   'secrets.found': () => 'revoke those secrets, then rerun with --allow-historical-secrets',
   'secrets.disabled': () =>
     'remove secretPatterns: [] (or list your own patterns) to restore the protection',
@@ -871,6 +1085,10 @@ const DOCTOR_HINTS: Record<string, (p: Record<string, unknown>) => string> = {
   'mcp.relaxed': () => 'remove mcp.scope from striart.config if this is not intended',
   'tokens.relaxed': () =>
     'remove tokens.accounting / tokens.budgets.enforcement / llmResilience.breaker from striart.config if this is not intended',
+  'idle.relaxed': () =>
+    'remove idle.enabled / idle.closePty from striart.config if this is not intended',
+  'idle.closeUnauthorized': () =>
+    'add this repository root to idle.closeRoots in the user config (see docs), or set idle.action to warn',
   'orchestration.relaxed': () =>
     'remove orchestration.race.losers / orchestration.review.reviewerWrites from striart.config if this is not intended',
   'profiles.relaxed': () => 'remove those settings from striart.config if this is not intended',
@@ -878,8 +1096,26 @@ const DOCTOR_HINTS: Record<string, (p: Record<string, unknown>) => string> = {
     'remove dashboardAllowedHosts from striart.config if this is not intended',
   'dashboard.hostnameLocalhost': () =>
     'remove dashboardHostname (default "instance") unless your browser cannot resolve *.localhost',
+  'state-privacy.open': () => 'striart init (tightens the existing data)',
+  'state-privacy.relaxed': () =>
+    'remove privateStateDir: false from striart.config, then run striart init',
+  'state-privacy.unreadable': () => 'striart init',
+  'gate-env.inherit': () => 'remove gateEnv: "inherit" from striart.config if this is not intended',
+  'gate-env.refused': () =>
+    'add them to gate.envAllow in the user config if they are intended, otherwise remove them from gateEnv',
   'relaxations.some': () =>
     'each dedicated line above details its relaxation; remove the matching setting if this is not intended',
+  'network.allProxyIgnored': () =>
+    'set HTTPS_PROXY / HTTP_PROXY (or network.proxy in the user config); SOCKS proxies are not supported',
+  'performance.stateLock': (p) =>
+    p.failed
+      ? 'check the permissions of .striart/, then rerun striart doctor'
+      : Number(p.samples) === 0
+        ? 'striart status; rerun when the machine is idle'
+        : 'loaded machine? exclude .striart/ from antivirus and indexing, then rerun when idle',
+  'performance.gitStatus': () =>
+    'git gc; check core.fsmonitor, the antivirus and the repository size',
+  'performance.oldestLock': () => 'striart lock',
 };
 
 export const en: Messages = {
@@ -1277,6 +1513,16 @@ export const en: Messages = {
       days: 'retention period in days (default: pruneDays from the config, 14)',
       dryRun: 'show what would be deleted, without deleting anything',
     },
+    gc: {
+      summary: 'GC: detect idle agents and cleanly close their forgotten sessions',
+      description:
+        'Detects agents with no activity at all (worktree, commits, output, messages) and, depending on idle.action, reports them, warns them, then closes their SESSION after a grace period. The clone and uncommitted work are always kept; no merge, no deletion. A pending human request, an open ticket, an orchestration plan or the main-repo session protects an agent.',
+      examples: ['striart gc', 'striart gc --dry-run', 'striart gc agent-a --close'],
+      agent: 'limit the sweep to this agent',
+      close:
+        'ask to close idle sessions (replaces idle.action and the authorization; the warning and the grace period remain mandatory)',
+      dryRun: 'show what would be done, without writing or closing anything',
+    },
     promote: {
       summary: 'Promote staging → main behind a global Test Gate',
       description: 'Replays the Test Gate on the target branch, then fast-forwards mainBranch.',
@@ -1402,6 +1648,8 @@ export const en: Messages = {
     autonomousKept: (reason) => `merge succeeded; clone kept: ${reason}`,
     alreadyIntegratedWarning: (agent) =>
       `${agent}: its commit was already in the target branch — this cycle merged nothing and did not replay the Test Gate; clone cleaned up.`,
+    serializationRelaxedWarning: (agent, blockers) =>
+      `${agent}: vague or repo-wide task, but it did not wait for ${blockers} — session ended in failure, clone kept with no commit to merge. A collision on a specific file still blocks.`,
     autonomousStatus: (status, reason) => `${status}: ${reason}`,
     cloneKept: (dir) => `clone kept: ${dir}`,
     striartCommitted: (sha, n, author) =>
@@ -1439,6 +1687,8 @@ export const en: Messages = {
     waitsFor: (after) => `waits for ${after} to finish.`,
     queued: (agent, taskId) => `task ${taskId} (${agent}) queued.`,
     predicted: (files) => `predicted files: ${files}`,
+    serialized: (reason) => `the Router serialized the task (whole repository): ${reason}.`,
+    sharedIgnored: (files) => `bookkeeping files left out of collision detection: ${files}.`,
     importLink: (by, file) => `${by} imports ${file}`,
     dependsOn: (a, b) => `${a} depends on ${b}`,
     semanticLink: (agent, links) =>
@@ -1476,6 +1726,8 @@ export const en: Messages = {
       finished: (name, kind, status) => `${name} (${kind}): ${status}`,
       turn: (agent, role, round) => `${agent}: ${role}'s turn (round ${round})`,
       turnDone: (agent, role, status) => `${agent}: ${role} → ${status}`,
+      serializationRelaxed: (name, blockers) =>
+        `${name} is not waiting for ${blockers} (session failed, clone has no commit to merge)`,
       waiting: (name, reason, ref) =>
         `${name} waits for ${
           (
@@ -1489,6 +1741,10 @@ export const en: Messages = {
         } ${ref}`,
       verdict: (reviewer, round, verdict) => `review: ${reviewer} (round ${round}) → ${verdict}`,
     },
+  },
+
+  completion: {
+    header: (shell, install) => `# striart — ${shell} completion. Install: ${install}`,
   },
 
   api: {
@@ -1580,6 +1836,7 @@ export const en: Messages = {
         : status === 'REMOVING'
           ? 'clone removal in progress'
           : 'clone unreadable by git',
+    stateTicket: 'TICKET',
     attention: 'To handle',
     missing: (agent) => `the clone of ${agent} disappeared from disk.`,
     tickets: (n) => `${n} open conflict ${plural(n, 'ticket', 'tickets')}.`,
@@ -1593,8 +1850,18 @@ export const en: Messages = {
     humanReviews: (n) => `${n} human ${plural(n, 'review waits', 'reviews wait')} for a verdict.`,
     orchestrations: (n) =>
       `${n} ${plural(n, 'orchestration', 'orchestrations')} running (version 2 plan / orchestrate).`,
+    idleSessions: (n, names) =>
+      `${n} idle live ${plural(n, 'session', 'sessions')}: ${names} (no activity, no fresh signal).`,
     orphanRuns: (n) =>
       `${n} interrupted ${plural(n, 'orchestration', 'orchestrations')}: its process stopped before the end.`,
+    overlapAgents: (a, b, files, n) =>
+      `${a} and ${b} both modified ${files}${n > 0 ? ` (+${n})` : ''} (not predicted by the Router): conflict likely at merge.`,
+    overlapTarget: (agent, files, n, branch) =>
+      `${agent} modified ${files}${n > 0 ? ` (+${n})` : ''} which ${branch} also advanced: conflict likely at its merge.`,
+    overlapDeferred: (agents) =>
+      `overlaps not observed for ${agents} (git call budget of the cycle reached: overlap.maxGitCalls).`,
+    overlapUnavailable: (reason) => `overlaps cannot be observed (${reason}).`,
+    overlapScope: "overlaps only cover the agents' COMMITTED work (not edits in progress).",
   },
 
   queue: {
@@ -1680,6 +1947,8 @@ export const en: Messages = {
     renameHazard: (source, ours, theirs) =>
       `${source} deleted on both sides, content found under two names (main: ${ours}, agent: ${theirs}): likely double rename, check the duplicate.`,
     pushFailed: (error) => `push failed (the local merge stays valid): ${error}`,
+    deliveredBranch: (ref, sha) =>
+      `delivered on origin/${ref} (${sha}): approve it from the forge (PR/MR), the target branch was not pushed.`,
     memoryFailed: (error) => `shared memory not updated: ${error}`,
     conflict: (agent, files) => `merge conflict with ${agent} on ${files}: merge aborted.`,
     semanticFailed: (error) => `the semantic merge failed: ${error}`,
@@ -1810,6 +2079,41 @@ export const en: Messages = {
     total: (size) => `total freed: ${size}.`,
   },
 
+  gc: {
+    running: 'Sweeping idle sessions',
+    disabled: 'Idle GC is disabled (idle.enabled: false): nothing is detected.',
+    nothing: 'no registered agent.',
+    stage: {
+      active: 'active',
+      protected: 'protected',
+      idle: 'idle',
+      warned: 'warned',
+      closable: 'closable',
+    },
+    session: { live: 'live session', ended: 'session ended', none: 'never launched' },
+    agentLine: (agent, stage, idle, session, host) =>
+      `${agent}: ${stage}${idle ? ` for ${idle}` : ''} — ${session}${host === 'none' ? '' : ` (${host})`}.`,
+    blockedBy: (codes) => `protected by: ${codes}.`,
+    reasons: (codes) => `active: ${codes}.`,
+    closeBlocked: (codes) => `cannot be closed yet: ${codes}.`,
+    closeNotBefore: (date) => `closable from ${date} without further activity.`,
+    wouldWarn: (agent) => `${agent} would be warned.`,
+    wouldClose: (agent) => `the session of ${agent} would be closed.`,
+    warned: (agent) => `${agent} warned: its session becomes closable after the grace period.`,
+    closed: (agent, host, code) =>
+      code === 'CLOSING'
+        ? `session of ${agent} (${host}): stop requested, exit in progress — clone and work kept.`
+        : `session of ${agent} (${host}) closed cleanly — clone and work kept.`,
+    refused: (agent, code, detail) =>
+      `session of ${agent} NOT closed (${code}${detail ? `: ${detail}` : ''}) — left untouched.`,
+    notAuthorized:
+      'closing is not authorized: add this repository to idle.closeRoots in the user config (striart doctor).',
+    authorizationError: (code) => `user config unreadable (${code}): no automatic closing.`,
+    holds: (codes) => `cautious sweep, nothing is closed: ${codes}.`,
+    summary: (idle, warned, closed, dryRun) =>
+      `${idle} idle ${idle === 1 ? 'agent' : 'agents'}, ${warned} ${dryRun ? 'to warn' : 'warned'}, ${closed} ${dryRun ? 'to close' : closed === 1 ? 'session closed' : 'sessions closed'}.`,
+  },
+
   prune: {
     running: 'Retention',
     cloneRemoved: (agent, date, size, dryRun) =>
@@ -1937,6 +2241,22 @@ export const en: Messages = {
     mergeDeferred: (agent) =>
       `${agent} not merged (stop requested): the next watch will not pick it up again.`,
     fetchError: (agent, error) => `silent fetch failed${agent ? ` for ${agent}` : ''}: ${error}`,
+    overlapAgents: (a, b, files, n) =>
+      `overlap observed: ${a} and ${b} both modified ${files}${n > 0 ? ` (+${n})` : ''} (not predicted by the Router).`,
+    overlapTarget: (agent, files, n, branch) =>
+      `overlap observed: ${agent} modified ${files}${n > 0 ? ` (+${n})` : ''} which ${branch} also advanced.`,
+    overlapCatchup: (agent, status) =>
+      status === 'REBASED'
+        ? `${agent} rebased early (overlap observed).`
+        : status === 'SKIPPED_SESSION'
+          ? `${agent}: live session, early rebase postponed (clone untouchable).`
+          : `${agent}: early rebase not done (${status}) — handled at its merge.`,
+    overlapError: (error) => `overlap observation failed: ${error}`,
+    idleWarned: (agent, idle, willClose) =>
+      willClose
+        ? `${agent} idle for ${idle}: its session will be closed after the grace period without further activity (clone and work kept).`
+        : `${agent} idle for ${idle} (automatic closing is not enabled).`,
+    idleError: (error) => `idle session sweep failed: ${error}`,
   },
 
   daemon: {
@@ -1981,27 +2301,13 @@ export const en: Messages = {
   },
 
   watchUi: {
-    title: '⚡ Striart watch — interactive control',
-    ticketsOpen: (n) =>
-      `🎫 ${n} open ${plural(n, 'ticket', 'tickets')} — type "/resolve" to handle them`,
-    terminalTab: 'Terminal',
     loading: 'Loading agents…',
-    noAgents: 'No agent.',
-    terminalHeader: 'Terminal — output of /command and !command',
     terminalEmpty: 'No command run yet — type /status or !ls to start.',
     idleTool: 'hosted tool finished? — "/relaunch" to start it again',
-    noSupervised: 'No active supervised agent to follow.',
-    scrolled: (n) => `↑ history (${n} ${plural(n, 'line', 'lines')} — Page Down to go back)`,
-    moreSuggestions: (n) => `… +${n} more, keep typing to filter`,
-    help1:
-      '@ mentions an agent · bare text → selected agent · /command runs striart (/clear, /relaunch, /exit) · !command runs a real shell · @ and / offer a list (↑/↓, Tab or Enter to pick).',
-    help2:
-      '↑/↓ recalls history (non-empty field) or switches tab (empty field, • = unread) · Page Up/Down scrolls · Ctrl+C quits.',
     refreshFailed: (error) => `Refresh failed: ${error}`,
     sending: (agent) => `Sending to "${agent}"`,
     relaunching: (agent) => `Relaunching "${agent}"`,
     relaunchNoAgent: 'no agent — "/relaunch agent-a" or select its tab',
-    seeTerminalTab: 'see the Terminal tab',
     unknownAgent: (agent) => `Unknown agent: "${agent}".`,
     autonomousRefused: (agent) =>
       `"${agent}" is autonomous with no live ACP session — an argv session is one-shot (no process left to talk to), an ACP session is addressable only while it runs in its persistent host (acp.persistentHost). Use the dashboard or striart resolve.`,
@@ -2022,17 +2328,157 @@ export const en: Messages = {
         'it must own the real terminal (raw mode) — incompatible with this panel, which already owns it',
       internal: 'internal command, never meant for a human (started by --open)',
     },
-    unavailableHere: (reason) => `⛔ unavailable here (${reason})`,
-    dashboardSuggestion: '⛔ alone, runs in the foreground — "--daemon" for this field',
+    unavailableHere: (reason) => `unavailable here (${reason})`,
+    dashboardSuggestion: 'runs in the foreground alone — use "--daemon" from this field',
     initSuggestion: '.striart/ is already there if you are in this panel — rarely useful here',
     clearSuggestion:
-      'Clears the active tab — empties the history on Terminal, sends the real shell clear command to an agent',
+      'Clears the Commands pane — in an agent detail view, sends the real shell clear command to that agent',
     relaunchSuggestion:
       '[agent] — types the start command again (useful when the hosted tool stopped)',
     exitSuggestion: 'Quits this panel (like Ctrl+C)',
-    agentAutonomous: '🤖 autonomous — bus unavailable (Phase E not wired)',
-    agentSupervised: '👤 supervised, active',
-    agentInactive: '⚪ inactive',
+    // `watch --ui` cockpit: persistent screen with stable positions (header,
+    // key figures, agents, detail, bottom pane, input, key bar).
+    cockpit: {
+      appName: 'striart watch',
+      starting: 'Starting the cockpit (loading modules, a few seconds)',
+      watcherOn: 'watcher running',
+      watcherMerge: 'auto merge',
+      watcherNoMerge: 'merge disabled',
+      stale: (since) => `stale data since ${since}`,
+      loading: 'loading…',
+      kpiAgents: 'agents',
+      kpiCommits: 'pending commits',
+      kpiConflicts: 'conflicts',
+      kpiQueue: 'queue',
+      kpiAgentsShort: 'ag.',
+      kpiCommitsShort: 'commits',
+      kpiConflictsShort: 'conflicts',
+      kpiQueueShort: 'queue',
+      colAgent: 'AGENT',
+      colState: 'STATE',
+      colCommits: 'COMMITS',
+      colLast: 'LAST COMMIT',
+      colAge: 'AGE',
+      colBranch: 'BRANCH',
+      colMode: 'MODE',
+      colSession: 'SESSION',
+      groupAttention: 'To handle',
+      groupRunning: 'Running',
+      groupIdle: 'Idle',
+      sectionAgents: 'Agents',
+      sectionDetail: (agent) => `Detail · ${agent}`,
+      sectionJournal: 'Journal',
+      sectionCommands: 'Commands',
+      sectionOutput: (agent) => `Output · ${agent}`,
+      emptyTitle: 'No agent yet.',
+      emptyHint: 'Create the first one: striart start agent-a',
+      noSelection: 'No agent selected.',
+      detailSession: 'Session',
+      idleState: (stage, duration) =>
+        stage === 'closable'
+          ? `idle ${duration}, closable`
+          : stage === 'warned'
+            ? `idle ${duration}, warned`
+            : `idle ${duration}`,
+      detailBranch: 'Branch',
+      detailCommits: 'Commits',
+      detailFiles: 'Files',
+      detailTicket: 'Ticket',
+      detailLoading: 'reading the clone…',
+      detailUnreadable: (error) => `unreadable clone: ${error}`,
+      pendingNone: 'no commit waiting to be merged',
+      pendingCount: (n) => `${n} ${plural(n, 'commit', 'commits')} waiting to be merged`,
+      filesNone: 'no changed file',
+      filesMore: (n) => `+${n} more`,
+      uncommitted: (n) => `${n} uncommitted ${plural(n, 'change', 'changes')}`,
+      ticketLine: (id, reason) => `${id} · ${reason}`,
+      journalEmpty: 'No event yet. Watcher commits, merges and rebases will show up here.',
+      outputEmpty: 'No output: this agent has no hosted terminal (autonomous mode).',
+      outputDisconnected: 'hosted terminal unreachable for now — retrying',
+      terminalSmall: (cols, rows) =>
+        `Terminal too small (${cols}×${rows}): enlarge it to see the whole screen (80×24 recommended).`,
+      promptIdle: 'Press / for a command, @ to write to an agent, ? for help.',
+      modeCommand: 'command',
+      modeMessage: 'message',
+      modeShell: 'shell',
+      merging: (agent) => `Merging "${agent}"`,
+      syncing: (agent) => `Syncing "${agent}"`,
+      done: (label, elapsed) => `${label} (${elapsed})`,
+      seeCommands: 'details in the Commands pane (Tab)',
+      confirmMergeTitle: (agent, target) => `Merge "${agent}" into ${target}?`,
+      confirmMergePending: (n) =>
+        `${n} pending ${plural(n, 'commit', 'commits')} will be integrated.`,
+      confirmMergeNone: 'No commit waiting: the merge will not change anything.',
+      confirmMergeGate:
+        'The Test Gate runs before any commit: on failure the merge is aborted and a ticket is created.',
+      confirmMergeTicket:
+        'A conflict ticket is open for this agent ("striart resolve"): this merge may fail again.',
+      plainConfirm: 'Answer "y" to confirm; any other answer cancels.',
+      confirmMergeLive:
+        'An autonomous session is running on this clone: the merge is refused while it runs.',
+      cancelled: 'Cancelled.',
+      plainKeys:
+        '  m <agent> merge (y to confirm), s <agent> sync, /command, !shell, @agent text, ? help, q quit',
+      keys: {
+        select: 'select',
+        details: 'details',
+        merge: 'merge',
+        sync: 'sync',
+        command: 'command',
+        message: '@agent message',
+        shell: 'shell',
+        pane: 'journal/commands',
+        help: 'help',
+        quit: 'quit',
+        send: 'send',
+        cancel: 'cancel',
+        complete: 'complete',
+        history: 'suggestions/history',
+        confirm: 'confirm',
+        back: 'back',
+        scroll: 'scroll',
+        close: 'close',
+      },
+      helpTitle: 'Help — shortcuts',
+      helpSections: [
+        {
+          title: 'Navigation',
+          rows: [
+            ['↑ ↓  j k', 'select an agent'],
+            ['Enter', 'agent details and output (Esc to go back)'],
+            ['Tab', 'switch the bottom pane (journal, commands)'],
+            ['PgUp PgDn', 'scroll the bottom pane'],
+          ],
+        },
+        {
+          title: 'Actions on the selected agent',
+          rows: [
+            ['m', 'merge into the target branch, behind the Test Gate (confirmation)'],
+            ['s', 'sync: rebase the agent onto the target branch'],
+          ],
+        },
+        {
+          title: 'Input (focus moves to the field; Esc abandons it)',
+          rows: [
+            ['/', 'striart command (/status, /resolve, /clear, /relaunch, /exit)'],
+            ['@', 'message an agent (@agent text); bare text → selected agent'],
+            ['!', 'real shell command'],
+            ['Tab', 'complete the suggestion'],
+          ],
+        },
+        {
+          title: 'General',
+          rows: [
+            ['?', 'this help'],
+            ['Esc', 'go back (confirmation, help, details, input)'],
+            ['q  Ctrl+C', 'quit (the watcher stops)'],
+          ],
+        },
+      ],
+    },
+    agentAutonomous: 'autonomous — message goes to its live ACP session',
+    agentSupervised: 'supervised, active',
+    agentInactive: 'inactive',
   },
 
   acpProxy: {
