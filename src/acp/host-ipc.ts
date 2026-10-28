@@ -1,10 +1,9 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { lstat, mkdir } from 'node:fs/promises';
 import net from 'node:net';
-import os from 'node:os';
 import path from 'node:path';
 import { StriartError } from '../errors.js';
-import { striartDir } from '../paths.js';
+import { MAX_UNIX_SOCKET_PATH, privateTmpDir, striartDir } from '../paths.js';
 import { validateAgentName } from '../agent-name.ts';
 import { boundedLines } from '../line-reader.ts';
 
@@ -29,10 +28,6 @@ export const HOST_PROTOCOL_VERSION = 1;
 export const MAX_FRAME_BYTES = 1_000_000;
 /** Borne d'un message humain du bus (caractères). */
 export const MAX_BUS_TEXT_CHARS = 64_000;
-
-/** Longueur maximale sûre d'un chemin de socket Unix (macOS : 104 octets). */
-/** Marge sous la limite OS la plus stricte (104 octets, macOS) : voir `privateTmpDir`. */
-export const MAX_UNIX_SOCKET_PATH = 100;
 
 export function acpHostDir(root: string, agent: string): string {
   validateAgentName(agent);
@@ -68,16 +63,6 @@ export function acpHostSocketPath(root: string, agent: string): string {
   // le dossier temporaire partagé, que n'importe quel utilisateur local peut
   // squatter — S-M9). Voir assertSocketDirPrivate.
   return path.join(privateTmpDir(), `acp-${hash.slice(0, 24)}.sock`);
-}
-
-/**
- * Dossier privé de l'utilisateur courant dans le dossier temporaire (POSIX) —
- * repli commun à tout socket Unix dont le chemin naturel sous `.striart/`
- * dépasserait `MAX_UNIX_SOCKET_PATH` (hôte ACP, hôte de pty).
- */
-export function privateTmpDir(): string {
-  const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
-  return path.join(os.tmpdir(), `striart-${uid}`);
 }
 
 /**

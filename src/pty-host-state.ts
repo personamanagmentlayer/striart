@@ -5,9 +5,10 @@
  * puissent lire cet état sans dépendre de `pty-host.ts`, qui dépend
  * lui-même de `clone.js`.
  */
+import { createHash } from 'node:crypto';
 import { open, readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { ptyDir } from './paths.js';
+import { MAX_UNIX_SOCKET_PATH, privateTmpDir, ptyDir } from './paths.js';
 import { checkProcessInstance } from './process-info.ts';
 import type { ExpectedStriartProcess } from './process-info.ts';
 
@@ -36,9 +37,24 @@ interface PidFileContent {
   childPid?: number;
 }
 
-/** Dossier d'état de l'hôte d'un agent (PID file, demande d'arrêt, socket POSIX). */
+/**
+ * Dossier d'état de l'hôte d'un agent (PID file, demande d'arrêt, socket
+ * POSIX). Le binaire natif exige que le socket d'attache soit exactement
+ * `<ce dossier>/attach.sock` (PTY_ENDPOINT_TOO_LONG / USAGE sinon) : repli
+ * vers un dossier privé par utilisateur si le chemin naturel sous
+ * `.striart/pty/` ferait dépasser la limite des sockets Unix (104 octets
+ * macOS / 108 Linux) — observé en CI sur un dépôt temporaire profondément
+ * imbriqué (macOS). Windows n'a pas cette limite (named pipe, espace de noms
+ * global) : toujours le chemin naturel.
+ */
 export function ptyHostStateDir(root: string, agent: string): string {
-  return path.join(ptyDir(root), agent);
+  const inRepo = path.join(ptyDir(root), agent);
+  if (process.platform === 'win32') return inRepo;
+  if (Buffer.byteLength(path.join(inRepo, 'attach.sock')) <= MAX_UNIX_SOCKET_PATH) return inRepo;
+  const hash = createHash('sha256')
+    .update(`${path.resolve(root)}\0${agent}`)
+    .digest('hex');
+  return path.join(privateTmpDir(), `pty-${hash.slice(0, 24)}`);
 }
 
 export function ptyHostPidFilePath(root: string, agent: string): string {

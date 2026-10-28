@@ -1,4 +1,20 @@
+import os from 'node:os';
 import path from 'node:path';
+
+/** Marge sous la limite OS la plus stricte pour un socket Unix (104 octets, macOS ; 108, Linux). */
+export const MAX_UNIX_SOCKET_PATH = 100;
+
+/**
+ * Dossier privé de l'utilisateur courant dans le dossier temporaire (POSIX) —
+ * repli commun à tout socket Unix dont le chemin naturel sous `.striart/`
+ * dépasserait `MAX_UNIX_SOCKET_PATH` (hôte ACP, hôte de pty). Jamais un nom
+ * prévisible dans le dossier temporaire PARTAGÉ : dérivé de l'UID, qu'aucun
+ * autre utilisateur local ne peut squatter.
+ */
+export function privateTmpDir() {
+  const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
+  return path.join(os.tmpdir(), `striart-${uid}`);
+}
 
 export function striartDir(root) {
   return path.join(root, '.striart');

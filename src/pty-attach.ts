@@ -7,10 +7,10 @@ import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { StriartError } from './errors.js';
 import { logger } from './logger.js';
-import { ptyDir } from './paths.js';
+import { ptyDir, privateTmpDir } from './paths.js';
+import { mkdirPrivate } from './private-fs.ts';
 import { validateAgentName } from './agent-name.ts';
 import { nativePtyHostCommand, PTY_HOST_EXIT_ALREADY_RUNNING } from './native.ts';
-import { MAX_UNIX_SOCKET_PATH, assertSocketDirPrivate, privateTmpDir } from './acp/host-ipc.ts';
 import {
   ptyHostStateDir,
   ptyHostStatus,
@@ -107,11 +107,9 @@ type ClientFrame = InputFrame | MessageFrame | ResizeFrame;
  * Chemin d'attache d'un agent. Sous Windows, les named pipes vivent dans un
  * espace de noms global (pas le filesystem) : le nom est dérivé de la racine
  * du repo + de l'agent par hash, pour rester stable et sans collision entre
- * deux repos qui utiliseraient le même nom d'agent. POSIX : sous
- * `.striart/pty/<agent>/`, ou dans le dossier temporaire privé si ce chemin
- * dépasse la limite des sockets Unix (104 octets macOS / 108 Linux, le
- * binaire natif refuse sinon : PTY_ENDPOINT_TOO_LONG — observé en CI sur un
- * chemin de dépôt temporaire profondément imbriqué).
+ * deux repos qui utiliseraient le même nom d'agent. POSIX : le binaire natif
+ * exige `<état de l'hôte>/attach.sock` exactement (voir `ptyHostStateDir`,
+ * qui porte le repli de chemin trop long — PTY_ENDPOINT_TOO_LONG sinon).
  */
 export function attachSocketPath(root: string, agent: string): string {
   validateAgentName(agent);
@@ -119,12 +117,7 @@ export function attachSocketPath(root: string, agent: string): string {
     const hash = createHash('sha1').update(path.resolve(root)).digest('hex').slice(0, 12);
     return `\\\\.\\pipe\\striart-${hash}-${agent}`;
   }
-  const inRepo = path.join(ptyDir(root), agent, 'attach.sock');
-  if (Buffer.byteLength(inRepo) <= MAX_UNIX_SOCKET_PATH) return inRepo;
-  const hash = createHash('sha256')
-    .update(`${path.resolve(root)}\0${agent}`)
-    .digest('hex');
-  return path.join(privateTmpDir(), `pty-${hash.slice(0, 24)}.sock`);
+  return path.join(ptyHostStateDir(root, agent), 'attach.sock');
 }
 
 function writeFrame(socket: net.Socket, frame: ClientFrame): void {
@@ -170,11 +163,20 @@ export async function launchPtyHost(
   options: LaunchPtyHostOptions,
 ): Promise<ChildProcess> {
   validateAgentName(agent);
+  const stateDir = ptyHostStateDir(root, agent);
+  // Repli hors `.striart/` (chemin trop long pour un socket Unix) : le
+  // binaire natif crée et sécurise `stateDir` lui-même (0700), mais pas son
+  // parent `privateTmpDir()` s'il est créé au passage (`create_dir_all` ne
+  // pose le mode que sur le dossier final) — posé ici pour éviter qu'un
+  // dossier temporaire partagé nouvellement créé reste aux permissions par
+  // défaut du système.
+  if (process.platform !== 'win32' && !stateDir.startsWith(ptyDir(root))) {
+    await mkdirPrivate(privateTmpDir());
+  }
   const endpoint = attachSocketPath(root, agent);
-  if (process.platform !== 'win32') await assertSocketDirPrivate(endpoint, { create: true });
   const { file, args } = await nativePtyHostCommand({
     agent,
-    stateDir: path.resolve(ptyHostStateDir(root, agent)),
+    stateDir: path.resolve(stateDir),
     endpoint,
     cwd: path.resolve(options.cwd),
     program: options.shell,
