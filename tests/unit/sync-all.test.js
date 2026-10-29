@@ -25,7 +25,7 @@ vi.mock('../../src/config.js', () => ({
 vi.mock('../../src/events.js', () => ({ emitStriartEvent: async () => {} }));
 vi.mock('../../src/memory.js', () => ({ syncMemoryToClone: async () => {} }));
 
-const { syncAgentWithMain, syncAllAgents } = await import('../../src/sync.js');
+const { syncAgentWithMain, syncAllAgents } = await import('../../src/sync.ts');
 
 const verifyCalls = () =>
   mainRevparse.mock.calls.filter(([args]) => Array.isArray(args) && args.includes('--verify'));

@@ -3,8 +3,8 @@ import { mkdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { simpleGit } from 'simple-git';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { createAgent, scanHistoricalSecrets } from '../../src/clone.js';
+import { initStriart } from '../../src/init.ts';
+import { createAgent, scanHistoricalSecrets } from '../../src/clone.ts';
 import { compileSecretPattern, secretPatternMatches } from '../../src/secret-patterns.ts';
 
 /** Contrat S-I3 : l'exclusion des secrets trackés ne dépend pas de la forme du motif. */

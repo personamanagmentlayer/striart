@@ -5,7 +5,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { runTestGate } from '../../src/gate.js';
+import { runTestGate } from '../../src/gate.ts';
 
 const NODE = JSON.stringify(process.execPath);
 const PROBE = `${NODE} -e ${JSON.stringify(

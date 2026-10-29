@@ -20,7 +20,7 @@ import type {
   UsageSource,
 } from '../types.js';
 import { extractStreamUsage } from '../agents/transcript.ts';
-import { logger } from '../logger.js';
+import { logger } from '../logger.ts';
 import { logAccountingFailure, reportAccountingFailure } from './accounting-error.ts';
 import { type BudgetFinding, emitFindings, evaluateBudgets, firstBreach } from './budget.ts';
 import { estimateTokens } from './estimate.ts';

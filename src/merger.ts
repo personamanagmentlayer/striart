@@ -1,5 +1,5 @@
-import { StriartError } from './errors.js';
-import { fillPromptTemplate, llmGenerate } from './llm.js';
+import { StriartError } from './errors.ts';
+import { fillPromptTemplate, llmGenerate } from './llm.ts';
 import {
   assemble,
   conflictRegions,
@@ -8,6 +8,7 @@ import {
   splitLines,
 } from './merge-hunks.ts';
 import { sha256 } from './tokens/cache.ts';
+import type { ConflictClass, StageModes } from './types.js';
 import { estimateTokens } from './tokens/estimate.ts';
 import { resolveTokensSettings } from './tokens/settings.ts';
 
@@ -120,8 +121,6 @@ const MODE_EXECUTABLE = '100755';
  * `modes` (facultatif) : modes Git des stages 1/2/3 issus de `git ls-files -u`.
  * `maxInputChars` (facultatif) : plafond d'entrée ; défaut MAX_MERGE_INPUT_CHARS,
  * `maxMergeInputChars(config)` le relève quand la fusion par régions s'applique.
- * @param {{filePath: string, base: string, ours: string, theirs: string, modes?: import('./types.js').StageModes, maxInputChars?: number}} versions
- * @returns {import('./types.js').ConflictClass}
  */
 export function classifyConflict({
   filePath,
@@ -130,7 +129,14 @@ export function classifyConflict({
   theirs,
   modes = {},
   maxInputChars = MAX_MERGE_INPUT_CHARS,
-}) {
+}: {
+  filePath: string;
+  base: string;
+  ours: string;
+  theirs: string;
+  modes?: StageModes;
+  maxInputChars?: number;
+}): ConflictClass {
   const allModes = [modes.base, modes.ours, modes.theirs].filter(Boolean);
   if (allModes.includes(MODE_GITLINK)) return { kind: 'submodule' };
   if (allModes.includes(MODE_SYMLINK)) return { kind: 'symlink' };

@@ -1,4 +1,4 @@
-import { runDoctor } from '../../doctor.js';
+import { runDoctor } from '../../doctor.ts';
 import type { CommandModule } from '../context.ts';
 import type { Messages } from '../i18n/index.ts';
 import type { Level } from '../output.ts';

@@ -12,9 +12,9 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { CommanderError } from 'commander';
 import type { Command } from 'commander';
-import { StriartError, errorKindOf } from '../errors.js';
-import type { ErrorKind } from '../errors.js';
-import { logger, onBeforeLogWrite } from '../logger.js';
+import { StriartError, errorKindOf } from '../errors.ts';
+import type { ErrorKind } from '../errors.ts';
+import { logger, onBeforeLogWrite } from '../logger.ts';
 import { SCHEMA_VERSION, errorObject } from '../control/envelope.ts';
 import { detectCapabilities } from './caps.ts';
 import { assertHumanPlane } from '../control/guard.ts';
@@ -393,7 +393,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       cwd,
       signal: abort.signal,
       repoRoot() {
-        rootPromise ??= import('../clone.js').then(async ({ findRepoRoot }) => {
+        rootPromise ??= import('../clone.ts').then(async ({ findRepoRoot }) => {
           const root = await findRepoRoot(cwd);
           out.root = root;
           return root;

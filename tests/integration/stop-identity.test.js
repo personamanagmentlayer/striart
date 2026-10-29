@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { requestStop } from '../../src/stop-request.ts';
-import { killProcessTree } from '../../src/process-tree.js';
+import { killProcessTree } from '../../src/process-tree.ts';
 
 /** S-M2 : aucun signal à un PID dont l'identité n'est plus confirmée, et racine protégée par son heure de création. */
 describe('arrêt : identité revérifiée avant tout repli (S-M2)', () => {

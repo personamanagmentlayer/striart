@@ -144,12 +144,22 @@ export function logRedactionOptions(pino) {
 }
 
 /**
- * @typedef {{maxBytes: number, generations: number}} LogRotation
- * @typedef {{write: (chunk: string | Uint8Array) => void, close: () => void}} LogSink
  */
+interface LogRotation {
+  maxBytes: number;
+  generations: number;
+}
+interface LogSink {
+  write: (chunk: string | Uint8Array) => void;
+  close: () => void;
+}
 
-/** @type {{destination: 'stderr' | {file: string}, pretty: boolean | null, rotation: LogRotation, sink: LogSink | null}} */
-const settings = {
+const settings: {
+  destination: 'stderr' | { file: string };
+  pretty: boolean | null;
+  rotation: LogRotation;
+  sink: LogSink | null;
+} = {
   destination: 'stderr',
   pretty: null,
   rotation: { maxBytes: DEFAULT_LOG_MAX_BYTES, generations: DEFAULT_LOG_GENERATIONS },
@@ -163,14 +173,17 @@ let instance = null;
  * Règle la destination AVANT le premier log. Sans effet après : un logger
  * déjà créé garde sa destination (pas de bascule en cours de route qui
  * perdrait ou dupliquerait des lignes).
- * @param {{file?: string, pretty?: boolean, rotation?: LogRotation}} options
- *   `file` : chemin d'un fichier journal (ajout, rotation par taille) ;
- *   `pretty` : force (ou interdit) la mise en forme humaine, sinon décidée
- *   par `stderr.isTTY` ; `rotation` : `logMaxBytes`/`logGenerations` de la
- *   config (défauts sinon). Une rotation invalide est refusée (TypeError) :
- *   la config l'a déjà validée, une valeur fausse ici est un bug d'appelant.
+ * `file` : chemin d'un fichier journal (ajout, rotation par taille) ;
+ * `pretty` : force (ou interdit) la mise en forme humaine, sinon décidée
+ * par `stderr.isTTY` ; `rotation` : `logMaxBytes`/`logGenerations` de la
+ * config (défauts sinon). Une rotation invalide est refusée (TypeError) :
+ * la config l'a déjà validée, une valeur fausse ici est un bug d'appelant.
  */
-export function configureLogger({ file, pretty, rotation } = {}) {
+export function configureLogger({
+  file,
+  pretty,
+  rotation,
+}: { file?: string; pretty?: boolean; rotation?: LogRotation } = {}) {
   if (instance) return;
   if (rotation !== undefined) {
     if (!isValidRotation(rotation.maxBytes, rotation.generations)) {
@@ -186,7 +199,7 @@ export function configureLogger({ file, pretty, rotation } = {}) {
  * Puits du fichier journal, créé une seule fois (dossier compris).
  * @param {string} file
  */
-function fileSink(file) {
+function fileSink(file: string) {
   if (!settings.sink) {
     mkdirSync(path.dirname(file), { recursive: true });
     settings.sink = createRotatingFileSink(file, settings.rotation);
@@ -211,16 +224,16 @@ function adoptDaemonLog() {
   settings.pretty = false;
   const sink = fileSink(file);
   for (const stream of [process.stdout, process.stderr]) {
-    /** @type {any} */ (stream).write = (
-      /** @type {string | Uint8Array} */ chunk,
-      /** @type {any} */ encoding,
-      /** @type {any} */ callback,
+    (stream as unknown as { write: (...args: unknown[]) => boolean }).write = (
+      chunk: string | Uint8Array,
+      encoding: unknown,
+      callback: unknown,
     ) => {
       const done = typeof encoding === 'function' ? encoding : callback;
       try {
         sink.write(
           typeof chunk === 'string' && typeof encoding === 'string' && encoding !== 'utf8'
-            ? Buffer.from(chunk, /** @type {BufferEncoding} */ (encoding))
+            ? Buffer.from(chunk, encoding as BufferEncoding)
             : chunk,
         );
       } catch (error) {
@@ -261,7 +274,7 @@ function create() {
   }
   // Fichier à rotation par taille (log-rotation.js), écrit de façon
   // synchrone comme le ferait pino.destination.
-  const sink = fileSink(/** @type {{file: string}} */ (settings.destination).file);
+  const sink = fileSink((settings.destination as { file: string }).file);
   // `base: undefined` : pas de pid/hostname dans chaque ligne — le nom
   // d'hôte n'a rien à faire dans un log qu'on colle dans un ticket.
   return pino(
@@ -296,7 +309,7 @@ function get() {
 
 /** @param {'trace'|'debug'|'info'|'warn'|'error'|'fatal'} level @returns {any} */
 function forward(level) {
-  return (/** @type {any[]} */ ...args) => /** @type {any} */ (get())[level](...args);
+  return (/** @type {any[]} */ ...args) => /** @type {any} */ get()[level](...args);
 }
 
 /**

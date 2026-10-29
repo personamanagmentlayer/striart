@@ -14,15 +14,16 @@
  */
 import { readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { llmGenerate } from './llm.js';
+import { llmGenerate } from './llm.ts';
 import { sha256 } from './tokens/cache.ts';
 import { resolveTokensSettings } from './tokens/settings.ts';
-import { striartDir } from './paths.js';
+import { striartDir } from './paths.ts';
 import { withStateLock } from './state-lock.ts';
 import { ensureCloneExclude } from './git-exclude.ts';
-import { logger } from './logger.js';
+import { logger } from './logger.ts';
 import { safeReadText, safeWriteFile } from './safe-write.ts';
 import { fenceUntrusted, sanitizeAgentText } from './collab/message.ts';
+import type { AgentRegistry, QueueTask } from './types.js';
 
 /** Nom du fichier recopié à la racine de chaque clone agent. */
 export const CLONE_MEMORY_FILE = '.striart-memory.md';
@@ -321,12 +322,14 @@ function excerpt(prompt) {
  * Advisory strict, comme le reste de la mémoire : informer l'agent qu'une
  * zone est travaillée ailleurs, jamais l'en empêcher — le Test Gate tranche.
  *
- * @param {import('./types.js').AgentRegistry} registry
- * @param {import('./types.js').QueueTask[]} queue
- * @param {string} forAgent Nom de l'agent destinataire.
- * @returns {string} Section Markdown, chaîne vide si rien à signaler.
+ * @param forAgent Nom de l'agent destinataire.
+ * @returns Section Markdown, chaîne vide si rien à signaler.
  */
-export function renderLiveSection(registry, queue, forAgent) {
+export function renderLiveSection(
+  registry: AgentRegistry,
+  queue: QueueTask[],
+  forAgent: string,
+): string {
   const lines = [];
   for (const [name, meta] of Object.entries(registry)) {
     if (name === forAgent) continue;
@@ -365,12 +368,13 @@ export function renderLiveSection(registry, queue, forAgent) {
  * Les données sont passées en paramètres (pas relues ici) — l'appelant les a
  * déjà, et ce module ne doit dépendre ni du registre ni de la file.
  *
- * @param {string} root
- * @param {import('./types.js').AgentRegistry} registry
- * @param {import('./types.js').QueueTask[]} queue
- * @returns {Promise<number>} Nombre de clones mis à jour.
+ * @returns Nombre de clones mis à jour.
  */
-export async function refreshCloneMemories(root, registry, queue) {
+export async function refreshCloneMemories(
+  root: string,
+  registry: AgentRegistry,
+  queue: QueueTask[],
+): Promise<number> {
   const persistent = await readFile(memoryPath(root), 'utf8').catch(() => '');
   let updated = 0;
   for (const [name, meta] of Object.entries(registry)) {

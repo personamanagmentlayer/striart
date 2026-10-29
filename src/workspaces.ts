@@ -12,8 +12,8 @@
  */
 import { readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { normalizeFilePath } from './router.js';
-import { logger } from './logger.js';
+import { normalizeFilePath } from './router.ts';
+import { logger } from './logger.ts';
 
 /**
  * @typedef {{name: string, dir: string, dependencies: Set<string>}} WorkspacePackage

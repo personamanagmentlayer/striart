@@ -206,9 +206,9 @@ interface ScenarioResult {
 
 async function runScenario(args: BenchArgs): Promise<ScenarioResult> {
   // Chargement tardif : l'environnement du banc est posé avant le premier import du noyau.
-  const { initStriart } = await import('../src/init.js');
-  const { createAgent } = await import('../src/clone.js');
-  const { mergeAgentCommit } = await import('../src/orchestrator.js');
+  const { initStriart } = await import('../src/init.ts');
+  const { createAgent } = await import('../src/clone.ts');
+  const { mergeAgentCommit } = await import('../src/orchestrator.ts');
 
   const root = await mkdtemp(path.join(os.tmpdir(), 'striart-bench-merge-'));
   try {

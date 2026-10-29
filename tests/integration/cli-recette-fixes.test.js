@@ -4,10 +4,10 @@ import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { createConflictTicket } from '../../src/conflicts.js';
+import { initStriart } from '../../src/init.ts';
+import { createConflictTicket } from '../../src/conflicts.ts';
 import { answerHumanReview } from '../../src/orchestration/human-review.ts';
-import { updateJsonLocked, UNCHANGED } from '../../src/json-file.js';
+import { updateJsonLocked, UNCHANGED } from '../../src/json-file.ts';
 
 /**
  * Anomalies de la campagne de recette : vraie CLI, vrais flux (stdout/stderr séparés) et vrais

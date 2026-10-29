@@ -22,17 +22,17 @@
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { simpleGit } from 'simple-git';
-import { loadConfig, listUnknownConfigKeys } from './config.js';
-import { resolveLlmConfig } from './llm.js';
-import { probeOllama } from './ollama.js';
+import { loadConfig, listUnknownConfigKeys } from './config.ts';
+import { resolveLlmConfig } from './llm.ts';
+import { probeOllama } from './ollama.ts';
 import { inspectNetwork, readCaFile } from './net.ts';
-import { dirStats, formatBytes, listAgents, scanHistoricalSecrets, striartDir } from './clone.js';
-import { listConflictTickets } from './conflicts.js';
-import { readState } from './state.js';
-import { readMainSessionStatus } from './main-session.js';
-import { readMainLockStatus, stopHolderCommand } from './lock.js';
+import { dirStats, formatBytes, listAgents, scanHistoricalSecrets, striartDir } from './clone.ts';
+import { listConflictTickets } from './conflicts.ts';
+import { readState } from './state.ts';
+import { readMainSessionStatus } from './main-session.ts';
+import { readMainLockStatus, stopHolderCommand } from './lock.ts';
 import { readStateLockStatus } from './state-lock.ts';
-import { readQueue } from './queue.js';
+import { readQueue } from './queue.ts';
 import { NATIVE_BIN_ENV, PINNED_NATIVE_KEY_IDS, nativeDiagnostic } from './native.ts';
 import {
   resolvePtyShell,
@@ -59,6 +59,7 @@ import {
   measureGitStatus,
   measureStateLockLatency,
 } from './doctor-perf.ts';
+import type { AgentProfile } from './types.js';
 
 /** Version minimale pour sparse-checkout --no-cone (nettoyage des secrets). */
 const GIT_RECOMMENDED = [2, 35];
@@ -211,7 +212,7 @@ async function addLockCheck(add, root) {
  */
 async function addStateLockCheck(add, root) {
   const status = await readStateLockStatus(striartDir(root)).catch((error) => ({
-    error: /** @type {Error} */ (error),
+    error: /** @type {Error} */ error,
   }));
   if ('error' in status) {
     add(
@@ -525,7 +526,14 @@ async function addPtyCheck(add, root, config) {
     );
     return;
   }
-  const params = {
+  const params: {
+    implementation: string;
+    binary: string;
+    shell: string;
+    shellArgs: string[];
+    source: string;
+    profileFiles?: number;
+  } = {
     implementation: 'native',
     binary: binary.path,
     shell: resolved.shell,
@@ -724,7 +732,7 @@ function compareVersion(actual, wanted) {
  * @param {import('./hardening-checks.ts').HardeningCheck} check
  */
 function addHardening(add, id, check) {
-  const p = /** @type {any} */ (check.params);
+  const p = /** @type {any} */ check.params;
   /** @type {Record<string, [string, string|null]>} */
   const text = {
     'state-privacy.ok': [`${p.inspected} élément(s) de .striart/ réservé(s) à l'utilisateur`, null],
@@ -1271,7 +1279,8 @@ export async function runDoctor(cwd = process.cwd()) {
   //             téléchargement de binaires ACP, consignes désactivées,
   //             presets expérimentaux déclarés — toujours affichés.
   if (config) {
-    const experimental = Object.entries(config.agentProfiles ?? {})
+    const profiles: Record<string, AgentProfile> = config.agentProfiles ?? {};
+    const experimental = Object.entries(profiles)
       .filter(([, p]) => p.experimental === true)
       .map(([key]) => key)
       .sort();
@@ -1357,12 +1366,11 @@ export async function runDoctor(cwd = process.cwd()) {
   }
   if (root && config && initialized) {
     const privacy = await checkStateDirPrivacy(root, config).catch(
-      (error) =>
-        /** @type {import('./hardening-checks.ts').HardeningCheck} */ ({
-          status: 'warn',
-          id: 'state-privacy.unreadable',
-          params: { cause: error?.code ?? error?.message ?? 'erreur' },
-        }),
+      (error) => /** @type {import('./hardening-checks.ts').HardeningCheck} */ ({
+        status: 'warn',
+        id: 'state-privacy.unreadable',
+        params: { cause: error?.code ?? error?.message ?? 'erreur' },
+      }),
     );
     addHardening(add, 'state-privacy', privacy);
   }

@@ -4,9 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { simpleGit } from 'simple-git';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { createConflictTicket } from '../../src/conflicts.js';
-import { runDoctor } from '../../src/doctor.js';
+import { initStriart } from '../../src/init.ts';
+import { createConflictTicket } from '../../src/conflicts.ts';
+import { runDoctor } from '../../src/doctor.ts';
 import { quietShell } from '../helpers/pty-test-utils.js';
 
 function check(result, id) {

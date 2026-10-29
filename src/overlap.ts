@@ -29,10 +29,10 @@
  * « agent ↔ cible » sans conflit réel (le rebase anticipé le lève).
  */
 import { simpleGit } from 'simple-git';
-import { cloneGit, readRegistry } from './clone.js';
-import { emitStriartEvent } from './events.js';
-import { isProcessAlive } from './process-tree.js';
-import { logger } from './logger.js';
+import { cloneGit, readRegistry } from './clone.ts';
+import { emitStriartEvent } from './events.ts';
+import { isProcessAlive } from './process-tree.ts';
+import { logger } from './logger.ts';
 import { isSafeProjectPath, normalizeFilePath } from './project-path.ts';
 import { redactSecrets } from './redact-secrets.ts';
 import { compileSharedMatcher } from './router-shared.ts';
@@ -45,7 +45,7 @@ import {
 } from './overlap-settings.ts';
 import { mapLimit } from './router-sources.ts';
 import { resolveTokensSettings } from './tokens/settings.ts';
-import { syncAgentWithMain } from './sync.js';
+import { syncAgentWithMain } from './sync.ts';
 
 /** Sentinelle « tout le dépôt » du Router (router.js `WHOLE_REPO`) : tient lieu de prédiction de tout. */
 const WHOLE_REPO = '**';

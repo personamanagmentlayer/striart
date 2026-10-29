@@ -1,7 +1,7 @@
 import { once } from 'node:events';
 import path from 'node:path';
-import { assertInitialized } from '../../clone.js';
-import { StriartError } from '../../errors.js';
+import { assertInitialized } from '../../clone.ts';
+import { StriartError } from '../../errors.ts';
 import { SCHEMA_VERSION } from '../../control/envelope.ts';
 import {
   daemonStopSignal,
@@ -9,9 +9,9 @@ import {
   startWatchDaemon,
   stopWatchDaemon,
   watchDaemonStatus,
-} from '../../daemon.js';
-import { configureLogger } from '../../logger.js';
-import { striartDir } from '../../paths.js';
+} from '../../daemon.ts';
+import { configureLogger } from '../../logger.ts';
+import { striartDir } from '../../paths.ts';
 import { startWatchLoop } from '../../watch-loop.ts';
 import type { WatchEvent } from '../../watch-loop.ts';
 import type { WatchUiEntry } from '../../watch-ui.ts';

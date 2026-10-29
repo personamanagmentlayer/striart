@@ -1,5 +1,5 @@
-import { assertInitialized } from '../../clone.js';
-import { getQueueDashboard, retryQueue } from '../../orchestrator.js';
+import { assertInitialized } from '../../clone.ts';
+import { getQueueDashboard, retryQueue } from '../../orchestrator.ts';
 import { openAttendedSession } from '../../pty-host.ts';
 import type { AttendedSession } from '../../pty-host.ts';
 import type { CommandModule, Ctx } from '../context.ts';

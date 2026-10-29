@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { cosmiconfig } from 'cosmiconfig';
-import { StriartError } from './errors.js';
-import { logger } from './logger.js';
+import { StriartError } from './errors.ts';
+import { logger } from './logger.ts';
 import { MAX_TIMER_MS } from './timer-limits.ts';
 import { assertSecretPatternSyntax } from './secret-patterns.ts';
 import { validateGateEnvPattern } from './gate-env.ts';
@@ -486,8 +486,9 @@ const VALIDATORS = {
     typeof v === 'object' &&
     v !== null &&
     !Array.isArray(v) &&
-    Object.entries(v).every(([name, p]) => {
-      if (typeof p !== 'object' || p === null || Array.isArray(p)) return false;
+    Object.entries(v).every(([name, rawP]) => {
+      if (typeof rawP !== 'object' || rawP === null || Array.isArray(rawP)) return false;
+      const p = rawP as Record<string, unknown>;
       const profile =
         p.preset !== undefined && p.command === undefined
           ? typeof p.preset === 'string' && getPreset(p.preset)

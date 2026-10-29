@@ -25,9 +25,9 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { validateAgentName } from '../agent-name.ts';
-import { StriartError } from '../errors.js';
-import { UNCHANGED, readJson, updateJsonLocked } from '../json-file.js';
-import { striartDir } from '../paths.js';
+import { StriartError } from '../errors.ts';
+import { UNCHANGED, readJson, updateJsonLocked } from '../json-file.ts';
+import { striartDir } from '../paths.ts';
 import { mkdirPrivate } from '../private-fs.ts';
 import type {
   CollabGroup,

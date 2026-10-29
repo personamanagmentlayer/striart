@@ -16,11 +16,11 @@
 import { randomBytes } from 'node:crypto';
 import { readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
-import { UNCHANGED, readJson, updateJsonLocked } from '../json-file.js';
-import { logger } from '../logger.js';
-import { striartDir } from '../paths.js';
+import { UNCHANGED, readJson, updateJsonLocked } from '../json-file.ts';
+import { logger } from '../logger.ts';
+import { striartDir } from '../paths.ts';
 import { mkdirPrivate } from '../private-fs.ts';
-import { isProcessAlive } from '../process-tree.js';
+import { isProcessAlive } from '../process-tree.ts';
 import type {
   OrchestrationGroupState,
   OrchestrationRunState,

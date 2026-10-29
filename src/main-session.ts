@@ -1,8 +1,8 @@
 import { unlink } from 'node:fs/promises';
 import path from 'node:path';
-import { striartDir } from './paths.js';
-import { readJson, withTransientRetry, writeJsonAtomic } from './json-file.js';
-import { isProcessAlive } from './process-tree.js';
+import { striartDir } from './paths.ts';
+import { readJson, withTransientRetry, writeJsonAtomic } from './json-file.ts';
+import { isProcessAlive } from './process-tree.ts';
 import { withStateLock } from './state-lock.ts';
 
 /**
@@ -70,10 +70,11 @@ export async function startMainSession(root, { pid, reason }) {
  *    jamais une réservation posée après la sienne (un `lock --stop` puis
  *    `lock --start` d'un humain pendant la session).
  * Idempotent : rien à retirer n'est pas une erreur.
- * @param {string} root @param {{expectPid?: number}} [options]
- * @returns {Promise<void>}
  */
-export async function stopMainSession(root, { expectPid } = {}) {
+export async function stopMainSession(
+  root: string,
+  { expectPid }: { expectPid?: number } = {},
+): Promise<void> {
   await withStateLock(striartDir(root), async () => {
     if (expectPid !== undefined) {
       const current = await readMainSession(root);

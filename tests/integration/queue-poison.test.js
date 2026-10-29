@@ -10,10 +10,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { createAgent, readRegistry } from '../../src/clone.js';
-import { readQueue, enqueueTask } from '../../src/queue.js';
-import { retryQueue, stopAgent } from '../../src/orchestrator.js';
+import { initStriart } from '../../src/init.ts';
+import { createAgent, readRegistry } from '../../src/clone.ts';
+import { readQueue, enqueueTask } from '../../src/queue.ts';
+import { retryQueue, stopAgent } from '../../src/orchestrator.ts';
 
 const task = (agent) => ({
   agent,

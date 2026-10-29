@@ -2,11 +2,11 @@ import { execa, type Result, type ResultPromise } from 'execa';
 import { createRequire } from 'node:module';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { loadConfig } from '../config.js';
-import { logger } from '../logger.js';
+import { loadConfig } from '../config.ts';
+import { logger } from '../logger.ts';
 import { SessionMeter } from '../tokens/session-meter.ts';
 import { boundedLines } from '../line-reader.ts';
-import { killProcessTree, normalizeExitCode } from '../process-tree.js';
+import { killProcessTree, normalizeExitCode } from '../process-tree.ts';
 import {
   awaitElicitationAnswer,
   awaitPermissionAnswer,

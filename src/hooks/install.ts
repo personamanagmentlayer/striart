@@ -3,7 +3,7 @@ import { mkdir, readFile, realpath, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { StriartError } from '../errors.js';
+import { StriartError } from '../errors.ts';
 import { AGENT_NAME_RE } from '../agent-name.ts';
 import { ensureCloneExcludes, removeCloneExcludes } from '../git-exclude.ts';
 import { safeRemove, safeWriteFile } from '../safe-write.ts';
@@ -504,7 +504,7 @@ async function planCline(r: Resolved, install: boolean): Promise<FilePlan[]> {
 
 async function assertUntracked(clonePath: string, rels: string[]): Promise<void> {
   if (rels.length === 0) return;
-  const { cloneGit } = await import('../clone.js');
+  const { cloneGit } = await import('../clone.ts');
   const out: string = await cloneGit(clonePath).raw(['ls-files', '--', ...rels]);
   const tracked = out
     .split('\n')

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parsePlan, validatePlan } from '../../src/plan.ts';
-import { StriartError } from '../../src/errors.js';
+import { StriartError } from '../../src/errors.ts';
 
 describe('parsePlan / validatePlan', () => {
   it('parse un plan minimal valide (multi-ligne + commentaire)', () => {

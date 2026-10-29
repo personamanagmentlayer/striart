@@ -1,14 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { createAgent } from '../../src/clone.js';
+import { initStriart } from '../../src/init.ts';
+import { createAgent } from '../../src/clone.ts';
 import {
   closeConflictTicket,
   createConflictTicket,
   listConflictTickets,
-} from '../../src/conflicts.js';
-import { enqueueTask } from '../../src/queue.js';
-import { collectDashboardState, startDashboard } from '../../src/dashboard.js';
+} from '../../src/conflicts.ts';
+import { enqueueTask } from '../../src/queue.ts';
+import { collectDashboardState, startDashboard } from '../../src/dashboard.ts';
 import {
   awaitElicitationAnswer,
   awaitPermissionAnswer,
@@ -320,7 +320,7 @@ describe('striart dashboard (intégration)', () => {
   });
 
   it('semantic.unlock : réactive la fusion sémantique et remet le compteur à zéro', async () => {
-    const { readState, recordSemanticFailure } = await import('../../src/state.js');
+    const { readState, recordSemanticFailure } = await import('../../src/state.ts');
     for (let i = 0; i < 3; i += 1) await recordSemanticFailure(repo.root);
     expect((await readState(repo.root)).manualMode).toBe(true);
 
@@ -434,8 +434,8 @@ describe('dashboard — mode autonome et logs de session (intégration)', () => 
   });
 
   it('un registre antérieur au mode (sans champ) est affiché comme supervisé', async () => {
-    const { readRegistry } = await import('../../src/clone.js');
-    const { writeJsonAtomic } = await import('../../src/json-file.js');
+    const { readRegistry } = await import('../../src/clone.ts');
+    const { writeJsonAtomic } = await import('../../src/json-file.ts');
     const path = await import('node:path');
     await createAgent({ root: repo.root, name: 'ancien' });
     const registry = await readRegistry(repo.root);
@@ -457,7 +457,7 @@ describe('dashboard — mode autonome et logs de session (intégration)', () => 
   it('session.log : sert le log d’un agent autonome ; agent inconnu ou nom malveillant refusés', async () => {
     const { mkdir, writeFile } = await import('node:fs/promises');
     const path = await import('node:path');
-    const { sessionLogPath } = await import('../../src/session.js');
+    const { sessionLogPath } = await import('../../src/session.ts');
     const info = await createAgent({
       root: repo.root,
       name: 'robot',
@@ -652,7 +652,7 @@ describe('dashboard — permissions semi-autonomes', () => {
   });
 
   it('mainSession.release : libère la session principale déclarée (lock --stop), plan humain seulement', async () => {
-    const { startMainSession } = await import('../../src/main-session.js');
+    const { startMainSession } = await import('../../src/main-session.ts');
     await startMainSession(repo.root, { pid: process.pid, reason: 'édition manuelle' });
     const doc = await call(server, cookie, 'mainSession.release');
     expect(doc.data).toMatchObject({

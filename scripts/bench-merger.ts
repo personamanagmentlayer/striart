@@ -36,8 +36,8 @@ try {
   // Pas de .env : les clés viennent peut-être déjà de l'environnement.
 }
 
-const { DEFAULT_CONFIG } = await import('../src/config.js');
-const { semanticMerge } = await import('../src/merger.js');
+const { DEFAULT_CONFIG } = await import('../src/config.ts');
+const { semanticMerge } = await import('../src/merger.ts');
 
 const { values } = parseArgs({
   options: {

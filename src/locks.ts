@@ -1,13 +1,14 @@
 import path from 'node:path';
-import { striartDir } from './paths.js';
-import { readJson, writeJsonAtomic } from './json-file.js';
+import { striartDir } from './paths.ts';
+import { readJson, writeJsonAtomic } from './json-file.ts';
 import { withStateLock } from './state-lock.ts';
+import type { AgentRegistry } from './types.js';
 
-function locksPath(root) {
+function locksPath(root: string) {
   return path.join(striartDir(root), 'locks.json');
 }
 
-export async function readLocks(root) {
+export async function readLocks(root: string): Promise<Record<string, string>> {
   return readJson(locksPath(root), { fallback: {}, code: 'LOCKS_CORRUPT' });
 }
 
@@ -21,8 +22,11 @@ export async function readLocks(root) {
  * registre, dans la même section, il dérive toujours du registre qui vient
  * d'être écrit — deux reconstructions concurrentes ne s'entrelacent pas.
  */
-export async function syncLocks(root, registry) {
-  const locks = {};
+export async function syncLocks(
+  root: string,
+  registry: AgentRegistry,
+): Promise<Record<string, string>> {
+  const locks: Record<string, string> = {};
   for (const [name, meta] of Object.entries(registry)) {
     for (const file of meta.predictedFiles ?? []) {
       locks[file] ??= name; // premier arrivé, premier verrouillé

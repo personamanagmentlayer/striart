@@ -19,8 +19,8 @@
 import { createHash } from 'node:crypto';
 import { readFile, readdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { writeFileAtomic } from '../json-file.js';
-import { logger } from '../logger.js';
+import { writeFileAtomic } from '../json-file.ts';
+import { logger } from '../logger.ts';
 import { mkdirPrivate } from '../private-fs.ts';
 import { usageDir } from './ledger.ts';
 

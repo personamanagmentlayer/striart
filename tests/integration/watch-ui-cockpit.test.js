@@ -2,7 +2,7 @@ import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createTempRepo } from '../helpers/temp-repo.js';
 import { waitFor } from '../helpers/pty-test-utils.js';
-import { initStriart } from '../../src/init.js';
+import { initStriart } from '../../src/init.ts';
 import { runWatchUi } from '../../src/watch-ui.ts';
 import { fr } from '../../src/cli/i18n/fr.ts';
 

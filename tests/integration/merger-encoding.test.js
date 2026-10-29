@@ -1,7 +1,7 @@
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { classifyConflict, extractConflictVersions } from '../../src/merger.js';
+import { classifyConflict, extractConflictVersions } from '../../src/merger.ts';
 import { createTempRepo } from '../helpers/temp-repo.js';
 
 const cleanups = [];

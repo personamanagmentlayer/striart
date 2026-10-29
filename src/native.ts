@@ -51,7 +51,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
 import type { ResultPromise } from 'execa';
-import { StriartError } from './errors.js';
+import { StriartError } from './errors.ts';
 import { getSignatureScheme, publicKeyPath, signatureSchemeNames } from './native-signature.ts';
 import {
   PTY_MIN_CLIENT_QUEUE_BYTES,

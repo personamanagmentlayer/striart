@@ -1,10 +1,10 @@
 import path from 'node:path';
 import chokidar from 'chokidar';
-import { onStriartEvent } from '../events.js';
-import { logger } from '../logger.js';
-import { striartDir } from '../paths.js';
+import { onStriartEvent } from '../events.ts';
+import { logger } from '../logger.ts';
+import { striartDir } from '../paths.ts';
 import { isIgnoredStatePath } from '../state-watch-ignore.ts';
-import { watchAgents } from '../watcher.js';
+import { watchAgents } from '../watcher.ts';
 import { STATUS_URI, TICKETS_URI } from './resources.ts';
 
 /**

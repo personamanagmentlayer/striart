@@ -3,9 +3,9 @@ import { readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { readRegistry } from '../../src/clone.js';
-import { applyPlan, runAutonomousTask } from '../../src/orchestrator.js';
+import { initStriart } from '../../src/init.ts';
+import { readRegistry } from '../../src/clone.ts';
+import { applyPlan, runAutonomousTask } from '../../src/orchestrator.ts';
 
 const FAKE_AGENT = fileURLToPath(new URL('../helpers/fake-agent.cjs', import.meta.url));
 const GATE_OK = 'node -e "process.exit(0)"';
@@ -211,8 +211,8 @@ tasks:
     // commit de l'agent supervisé, et laisser l'autonome à sa fin de session :
     // sinon il mergerait des commits intermédiaires, et gagnerait la course
     // contre le merge final (qui conclurait à tort à un échec).
-    const { createAgent } = await import('../../src/clone.js');
-    const { shouldWatcherMerge } = await import('../../src/orchestrator.js');
+    const { createAgent } = await import('../../src/clone.ts');
+    const { shouldWatcherMerge } = await import('../../src/orchestrator.ts');
     await setConfig(repo.root, { testCommand: GATE_OK });
 
     await createAgent({ root: repo.root, name: 'humain', command: 'claude' });
@@ -229,9 +229,9 @@ tasks:
     // session autonome. Sans le filtre de mode, il mergerait le commit de
     // l'agent avant la fin du cycle, et runAutonomousTask recevrait
     // UP_TO_DATE → MERGE_BLOCKED, clone conservé : un faux échec.
-    const { watchAgents } = await import('../../src/watcher.js');
-    const { shouldWatcherMerge } = await import('../../src/orchestrator.js');
-    const { mergeAgentCommit } = await import('../../src/orchestrator.js');
+    const { watchAgents } = await import('../../src/watcher.ts');
+    const { shouldWatcherMerge } = await import('../../src/orchestrator.ts');
+    const { mergeAgentCommit } = await import('../../src/orchestrator.ts');
     await setConfig(repo.root, { testCommand: GATE_OK });
     process.env.FAKE_AGENT_MODE = 'commit';
 

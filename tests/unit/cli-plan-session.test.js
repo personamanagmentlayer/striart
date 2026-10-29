@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { StriartError } from '../../src/errors.js';
+import { StriartError } from '../../src/errors.ts';
 import { en } from '../../src/cli/i18n/en.ts';
 
 /**

@@ -1,7 +1,7 @@
 import { readFile, realpath, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { StriartError } from './errors.js';
+import { StriartError } from './errors.ts';
 import { validateEnvAllowPattern } from './cli/env-file.ts';
 import { validateGateEnvPattern } from './gate-env.ts';
 

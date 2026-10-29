@@ -14,11 +14,11 @@
  *  - \`dryRun\` n'écrit rien (ni état, ni événement) et ne ferme rien.
  *  - Reprise de veille (\`suspended\`) : aucune décision, l'horloge a sauté.
  */
-import { readRegistry } from '../clone.js';
-import { loadConfig } from '../config.js';
-import { agentUnknownError } from '../errors.js';
-import { emitStriartEvent } from '../events.js';
-import { logger } from '../logger.js';
+import { readRegistry } from '../clone.ts';
+import { loadConfig } from '../config.ts';
+import { agentUnknownError } from '../errors.ts';
+import { emitStriartEvent } from '../events.ts';
+import { logger } from '../logger.ts';
 import { rm } from 'node:fs/promises';
 import { closeAuthorization } from './authorize.ts';
 import type { AgentMeta } from '../types.js';

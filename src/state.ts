@@ -1,6 +1,6 @@
 import path from 'node:path';
-import { striartDir } from './paths.js';
-import { readJson, updateJsonLocked } from './json-file.js';
+import { striartDir } from './paths.ts';
+import { readJson, updateJsonLocked } from './json-file.ts';
 
 /** Règle d'or n°4 : 3 fusions sémantiques échouées d'affilée → mode manuel. */
 export const MAX_SEMANTIC_FAILURES = 3;

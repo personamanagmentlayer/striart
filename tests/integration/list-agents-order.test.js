@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { cloneGit, createAgent, listAgents, readRegistry } from '../../src/clone.js';
+import { initStriart } from '../../src/init.ts';
+import { cloneGit, createAgent, listAgents, readRegistry } from '../../src/clone.ts';
 import { writeFile } from 'node:fs/promises';
-import { writeJsonAtomic } from '../../src/json-file.js';
+import { writeJsonAtomic } from '../../src/json-file.ts';
 
 /**
  * `listAgents` inspecte les clones en parallèle borné (la collecte d'état du

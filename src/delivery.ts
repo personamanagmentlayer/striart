@@ -1,10 +1,10 @@
 import { stat, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { execa } from 'execa';
-import { StriartError } from './errors.js';
+import { StriartError } from './errors.ts';
 import { validateAgentName } from './agent-name.ts';
-import { logger } from './logger.js';
-import { killProcessTree, normalizeExitCode } from './process-tree.js';
+import { logger } from './logger.ts';
+import { killProcessTree, normalizeExitCode } from './process-tree.ts';
 
 /**
  * Opérations git BORNÉES du chemin de livraison : commit de merge (hooks de la

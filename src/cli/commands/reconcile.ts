@@ -1,4 +1,4 @@
-import { reconcile as reconcileState } from '../../orchestrator.js';
+import { reconcile as reconcileState } from '../../orchestrator.ts';
 import type { AttendedSession } from '../../pty-host.ts';
 import type { CommandModule } from '../context.ts';
 import { renderStartedTasks, withSessions } from './queue.ts';

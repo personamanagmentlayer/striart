@@ -28,10 +28,10 @@ import path from 'node:path';
 import chokidar from 'chokidar';
 import { isIgnoredStatePath } from '../state-watch-ignore.ts';
 import { describeOrchestrationEvent } from './event-notices.ts';
-import { onStriartEvent } from '../events.js';
-import { logger } from '../logger.js';
-import { striartDir } from '../paths.js';
-import { watchAgents } from '../watcher.js';
+import { onStriartEvent } from '../events.ts';
+import { logger } from '../logger.ts';
+import { striartDir } from '../paths.ts';
+import { watchAgents } from '../watcher.ts';
 import { collectControlState } from './state.ts';
 import type { ControlState, ControlStateBase } from './state.ts';
 

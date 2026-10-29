@@ -89,7 +89,7 @@ async function loadHookConfig(
   { platform, env }: { platform: NodeJS.Platform; env: NodeJS.ProcessEnv },
 ): Promise<ConfigView> {
   const { DEFAULT_CONFIG, findConfigWithoutExecuting, loadConfig, validateConfig } =
-    await import('../config.js');
+    await import('../config.ts');
   try {
     if (trustedRoot) return { config: await loadConfig(root), warnings: [], trustedBy: 'install' };
     const found = await findConfigWithoutExecuting(root);
@@ -130,7 +130,7 @@ async function loadHookConfig(
     }
     if (!trusted)
       return { config: null, warnings: [messages.warnings.codeConfigUntrusted], trustedBy: null };
-    const { logger } = await import('../logger.js');
+    const { logger } = await import('../logger.ts');
     // Relâchement explicite décidé par l'utilisateur : toujours journalisé.
     logger.info(
       { root: repoRoot, configPath: filepath, userConfig: userConfigPath({ platform, env }) },
@@ -272,8 +272,8 @@ async function runHookUnsafe(
     }
     const safeReason = reason ? sanitize(reason).slice(0, 80) : null;
     const message = messages.sessionEnded(ctx.agent, toolName, safeReason);
-    const { notify } = await import('../notify.js');
-    const { emitStriartEvent } = await import('../events.js');
+    const { notify } = await import('../notify.ts');
+    const { emitStriartEvent } = await import('../events.ts');
     // Événement émis SANS message (le pont du bus ne le relaie donc pas) ;
     // la notification part ici, une seule fois, pour en connaître l'issue.
     await emitStriartEvent(view.config, {

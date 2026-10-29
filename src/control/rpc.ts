@@ -15,8 +15,8 @@
  * Une erreur inattendue n'expose jamais son message interne au pair : elle
  * est journalisée ici, le pair reçoit UNEXPECTED (A10).
  */
-import { StriartError } from '../errors.js';
-import { logger } from '../logger.js';
+import { StriartError } from '../errors.ts';
+import { logger } from '../logger.ts';
 import { errorDocument, errorObject, successDocument } from './envelope.ts';
 import type { ErrorObject } from './envelope.ts';
 import { HANDLERS } from './methods.ts';

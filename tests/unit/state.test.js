@@ -8,7 +8,7 @@ import {
   recordSemanticFailure,
   recordSemanticSuccess,
   resetManualMode,
-} from '../../src/state.js';
+} from '../../src/state.ts';
 
 describe("state (règle d'or n°4)", () => {
   let root;

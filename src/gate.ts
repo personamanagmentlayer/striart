@@ -1,16 +1,15 @@
 import { execa } from 'execa';
-import { StriartError } from './errors.js';
+import { StriartError } from './errors.ts';
 import { buildGateEnv } from './gate-env.ts';
-import { logger } from './logger.js';
+import { logger } from './logger.ts';
 import { redactSecrets, secretValuesFromEnv } from './redact-secrets.ts';
 import { readUserConfig } from './user-config.ts';
-import { killProcessTree, normalizeExitCode } from './process-tree.js';
+import { killProcessTree, normalizeExitCode } from './process-tree.ts';
 import { assertJobComplete, startNativeJob } from './native.ts';
 
 /** Rouge « l'exécution elle-même est en cause » (voir `GateFailureCode`). */
-const GATE_NATIVE_UNAVAILABLE = /** @type {import('./types.js').GateFailureCode} */ (
-  'GATE_NATIVE_UNAVAILABLE'
-);
+const GATE_NATIVE_UNAVAILABLE =
+  /** @type {import('./types.js').GateFailureCode} */ 'GATE_NATIVE_UNAVAILABLE';
 
 /** Délai de grâce par défaut des descendants du test (voir `gateOrphanGraceMs`). */
 export const DEFAULT_GATE_ORPHAN_GRACE_MS = 2_000;
@@ -24,23 +23,25 @@ export const DEFAULT_GATE_MAX_OUTPUT_BYTES = 100 * 1024 * 1024;
  * pas faire grossir le process Striart sans borne.
  */
 export class TailBuffer {
-  /** @param {number} maxBytes */
-  constructor(maxBytes) {
+  maxBytes: number;
+  chunks: Buffer[];
+  bytes: number;
+  dropped: number;
+
+  constructor(maxBytes: number) {
     this.maxBytes = maxBytes;
-    /** @type {Buffer[]} */
     this.chunks = [];
     this.bytes = 0;
     this.dropped = 0;
   }
 
-  /** @param {Buffer|string} chunk */
-  push(chunk) {
+  push(chunk: Buffer | string) {
     const data = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk;
     this.chunks.push(data);
     this.bytes += data.length;
     while (this.bytes > this.maxBytes && this.chunks.length > 0) {
       const excess = this.bytes - this.maxBytes;
-      const head = /** @type {Buffer} */ (this.chunks[0]);
+      const head = /** @type {Buffer} */ this.chunks[0];
       if (head.length <= excess) {
         this.chunks.shift();
         this.bytes -= head.length;
@@ -169,7 +170,7 @@ async function resolveGateEnvironment({ gateEnv, secretEnvNames, baseEnv }) {
   let userAllow = [];
   if (Array.isArray(gateEnv) && gateEnv.length > 0) {
     try {
-      const user = /** @type {any} */ (await readUserConfig());
+      const user = /** @type {any} */ await readUserConfig();
       userAllow = Array.isArray(user?.gate?.envAllow) ? user.gate.envAllow : [];
     } catch (error) {
       if (!warnedGateEnv.has('user-config')) {

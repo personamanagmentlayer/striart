@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { simpleGit } from 'simple-git';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
+import { initStriart } from '../../src/init.ts';
 import {
   cloneGit,
   agentsDir,
@@ -12,8 +12,8 @@ import {
   listAgents,
   readRegistry,
   scanHistoricalSecrets,
-} from '../../src/clone.js';
-import { StriartError } from '../../src/errors.js';
+} from '../../src/clone.ts';
+import { StriartError } from '../../src/errors.ts';
 
 describe('striart init + start + status (intégration)', () => {
   let repo;
@@ -122,7 +122,7 @@ describe('striart init + start + status (intégration)', () => {
 
     // La taille additionnelle du clone est très inférieure au repo complet
     // (les objets partagés hardlinkés comptent 0).
-    const { dirSizeBytes } = await import('../../src/clone.js');
+    const { dirSizeBytes } = await import('../../src/clone.ts');
     const cloneSize = await dirSizeBytes(info.path);
     expect(cloneSize).toBeGreaterThan(0);
   });
@@ -154,14 +154,14 @@ describe('striart init + start + status (intégration)', () => {
     await agentGit.add(['partial.js']);
     await agentGit.commit('feat: depuis un clone partiel');
 
-    const { mergeAgentCommit } = await import('../../src/orchestrator.js');
+    const { mergeAgentCommit } = await import('../../src/orchestrator.ts');
     const result = await mergeAgentCommit({ root: repo.root, agent: 'agent-partial' });
     expect(result.status).toBe('MERGED');
   });
 
   it('cleanStoppedClones : supprime les clones arrêtés, jamais les actifs', async () => {
     await initStriart(repo.root);
-    const { cleanStoppedClones, removeAgentFromRegistry } = await import('../../src/clone.js');
+    const { cleanStoppedClones, removeAgentFromRegistry } = await import('../../src/clone.ts');
     const a = await createAgent({ root: repo.root, name: 'agent-a' });
     await createAgent({ root: repo.root, name: 'agent-b' });
 
@@ -189,7 +189,7 @@ describe('striart init + start + status (intégration)', () => {
 
   it('clean --all : supprime les actifs au repos, protège le travail non mergé sauf --force', async () => {
     await initStriart(repo.root);
-    const { cleanClones } = await import('../../src/clone.js');
+    const { cleanClones } = await import('../../src/clone.ts');
     const { writeFile: wf } = await import('node:fs/promises');
     const repos = await createAgent({ root: repo.root, name: 'au-repos' }); // tout mergé, propre
     const pending = await createAgent({ root: repo.root, name: 'pending' });
@@ -261,7 +261,7 @@ describe('striart init + start + status (intégration)', () => {
   });
 
   it('createAgent hors repo Git lève NOT_A_GIT_REPO via findRepoRoot', async () => {
-    const { findRepoRoot } = await import('../../src/clone.js');
+    const { findRepoRoot } = await import('../../src/clone.ts');
     const os = await import('node:os');
     await expect(findRepoRoot(os.tmpdir())).rejects.toThrow(StriartError);
   });
@@ -366,7 +366,7 @@ describe('présence de session (intégration)', () => {
   });
 
   it("clean refuse un clone avec activité récente (règle d'or n°3), --force passe outre", async () => {
-    const { cleanClones, removeAgentFromRegistry } = await import('../../src/clone.js');
+    const { cleanClones, removeAgentFromRegistry } = await import('../../src/clone.ts');
     const a = await createAgent({ root: repo.root, name: 'agent-a' });
     await removeAgentFromRegistry(repo.root, 'agent-a'); // stoppé, mais activité toute fraîche
 
@@ -509,7 +509,7 @@ describe('clean — une session autonome vivante est intouchable', () => {
     // --force existe pour passer outre des heuristiques (activité disque,
     // travail non mergé). Un process vivant n'est pas une supposition :
     // supprimer ses fichiers sous ses pieds détruirait son travail.
-    const { cleanClones, createAgent, updateAgentMeta } = await import('../../src/clone.js');
+    const { cleanClones, createAgent, updateAgentMeta } = await import('../../src/clone.ts');
     const info = await createAgent({
       root: repo.root,
       name: 'robot',
@@ -527,7 +527,7 @@ describe('clean — une session autonome vivante est intouchable', () => {
   });
 
   it('redevient supprimable une fois la session terminée', async () => {
-    const { cleanClones, createAgent, updateAgentMeta } = await import('../../src/clone.js');
+    const { cleanClones, createAgent, updateAgentMeta } = await import('../../src/clone.ts');
     await createAgent({ root: repo.root, name: 'robot', mode: 'autonomous', profile: 'claude' });
     await updateAgentMeta(repo.root, 'robot', { sessionPid: null });
 

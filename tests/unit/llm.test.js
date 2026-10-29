@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { llmGenerate, resolveLlmConfig, unwrapJsonResponse } from '../../src/llm.js';
-import { DEFAULT_CONFIG } from '../../src/config.js';
-import { StriartError } from '../../src/errors.js';
+import { llmGenerate, resolveLlmConfig, unwrapJsonResponse } from '../../src/llm.ts';
+import { DEFAULT_CONFIG } from '../../src/config.ts';
+import { StriartError } from '../../src/errors.ts';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -234,14 +234,14 @@ describe('llmGenerate — provider anthropic', () => {
 
 describe('fillPromptTemplate', () => {
   it('substitue toutes les occurrences de chaque placeholder', async () => {
-    const { fillPromptTemplate } = await import('../../src/llm.js');
+    const { fillPromptTemplate } = await import('../../src/llm.ts');
     expect(fillPromptTemplate('{{a}} et {{b}} puis {{a}}', { a: 'X', b: 'Y' })).toBe(
       'X et Y puis X',
     );
   });
 
   it('la valeur est de la donnée : $&, $1 et {{...}} n’y sont pas interprétés', async () => {
-    const { fillPromptTemplate } = await import('../../src/llm.js');
+    const { fillPromptTemplate } = await import('../../src/llm.ts');
     // Un contenu de fichier peut contenir n'importe quoi — y compris des
     // séquences spéciales de String.replace et d'autres moustaches.
     expect(fillPromptTemplate('code: {{code}}', { code: 'a $& b $1 c {{code}}' })).toBe(

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { detectCollisions, detectCollisionsDetailed, WHOLE_REPO } from '../../src/router.js';
+import { detectCollisions, detectCollisionsDetailed, WHOLE_REPO } from '../../src/router.ts';
 import {
   failedKeptSessionStatus,
   isFailedSessionStatus,

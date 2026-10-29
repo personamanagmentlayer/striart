@@ -13,12 +13,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { resolvePathInsideClone } from '../../src/acp/protocol.ts';
-import { createAgent } from '../../src/clone.js';
+import { createAgent } from '../../src/clone.ts';
 import { INBOX_FILE, deliverInbox } from '../../src/collab/files.ts';
 import { createCollabGroup, postAgentMessage } from '../../src/collab/channel.ts';
 import { ensureCloneExclude } from '../../src/git-exclude.ts';
-import { initStriart } from '../../src/init.js';
-import { CLONE_MEMORY_FILE, syncMemoryToClone } from '../../src/memory.js';
+import { initStriart } from '../../src/init.ts';
+import { CLONE_MEMORY_FILE, syncMemoryToClone } from '../../src/memory.ts';
 import { resolveCollabSettings } from '../../src/orchestration/settings.ts';
 import {
   isSafeWriteError,

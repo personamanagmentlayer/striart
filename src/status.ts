@@ -7,14 +7,14 @@
  * Lecture seule, aucun verrou : un instantané, pas une transaction.
  */
 import { presentAgents } from './agent-view.ts';
-import { listAgents } from './clone.js';
-import { listConflictTickets } from './conflicts.js';
-import { loadConfig } from './config.js';
-import { watchDaemonStatus } from './daemon.js';
-import { readMainSessionStatus } from './main-session.js';
-import { getQueueDashboard } from './orchestrator.js';
+import { listAgents } from './clone.ts';
+import { listConflictTickets } from './conflicts.ts';
+import { loadConfig } from './config.ts';
+import { watchDaemonStatus } from './daemon.ts';
+import { readMainSessionStatus } from './main-session.ts';
+import { getQueueDashboard } from './orchestrator.ts';
 import { overlapStatus } from './overlap.ts';
-import { readState } from './state.js';
+import { readState } from './state.ts';
 import { listHumanReviews } from './orchestration/human-review.ts';
 import { listOrchestrationState } from './orchestration/store.ts';
 import { idleStatus } from './idle/status.ts';

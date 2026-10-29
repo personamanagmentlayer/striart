@@ -3,9 +3,9 @@ import { createHash } from 'node:crypto';
 import { mkdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { simpleGit } from 'simple-git';
-import { StriartError, agentUnknownError, publicErrorDetails } from './errors.js';
+import { StriartError, agentUnknownError, publicErrorDetails } from './errors.ts';
 import { formatMergeSubject, parseMergeSubject } from './merge-subject.ts';
-import { loadConfig } from './config.js';
+import { loadConfig } from './config.ts';
 import {
   assertInitialized,
   cloneGit,
@@ -17,19 +17,20 @@ import {
   removeAgentFromRegistry,
   updateAgentMeta,
   validateAgentName,
-} from './clone.js';
-import { sweepOrphanTempFiles } from './json-file.js';
-import { striartDir } from './paths.js';
-import { DEFAULT_PROFILE, resolveAgentProfile, runAgentSession } from './session.js';
+} from './clone.ts';
+import { sweepOrphanTempFiles } from './json-file.ts';
+import { striartDir } from './paths.ts';
+import { DEFAULT_PROFILE, resolveAgentProfile, runAgentSession } from './session.ts';
 import { prunePermissions } from './permissions.ts';
-import { detectCollisions, detectCollisionsDetailed, predictFilesDetailed } from './router.js';
+import { detectCollisions, detectCollisionsDetailed, predictFilesDetailed } from './router.ts';
 import { failedKeptSessionStatus } from './session-failure.ts';
 import { publicRouterDetails } from './router-details.ts';
+import type { PublicRouterDetails } from './router-details.ts';
 import { fsSources } from './router-sources.ts';
-import { buildImportGraph, detectSemanticNeighbors } from './imports.js';
-import { computeWorkspaceWarnings } from './workspaces.js';
-import { enqueueTask, readQueue, removeTask } from './queue.js';
-import { runTestGate } from './gate.js';
+import { buildImportGraph, detectSemanticNeighbors } from './imports.ts';
+import { computeWorkspaceWarnings } from './workspaces.ts';
+import { enqueueTask, readQueue, removeTask } from './queue.ts';
+import { runTestGate } from './gate.ts';
 import { collectConfiguredSecretEnvNames } from './gate-env.ts';
 import {
   createConflictTicket,
@@ -39,8 +40,8 @@ import {
   readResolutionInputs,
   safeFileName,
   assertTicketPathSafe,
-} from './conflicts.js';
-import { startMainSession, stopMainSession } from './main-session.js';
+} from './conflicts.ts';
+import { startMainSession, stopMainSession } from './main-session.ts';
 import {
   MAX_MERGE_INPUT_CHARS,
   classifyConflict,
@@ -49,25 +50,27 @@ import {
   lineOverlap,
   maxMergeInputChars,
   semanticMerge,
-} from './merger.js';
-import { readState, recordSemanticFailure, recordSemanticSuccess } from './state.js';
-import { emitStriartEvent } from './events.js';
-import { fetchBranchToRef, incomingRef, resolveBranchHead, syncAgentWithMain } from './sync.js';
-import { refreshCloneMemories, updateMemoryAfterMerge } from './memory.js';
+} from './merger.ts';
+import { readState, recordSemanticFailure, recordSemanticSuccess } from './state.ts';
+import { emitStriartEvent } from './events.ts';
+import { fetchBranchToRef, incomingRef, resolveBranchHead, syncAgentWithMain } from './sync.ts';
+import { refreshCloneMemories, updateMemoryAfterMerge } from './memory.ts';
 import { redactSecrets, secretValuesFromEnv } from './redact-secrets.ts';
-import { logger } from './logger.js';
+import { logger } from './logger.ts';
 import {
   assertMainLockHeld,
   assertNoLiveMainSession,
   recordMergeStateChanged,
   withMainLock,
-} from './lock.js';
-import { isProcessAlive } from './process-tree.js';
+} from './lock.ts';
+import { isProcessAlive } from './process-tree.ts';
 import { parsePlan } from './plan.ts';
 import { describePlanV2, runPlanV2, validatePlanAgainstConfig } from './orchestration/scheduler.ts';
+import type { PlanOverrides } from './orchestration/scheduler.ts';
 import { releaseAgentArtifacts } from './agent-artifacts.ts';
 import { stopPtyHost } from './pty-host.ts';
 import { findProtectedChanges, resolveProtectedPathsPolicy } from './protected-paths.ts';
+import type { ProtectedPathsPolicy } from './protected-paths.ts';
 import { concludeAutonomousSession } from './autonomous-cycle.ts';
 import {
   commitMergeBounded,
@@ -78,8 +81,30 @@ import {
   planPromotionDelivery,
   settlePendingDeliveries,
 } from './delivery.ts';
+import type { DeliveryRequest } from './delivery.ts';
 import { withTokenContext } from './tokens/context.ts';
 import { PhaseTimer } from './timings.ts';
+import type { PhaseName } from './timings.ts';
+import type {
+  AgentMeta,
+  AgentRegistry,
+  AutonomousResult,
+  AutonomousWarningCode,
+  ManualResolutionResult,
+  MergeResult,
+  OrchestrationMode,
+  SyncResult,
+  OrchestrationNodeResult,
+  PlanFailurePolicy,
+  PlanNodeKind,
+  PromoteResult,
+  QueueTask,
+  RollbackResult,
+  RunResult,
+  SessionResult,
+  StriartConfig,
+  StriartEvent,
+} from './types.js';
 import { resolveTokensSettings } from './tokens/settings.ts';
 
 /**
@@ -114,10 +139,21 @@ function gateContainerOptions(config) {
  * une authentification ou un proxy lent ne doivent jamais geler l'orchestrateur ;
  * le push part donc APRÈS la libération du verrou, du SHA exact testé, et son
  * issue est reportée dans `result.delivery` / `result.pushError`.
- * @typedef {{events: Array<{config: import('./types.js').StriartConfig, event: import('./types.js').StriartEvent}>, deliveries: Array<{config: import('./types.js').StriartConfig, request: import('./delivery.ts').DeliveryRequest}>, memory: null | {root: string, config: import('./types.js').StriartConfig, agent: string, taskId: string|null, sha: string, diff: string}, timer: PhaseTimer}} DeferredEffects
  */
-/** @type {AsyncLocalStorage<DeferredEffects>} */
-const effectsContext = new AsyncLocalStorage();
+interface DeferredEffects {
+  events: Array<{ config: StriartConfig; event: StriartEvent }>;
+  deliveries: Array<{ config: StriartConfig; request: DeliveryRequest }>;
+  memory: null | {
+    root: string;
+    config: StriartConfig;
+    agent: string;
+    taskId: string | null;
+    sha: string;
+    diff: string;
+  };
+  timer: PhaseTimer;
+}
+const effectsContext = new AsyncLocalStorage<DeferredEffects>();
 
 /**
  * Émet un événement : différé si une opération sous verrou est en cours,
@@ -139,25 +175,22 @@ async function emitEvent(config, event) {
  * libéré, envoie les événements différés et lance la mise à jour de la Memory
  * Layer (résultat reporté dans `result.memory`). Réentrant : une opération
  * imbriquée dépose ses effets chez l'appelant le plus externe.
- * @template T
- * @param {() => Promise<T>} fn
- * @param {{startedAt?: number, before?: Partial<Record<import('./timings.ts').PhaseName, number>>}} [options]
- *   `startedAt` (horloge monotone) : début réel de l'opération, si des phases l'ont précédée ;
- *   `before` : leurs durées.
- * @returns {Promise<T>}
+ * `startedAt` (horloge monotone) : début réel de l'opération, si des phases l'ont précédée ;
+ * `before` : leurs durées.
  */
-async function runWithDeferredEffects(fn, { startedAt, before } = {}) {
+async function runWithDeferredEffects<T>(
+  fn: () => Promise<T>,
+  { startedAt, before }: { startedAt?: number; before?: Partial<Record<PhaseName, number>> } = {},
+): Promise<T> {
   if (effectsContext.getStore()) return fn();
-  /** @type {DeferredEffects} */
-  const effects = {
+  const effects: DeferredEffects = {
     events: [],
     deliveries: [],
     memory: null,
     timer: new PhaseTimer(undefined, startedAt),
   };
   // Phases déjà écoulées AVANT l'entrée dans l'opération (le Router de `runTask`, hors verrou).
-  for (const [phase, ms] of Object.entries(before ?? {}))
-    effects.timer.add(/** @type {any} */ (phase), ms);
+  for (const [phase, ms] of Object.entries(before ?? {})) effects.timer.add(phase as PhaseName, ms);
   /** @type {T} */
   let result;
   /** @type {import('./types.js').DeliveryReport[]} */
@@ -174,8 +207,8 @@ async function runWithDeferredEffects(fn, { startedAt, before } = {}) {
   }
   if (deliveries.length > 0 && result && typeof result === 'object') {
     const [report] = deliveries;
-    /** @type {any} */ (result).delivery = report;
-    /** @type {any} */ (result).pushError = deliveryErrorText(report);
+    /** @type {any} */ result.delivery = report;
+    /** @type {any} */ result.pushError = deliveryErrorText(report);
   }
   if (effects.memory && result && typeof result === 'object') {
     const { root, config, agent, taskId, sha, diff } = effects.memory;
@@ -186,11 +219,11 @@ async function runWithDeferredEffects(fn, { startedAt, before } = {}) {
       await refreshLiveMemory(root, config);
       return summary;
     });
-    /** @type {any} */ (result).memory = memory;
+    /** @type {any} */ result.memory = memory;
   }
   // Mesure (L8), additive : lue par `--json`, le dashboard et le banc `bench:merge`.
   if (result && typeof result === 'object' && !Array.isArray(result)) {
-    /** @type {any} */ (result).timings = effects.timer.snapshot();
+    /** @type {any} */ result.timings = effects.timer.snapshot();
   }
   return result;
 }
@@ -198,12 +231,8 @@ async function runWithDeferredEffects(fn, { startedAt, before } = {}) {
 /**
  * Mesure `fn` dans la phase `phase` de l'opération en cours (aucun effet hors opération : `fn`
  * court telle quelle). Le temps est mesuré même si `fn` throw.
- * @template T
- * @param {import('./timings.ts').PhaseName} phase
- * @param {() => Promise<T> | T} fn
- * @returns {Promise<T>}
  */
-async function timed(phase, fn) {
+async function timed<T>(phase: PhaseName, fn: () => Promise<T> | T): Promise<T> {
   const effects = effectsContext.getStore();
   return effects ? effects.timer.measure(phase, fn) : fn();
 }
@@ -212,14 +241,13 @@ async function timed(phase, fn) {
  * `withMainLock` d'une opération MESURÉE : l'attente est comptée dans `lockWait` (de l'appel à
  * l'entrée dans la section critique) et la section dans `lockHeld`. Réservé aux points d'entrée
  * (la réentrance ne double pas `lockHeld` : `PhaseTimer.measure` ignore la phase imbriquée).
- * @template T
- * @param {string} root
- * @param {string} label
- * @param {() => Promise<T>} fn
- * @param {Parameters<typeof withMainLock>[3]} [options]
- * @returns {Promise<T>}
  */
-function withMainLockTimed(root, label, fn, options) {
+function withMainLockTimed<T>(
+  root: string,
+  label: string,
+  fn: () => Promise<T>,
+  options?: Parameters<typeof withMainLock<T>>[3],
+): Promise<T> {
   const timer = effectsContext.getStore()?.timer;
   if (!timer) return withMainLock(root, label, fn, options);
   const asked = performance.now();
@@ -277,10 +305,8 @@ async function runDeferredDeliveries(pending) {
  * opération sous verrou est en cours (toujours le cas en production). Hors
  * opération — impossible depuis les points d'entrée publics — elle part
  * immédiatement.
- * @param {import('./types.js').StriartConfig} config
- * @param {import('./delivery.ts').DeliveryRequest} request
  */
-async function scheduleDelivery(config, request) {
+async function scheduleDelivery(config: StriartConfig, request: DeliveryRequest) {
   const effects = effectsContext.getStore();
   if (effects) {
     effects.deliveries.push({ config, request });
@@ -344,7 +370,7 @@ async function generateAgentName(root, prompt) {
   }
 }
 
-function activeAgents(registry) {
+function activeAgents(registry: AgentRegistry) {
   return Object.entries(registry).map(([name, meta]) => ({
     name,
     predictedFiles: meta.predictedFiles ?? [],
@@ -463,9 +489,18 @@ export async function startAgent({
  * `--after` (si elle existe) est vivante et sans cycle. Pure : appelée sur un
  * instantané AVANT le Router (échec à vide, sans payer l'appel LLM) puis de
  * nouveau sous le verrou sur l'état frais (c'est ce second contrôle qui fait foi).
- * @param {{agent: string, after: string|null, registry: Record<string, import('./types.js').AgentMeta>, queue: import('./types.js').QueueTask[]}} params
  */
-function assertTaskAdmissible({ agent, after, registry, queue }) {
+function assertTaskAdmissible({
+  agent,
+  after,
+  registry,
+  queue,
+}: {
+  agent: string;
+  after: string | null;
+  registry: Record<string, AgentMeta>;
+  queue: QueueTask[];
+}) {
   if (registry[agent]) {
     throw new StriartError(`L'agent "${agent}" est déjà actif.`, {
       code: 'AGENT_EXISTS',
@@ -504,10 +539,20 @@ function assertTaskAdmissible({ agent, after, registry, queue }) {
  * du projet, graphe d'imports) se fait AVANT la prise du verrou, sur un
  * instantané du registre ; les décisions (collision, file, clone) se prennent
  * sous le verrou sur l'état frais. Les webhooks partent APRÈS sa libération.
- * @param {{root: string, agent?: string|null, prompt: string, command?: string|null, mode?: 'attended'|'autonomous', profile?: string|null, after?: string|null, reuse?: boolean, force?: boolean, allowHistoricalSecrets?: boolean, signal?: AbortSignal|null}} params
- * @returns {Promise<import('./types.js').RunResult>}
  */
-export async function runTask(params) {
+export async function runTask(params: {
+  root: string;
+  agent?: string | null;
+  prompt: string;
+  command?: string | null;
+  mode?: 'attended' | 'autonomous';
+  profile?: string | null;
+  after?: string | null;
+  reuse?: boolean;
+  force?: boolean;
+  allowHistoricalSecrets?: boolean;
+  signal?: AbortSignal | null;
+}): Promise<RunResult> {
   const runStartedAt = performance.now();
   const { root } = params;
   await assertInitialized(root);
@@ -657,8 +702,6 @@ async function refreshLiveMemory(root, config) {
  * Partie sous verrou de `runTask` : état frais, collision, file ou clone. Tout
  * ce qui est lent a déjà été fait (prédiction, graphe) ; les événements sont
  * différés (`emitEvent`).
- * @param {{root: string, agent: string, generatedName: boolean, prompt: string, config: import('./types.js').StriartConfig, projectFiles: string[], predictedFiles: string[], routing?: import('./router-details.ts').PublicRouterDetails|null, graph: any, command?: string|null, mode?: 'attended'|'autonomous', profile?: string|null, after?: string|null, reuse?: boolean, force?: boolean, allowHistoricalSecrets?: boolean}} params
- * @returns {Promise<import('./types.js').RunResult>}
  */
 async function runTaskLocked({
   root,
@@ -677,7 +720,25 @@ async function runTaskLocked({
   reuse = false,
   force = false,
   allowHistoricalSecrets = false,
-}) {
+}: {
+  root: string;
+  agent: string;
+  generatedName: boolean;
+  prompt: string;
+  config: StriartConfig;
+  projectFiles: string[];
+  predictedFiles: string[];
+  routing?: PublicRouterDetails | null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  graph: any;
+  command?: string | null;
+  mode?: 'attended' | 'autonomous';
+  profile?: string | null;
+  after?: string | null;
+  reuse?: boolean;
+  force?: boolean;
+  allowHistoricalSecrets?: boolean;
+}): Promise<RunResult> {
   await assertInitialized(root);
   const registry = await readRegistry(root);
   const queue = await readQueue(root);
@@ -895,8 +956,6 @@ export async function shouldWatcherMerge({ root, agent }) {
  * verrou brièvement et un second Ctrl+C reste couvert par la récupération
  * après coupure (verrou orphelin, merge orphelin).
  *
- * @param {{root: string, agent?: string|null, prompt: string, profile?: string|null, timeoutMs?: number|null, after?: string|null, reuse?: boolean, force?: boolean, allowHistoricalSecrets?: boolean, signal?: AbortSignal|null}} params
- * @returns {Promise<import('./types.js').AutonomousResult>}
  */
 export async function runAutonomousTask({
   root,
@@ -909,7 +968,18 @@ export async function runAutonomousTask({
   force = false,
   allowHistoricalSecrets = false,
   signal = null,
-}) {
+}: {
+  root: string;
+  agent?: string | null;
+  prompt: string;
+  profile?: string | null;
+  timeoutMs?: number | null;
+  after?: string | null;
+  reuse?: boolean;
+  force?: boolean;
+  allowHistoricalSecrets?: boolean;
+  signal?: AbortSignal | null;
+}): Promise<AutonomousResult> {
   await assertInitialized(root);
   const config = await loadConfig(root);
 
@@ -1011,18 +1081,16 @@ export async function runAutonomousTask({
   // MERGED, mais bruyant (`warnings: ['ALREADY_INTEGRATED']`, événement dédié).
   // Sans mergeMode différé, jamais KEPT / NOTHING_STARTED / MERGE_DEFERRED
   // (cas propres au proxy ACP) : le résultat est bien un AutonomousResult.
-  const outcome = /** @type {import('./types.js').AutonomousResult} */ (
-    await concludeAutonomousSession({
-      root,
-      config,
-      meta,
-      profileKey,
-      profile: resolved,
-      session,
-      prompt,
-      wording: 'runner',
-    })
-  );
+  const outcome = (await concludeAutonomousSession({
+    root,
+    config,
+    meta,
+    profileKey,
+    profile: resolved,
+    session,
+    prompt,
+    wording: 'runner',
+  })) as AutonomousResult;
   // Sérialisation prudente allégée au départ (clone en échec non attendu) : rendu visible dans
   // le résultat, jamais silencieux (l'événement `task:serialization-relaxed` est déjà parti).
   if (started.relaxedBlockers?.length) {
@@ -1072,8 +1140,6 @@ export async function runAutonomousTask({
  * une session principale dépubliée pendant que l'agent écrit encore dans le
  * worktree du principal.
  *
- * @param {{root: string, prompt: string, profile?: string|null, timeoutMs?: number|null, reason?: string|null, signal?: AbortSignal|null}} params
- * @returns {Promise<import('./types.js').SessionResult>}
  */
 export async function runMainSession({
   root,
@@ -1082,7 +1148,14 @@ export async function runMainSession({
   timeoutMs = null,
   reason = null,
   signal = null,
-}) {
+}: {
+  root: string;
+  prompt: string;
+  profile?: string | null;
+  timeoutMs?: number | null;
+  reason?: string | null;
+  signal?: AbortSignal | null;
+}): Promise<SessionResult> {
   await assertInitialized(root);
   const config = await loadConfig(root);
   // Profil validé AVANT toute réservation : un profil inconnu ne doit pas
@@ -1174,7 +1247,7 @@ const GATE_FEEDBACK_MAX_CHARS = 4000;
  * @returns {boolean}
  */
 function isBudgetRefusal(error) {
-  const code = /** @type {{code?: unknown}|null} */ (error)?.code;
+  const code = /** @type {{code?: unknown}|null} */ error?.code;
   return (
     code === 'TOKEN_BUDGET_EXCEEDED' ||
     code === 'TOKEN_PRICE_MISSING' ||
@@ -1355,7 +1428,7 @@ async function detectSilentRenameHazards(git, oursRef, theirsRef) {
 
 // La synchronisation (rebase, fetch silencieux) vit dans sync.js ;
 // ré-exportée ici pour les consommateurs historiques (CLI, tests).
-export { checkAgentsBehind, syncAgentWithMain, syncAllAgents } from './sync.js';
+export { checkAgentsBehind, syncAgentWithMain, syncAllAgents } from './sync.ts';
 
 /**
  * Garde-fous partagés merge/promotion :
@@ -1403,9 +1476,8 @@ async function assertMainReady(mainGit, expectedBranch) {
  * Sortie d'un process de la cible (hook, signature) sans secret : valeurs exactes des
  * variables secrètes de l'orchestrateur (dont `apiKeyEnv` des LLM configurés) puis
  * motifs reconnus — même règle que le journal du Test Gate.
- * @param {string} text @param {import('./types.js').StriartConfig} config
  */
-function redactHookOutput(text, config) {
+function redactHookOutput(text: string, config: StriartConfig) {
   const extraNames = [
     config.llm?.apiKeyEnv,
     ...Object.values(config.llmRoles ?? {}).map((r) => r?.apiKeyEnv),
@@ -1477,11 +1549,20 @@ async function findTargetCarrier(git, sha) {
  *    `MERGE_COMMIT_FAILED`, comme avant.
  * Si l'annulation elle-même est refusée (état changé, verrou perdu), CETTE erreur-là
  * prime : l'état n'est plus le nôtre.
- * @param {Parameters<typeof assertMergeIntact>[0]} integrity
- * @param {string} message
- * @param {{config: import('./types.js').StriartConfig, ticketBase?: Omit<Parameters<typeof createConflictTicket>[1], 'reason'|'log'>, existingTicketId?: string}} options
  */
-async function commitMergeOrAbort(integrity, message, { config, ticketBase, existingTicketId }) {
+async function commitMergeOrAbort(
+  integrity: Parameters<typeof assertMergeIntact>[0],
+  message: string,
+  {
+    config,
+    ticketBase,
+    existingTicketId,
+  }: {
+    config: StriartConfig;
+    ticketBase?: Omit<Parameters<typeof createConflictTicket>[1], 'reason' | 'log'>;
+    existingTicketId?: string;
+  },
+) {
   const outcome = await commitMergeBounded({
     root: integrity.root,
     message,
@@ -1738,8 +1819,6 @@ async function showAtRev(git, rev, filePath) {
  * couvre ainsi TOUT ce que l'humain doit trancher pour que `resolve --apply`
  * aboutisse (chaque chemin protégé + chaque conflit), sans aller-retour.
  * Rend null quand rien de protégé ne change.
- * @param {{root: string, mainGit: import('simple-git').SimpleGit, config: import('./types.js').StriartConfig, policy: import('./protected-paths.ts').ProtectedPathsPolicy, agent: string, meta: import('./types.js').AgentMeta, sha: string, rebase: import('./types.js').SyncResult|null}} params
- * @returns {Promise<import('./types.js').MergeResult|null>}
  */
 async function refuseProtectedPathsMerge({
   root,
@@ -1750,7 +1829,16 @@ async function refuseProtectedPathsMerge({
   meta,
   sha,
   rebase,
-}) {
+}: {
+  root: string;
+  mainGit: import('simple-git').SimpleGit;
+  config: StriartConfig;
+  policy: ProtectedPathsPolicy;
+  agent: string;
+  meta: AgentMeta;
+  sha: string;
+  rebase: SyncResult | null;
+}): Promise<MergeResult | null> {
   const scan = await findProtectedChanges({ git: mainGit, ours: 'HEAD', theirs: sha, policy });
   for (const exempt of scan.exempted) {
     logger.warn(
@@ -1846,8 +1934,11 @@ async function refuseProtectedPathsMerge({
  *
  * Retourne { status: 'UP_TO_DATE'|'MERGED'|'CONFLICT'|'GATE_FAILED', ... }.
  */
-/** @param {{root: string, agent: string, signal?: AbortSignal|null}} params @returns {Promise<import('./types.js').MergeResult>} */
-export async function mergeAgentCommit(params) {
+export async function mergeAgentCommit(params: {
+  root: string;
+  agent: string;
+  signal?: AbortSignal | null;
+}): Promise<MergeResult> {
   // `signal` n'annule que l'ATTENTE du verrou, jamais un merge commencé.
   return runWithDeferredEffects(() =>
     withMainLockTimed(params.root, `merge:${params.agent}`, () => mergeAgentCommitImpl(params), {
@@ -1856,8 +1947,13 @@ export async function mergeAgentCommit(params) {
   );
 }
 
-/** @returns {Promise<import('./types.js').MergeResult>} */
-async function mergeAgentCommitImpl({ root, agent }) {
+async function mergeAgentCommitImpl({
+  root,
+  agent,
+}: {
+  root: string;
+  agent: string;
+}): Promise<MergeResult> {
   await assertInitialized(root);
   const config = await loadConfig(root);
   const registry = await readRegistry(root);
@@ -1916,8 +2012,7 @@ async function mergeAgentCommitImpl({ root, agent }) {
   // rebase a pu le changer) — c'est ce second contrôle qui fait foi.
   const protectedPolicy = resolveProtectedPathsPolicy(config);
   logProtectedPathsRelaxation(protectedPolicy, agent);
-  /** @param {string} sha @param {import('./types.js').SyncResult|null} rebaseResult */
-  const protectedGuard = (sha, rebaseResult) =>
+  const protectedGuard = (sha: string, rebaseResult: SyncResult | null) =>
     refuseProtectedPathsMerge({
       root,
       mainGit,
@@ -1929,7 +2024,7 @@ async function mergeAgentCommitImpl({ root, agent }) {
       rebase: rebaseResult,
     });
   if (pendingBeforeRebase) {
-    const refused = await protectedGuard(/** @type {string} */ (preRebaseHead), null);
+    const refused = await protectedGuard(/** @type {string} */ preRebaseHead, null);
     if (refused) return refused;
   }
 
@@ -2005,7 +2100,7 @@ async function mergeAgentCommitImpl({ root, agent }) {
     expectedMergeHead: agentHead,
     expectedHead: headBefore,
     /** Empreinte de l'index après la dernière écriture de Striart (null : pas encore relevée). */
-    expectedIndex: /** @type {string | null} */ (null),
+    expectedIndex: /** @type {string | null} */ null,
   };
   // Un merge en conflit ne throw pas toujours côté simple-git avec --no-commit :
   // on vérifie l'état de conflit dans tous les cas, exception ou non.
@@ -2395,8 +2490,11 @@ const MANUALLY_APPLICABLE_REASONS = new Set([
  * (watch, ou une autre résolution) — la seule alternative avant cette
  * fonction était un `git merge` fait à la main HORS du verrou.
  */
-/** @param {{root: string, ticketId: string, signal?: AbortSignal|null}} params @returns {Promise<import('./types.js').ManualResolutionResult>} */
-export async function applyTicketResolution(params) {
+export async function applyTicketResolution(params: {
+  root: string;
+  ticketId: string;
+  signal?: AbortSignal | null;
+}): Promise<ManualResolutionResult> {
   return runWithDeferredEffects(() =>
     withMainLockTimed(
       params.root,
@@ -2407,8 +2505,13 @@ export async function applyTicketResolution(params) {
   );
 }
 
-/** @returns {Promise<import('./types.js').ManualResolutionResult>} */
-async function applyTicketResolutionImpl({ root, ticketId }) {
+async function applyTicketResolutionImpl({
+  root,
+  ticketId,
+}: {
+  root: string;
+  ticketId: string;
+}): Promise<ManualResolutionResult> {
   await assertInitialized(root);
   const config = await loadConfig(root);
   const ticket = await readTicketDetail(root, ticketId);
@@ -2550,7 +2653,7 @@ async function applyTicketResolutionImpl({ root, ticketId }) {
     expectedMergeHead: ticket.sha,
     expectedHead: headBefore,
     /** Empreinte de l'index après la dernière écriture de Striart (null : pas encore relevée). */
-    expectedIndex: /** @type {string | null} */ (null),
+    expectedIndex: /** @type {string | null} */ null,
   };
   let mergeError = null;
   const status = await timed('merge', async () => {
@@ -3191,8 +3294,6 @@ async function reconcileImpl({ root }) {
  * l'eau ; `overrides` : mode, concurrence et politique d'échec imposés par
  * la ligne de commande). Le v1 ci-dessous garde exactement sa sémantique.
  *
- * @param {{root: string, planText: string, dryRun?: boolean, signal?: AbortSignal|null, onProgress?: ((event: import('./orchestration/unit.ts').ProgressEvent) => void)|null, overrides?: import('./orchestration/scheduler.ts').PlanOverrides}} params
- * @returns {Promise<{dryRun: boolean, version?: 1|2, tasks: Array<{id: string|null, agent: string|null, mode: 'attended'|'autonomous', after: string|null, kind?: import('./types.js').PlanNodeKind}>, results?: Array<{id: string|null, agent: string|null, mode: 'attended'|'autonomous', status: string, keptDetail?: string|null, warnings?: import('./types.js').AutonomousWarningCode[], errorCode?: string|null, kind?: import('./types.js').PlanNodeKind, info?: (import('./types.js').AgentMeta & {name: string}) | null}>, nodes?: import('./types.js').OrchestrationNodeResult[], run?: {id: string, mode: import('./types.js').OrchestrationMode, concurrency: number, onFailure: import('./types.js').PlanFailurePolicy}, interrupted?: boolean, notApplied?: Array<{id: string|null, agent: string|null}>}>}
  */
 export async function applyPlan({
   root,
@@ -3201,7 +3302,44 @@ export async function applyPlan({
   signal = null,
   onProgress = null,
   overrides = {},
-}) {
+}: {
+  root: string;
+  planText: string;
+  dryRun?: boolean;
+  signal?: AbortSignal | null;
+  onProgress?: ((event: import('./orchestration/unit.ts').ProgressEvent) => void) | null;
+  overrides?: PlanOverrides;
+}): Promise<{
+  dryRun: boolean;
+  version?: 1 | 2;
+  tasks: Array<{
+    id: string | null;
+    agent: string | null;
+    mode: 'attended' | 'autonomous';
+    after: string | null;
+    kind?: PlanNodeKind;
+  }>;
+  results?: Array<{
+    id: string | null;
+    agent: string | null;
+    mode: 'attended' | 'autonomous';
+    status: string;
+    keptDetail?: string | null;
+    warnings?: AutonomousWarningCode[];
+    errorCode?: string | null;
+    kind?: PlanNodeKind;
+    info?: (AgentMeta & { name: string }) | null;
+  }>;
+  nodes?: OrchestrationNodeResult[];
+  run?: {
+    id: string;
+    mode: OrchestrationMode;
+    concurrency: number;
+    onFailure: PlanFailurePolicy;
+  };
+  interrupted?: boolean;
+  notApplied?: Array<{ id: string | null; agent: string | null }>;
+}> {
   await assertInitialized(root);
   const plan = parsePlan(planText); // lève PLAN_INVALID avant tout effet de bord
   const config = await loadConfig(root);
@@ -3342,10 +3480,11 @@ export async function applyPlan({
  *    il est conservé (le code est annulé dans main, mais re-merger le même
  *    commit reproduirait l'état annulé — décision humaine).
  *
- * @param {{root: string, signal?: AbortSignal|null}} params
- * @returns {Promise<import('./types.js').RollbackResult>}
  */
-export async function rollbackLastMerge(params) {
+export async function rollbackLastMerge(params: {
+  root: string;
+  signal?: AbortSignal | null;
+}): Promise<RollbackResult> {
   return runWithDeferredEffects(() =>
     withMainLock(params.root, 'rollback', () => rollbackLastMergeImpl(params), {
       signal: params.signal ?? null,
@@ -3374,7 +3513,7 @@ async function isPublishedOnOrigin(git, branch) {
       `+refs/heads/${branch}:refs/remotes/origin/${branch}`,
     ]);
   } catch (error) {
-    const message = String(/** @type {Error} */ (error)?.message ?? error);
+    const message = String(/** @type {Error} */ error?.message ?? error);
     // La branche n'existe pas sur le remote : jamais publiée, certitude acquise.
     if (/couldn't find remote ref/i.test(message)) return false;
     logger.warn(
@@ -3444,8 +3583,7 @@ async function revertMergeBounded({ root, mainGit, config, agent, head }) {
   );
 }
 
-/** @returns {Promise<import('./types.js').RollbackResult>} */
-async function rollbackLastMergeImpl({ root }) {
+async function rollbackLastMergeImpl({ root }: { root: string }): Promise<RollbackResult> {
   await assertInitialized(root);
   const config = await loadConfig(root);
   const mainGit = simpleGit(root);
@@ -3536,10 +3674,12 @@ async function rollbackLastMergeImpl({ root }) {
  *                   (--rollback pour reset --hard staging sur main :
  *                    destructif, donc jamais par défaut)
  *
- * @param {{root: string, rollback?: boolean, signal?: AbortSignal|null}} params
- * @returns {Promise<import('./types.js').PromoteResult>}
  */
-export async function promoteStaging(params) {
+export async function promoteStaging(params: {
+  root: string;
+  rollback?: boolean;
+  signal?: AbortSignal | null;
+}): Promise<PromoteResult> {
   return runWithDeferredEffects(() =>
     withMainLockTimed(params.root, 'promote', () => promoteStagingImpl(params), {
       signal: params.signal ?? null,
@@ -3599,8 +3739,13 @@ async function assertPromotedTreeIsTested(mainGit, config, stagingHead) {
   }
 }
 
-/** @returns {Promise<import('./types.js').PromoteResult>} */
-async function promoteStagingImpl({ root, rollback = false }) {
+async function promoteStagingImpl({
+  root,
+  rollback = false,
+}: {
+  root: string;
+  rollback?: boolean;
+}): Promise<PromoteResult> {
   await assertInitialized(root);
   const config = await loadConfig(root);
   if (!config.mainBranch) {

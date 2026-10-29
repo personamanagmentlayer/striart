@@ -15,8 +15,8 @@ vi.mock('simple-git', async (importOriginal) => {
 });
 
 const { createTempRepo } = await import('../helpers/temp-repo.js');
-const { initStriart } = await import('../../src/init.js');
-const { cloneGit, createAgent, listAgents, readRegistry } = await import('../../src/clone.js');
+const { initStriart } = await import('../../src/init.ts');
+const { cloneGit, createAgent, listAgents, readRegistry } = await import('../../src/clone.ts');
 
 /**
  * Les faits git d'un clone sont mémoïsés par signature de références : tant

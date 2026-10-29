@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createTempRepo, backdateDir } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
+import { initStriart } from '../../src/init.ts';
 import {
   cleanClones,
   clearCloneSizeCache,
@@ -11,8 +11,8 @@ import {
   dirSizeBytes,
   listAgents,
   removeAgentFromRegistry,
-} from '../../src/clone.js';
-import { CLONE_MEMORY_FILE } from '../../src/memory.js';
+} from '../../src/clone.ts';
+import { CLONE_MEMORY_FILE } from '../../src/memory.ts';
 
 // D4 : la taille des clones est en cache horodaté (`sizesComputedAt`) ; le signal
 // d'activité qui garde cleanClones/reuseAgent reste EXACT et n'est jamais caché.

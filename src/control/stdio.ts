@@ -23,7 +23,7 @@ import type { Locale, Messages } from '../cli/i18n/index.ts';
 import { encodeFrame, readFrames } from './framing.ts';
 import type { Framing } from './framing.ts';
 import { DEFAULT_MAX_BUFFERED_BYTES, ControlHub } from './hub.ts';
-import { logger } from '../logger.js';
+import { logger } from '../logger.ts';
 import type { MethodContext } from './methods.ts';
 import { afterWrite, handleMessage, parseError, parseErrorResponse } from './rpc.ts';
 

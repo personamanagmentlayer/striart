@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { StriartError } from '../../errors.js';
-import { applyPlan } from '../../orchestrator.js';
+import { StriartError } from '../../errors.ts';
+import { applyPlan } from '../../orchestrator.ts';
 import { openAttendedSession } from '../../pty-host.ts';
 import type { AttendedSession } from '../../pty-host.ts';
 import type { AgentMeta, AutonomousWarningCode } from '../../types.js';

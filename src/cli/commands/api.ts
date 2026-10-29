@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module';
-import { assertInitialized } from '../../clone.js';
-import { loadConfig } from '../../config.js';
-import { StriartError } from '../../errors.js';
+import { assertInitialized } from '../../clone.ts';
+import { loadConfig } from '../../config.ts';
+import { StriartError } from '../../errors.ts';
 import { assertHumanPlane } from '../../control/guard.ts';
 import type { Framing } from '../../control/framing.ts';
 import type { CommandModule } from '../context.ts';

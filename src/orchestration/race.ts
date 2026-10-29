@@ -19,11 +19,11 @@
  * bloquent pas entre eux, mais restent en collision avec le reste du dépôt.
  */
 import { randomBytes } from 'node:crypto';
-import { cleanClones, cloneGit } from '../clone.js';
-import { llmGenerate } from '../llm.js';
-import { logger } from '../logger.js';
-import { slugifyPrompt, stopAgent } from '../orchestrator.js';
-import { DEFAULT_PROFILE, resolveAgentProfile } from '../session.js';
+import { cleanClones, cloneGit } from '../clone.ts';
+import { llmGenerate } from '../llm.ts';
+import { logger } from '../logger.ts';
+import { slugifyPrompt, stopAgent } from '../orchestrator.ts';
+import { DEFAULT_PROFILE, resolveAgentProfile } from '../session.ts';
 import type { OrchestrationNodeResult, PlanNode, RaceLosers } from '../types.js';
 import { composeTurnPrompt } from './briefing.ts';
 import { nodeResult } from './result.ts';

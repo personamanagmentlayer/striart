@@ -1,18 +1,19 @@
 import { readdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { loadConfig } from './config.js';
-import { assertInitialized, dirStats, readRegistry, removeClone } from './clone.js';
-import { agentsDir, striartDir } from './paths.js';
-import { StriartError } from './errors.js';
-import { listConflictTickets, removeResolvedTicketDir } from './conflicts.js';
-import { withMainLock } from './lock.js';
-import { logger } from './logger.js';
-import { withTransientRetry } from './json-file.js';
+import { loadConfig } from './config.ts';
+import { assertInitialized, dirStats, readRegistry, removeClone } from './clone.ts';
+import { agentsDir, striartDir } from './paths.ts';
+import { StriartError } from './errors.ts';
+import { listConflictTickets, removeResolvedTicketDir } from './conflicts.ts';
+import { withMainLock } from './lock.ts';
+import { logger } from './logger.ts';
+import { withTransientRetry } from './json-file.ts';
 import { ptyHostStatus } from './pty-host-state.ts';
 import { AGENT_NAME_RE } from './agent-name.ts';
 import { sweepCache } from './tokens/cache.ts';
 import { pruneLedger } from './tokens/ledger.ts';
 import { resolveTokensSettings } from './tokens/settings.ts';
+import type { AgentRegistry } from './types.js';
 
 /** Journaux par agent : sessions autonomes (session.js, acp.ts) et terminaux (pty-host.ts). */
 const AGENT_LOG_RE = /^(session-.+|pty-.+)\.log$/;
@@ -58,7 +59,7 @@ export async function pruneWorkspace(params) {
  * @param {unknown} days
  */
 function assertValidRetentionDays(days) {
-  if (Number.isSafeInteger(days) && /** @type {number} */ (days) >= 0) return;
+  if (Number.isSafeInteger(days) && /** @type {number} */ days >= 0) return;
   throw new StriartError(
     `Rétention invalide : ${JSON.stringify(days)}. Attendu : un nombre entier de jours >= 0.`,
     {
@@ -181,11 +182,21 @@ async function pruneWorkspaceImpl({ root, days = null, dryRun = false }) {
  * tâche COURANTE d'un agent inscrit, et le journal de terminal d'un agent
  * inscrit ou dont l'hôte de pty vit. Le nom de fichier n'est jamais
  * interprété comme un chemin : seuls les noms de `logs/` sont considérés.
- * @param {string} root
- * @param {{registry: import('./types.js').AgentRegistry, cutoff: number, dryRun: boolean, failed: Array<{kind: 'clone'|'ticket'|'log', name: string, cause: string}>}} params
- * @returns {Promise<Array<{file: string, freedBytes: number, lastActivity: string}>>}
  */
-async function pruneAgentLogs(root, { registry, cutoff, dryRun, failed }) {
+async function pruneAgentLogs(
+  root: string,
+  {
+    registry,
+    cutoff,
+    dryRun,
+    failed,
+  }: {
+    registry: AgentRegistry;
+    cutoff: number;
+    dryRun: boolean;
+    failed: Array<{ kind: 'clone' | 'ticket' | 'log'; name: string; cause: string }>;
+  },
+): Promise<Array<{ file: string; freedBytes: number; lastActivity: string }>> {
   const logsDir = path.join(striartDir(root), 'logs');
   const protectedNames = new Set();
   for (const [name, meta] of Object.entries(registry)) {

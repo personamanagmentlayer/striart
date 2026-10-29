@@ -8,9 +8,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { onStriartEvent } from '../../src/events.js';
-import { runTask } from '../../src/orchestrator.js';
+import { initStriart } from '../../src/init.ts';
+import { onStriartEvent } from '../../src/events.ts';
+import { runTask } from '../../src/orchestrator.ts';
 import { resetRootCache } from '../../src/tokens/call.ts';
 import { resetUsageIndex } from '../../src/tokens/ledger.ts';
 

@@ -9,12 +9,12 @@ import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { simpleGit } from 'simple-git';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { createAgent } from '../../src/clone.js';
-import { applyTicketResolution, mergeAgentCommit, promoteStaging } from '../../src/orchestrator.js';
-import { safeFileName } from '../../src/conflicts.js';
-import { onStriartEvent } from '../../src/events.js';
-import { withMainLock } from '../../src/lock.js';
+import { initStriart } from '../../src/init.ts';
+import { createAgent } from '../../src/clone.ts';
+import { applyTicketResolution, mergeAgentCommit, promoteStaging } from '../../src/orchestrator.ts';
+import { safeFileName } from '../../src/conflicts.ts';
+import { onStriartEvent } from '../../src/events.ts';
+import { withMainLock } from '../../src/lock.ts';
 import { PHASES } from '../../src/timings.ts';
 
 const GATE_OK = 'node -e "process.exit(0)"';

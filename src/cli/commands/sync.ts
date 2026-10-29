@@ -1,4 +1,4 @@
-import { syncAgentWithMain, syncAllAgents } from '../../orchestrator.js';
+import { syncAgentWithMain, syncAllAgents } from '../../orchestrator.ts';
 import type { SyncResult } from '../../types.js';
 import type { CommandModule } from '../context.ts';
 import { syncOutcome, worstOutcome } from '../exit.ts';

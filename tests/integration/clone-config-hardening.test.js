@@ -10,9 +10,9 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os';
 import path from 'node:path';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { cloneGit, createAgent } from '../../src/clone.js';
-import { runAutonomousTask } from '../../src/orchestrator.js';
+import { initStriart } from '../../src/init.ts';
+import { cloneGit, createAgent } from '../../src/clone.ts';
+import { runAutonomousTask } from '../../src/orchestrator.ts';
 
 const posix = (p) => p.replaceAll('\\', '/');
 const exists = async (p) => Boolean(await stat(p).catch(() => null));

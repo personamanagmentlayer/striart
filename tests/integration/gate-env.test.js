@@ -2,7 +2,7 @@
 // d'API ni les webhooks de l'orchestrateur, mais tournent avec ce qu'il leur faut
 // (PATH, node, git). Vrais process, conteneur natif ET process simple.
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { runTestGate } from '../../src/gate.js';
+import { runTestGate } from '../../src/gate.ts';
 import { resetNativeBinaryCache } from '../../src/native.ts';
 import { requireNativeBuild } from '../helpers/native-build.js';
 import { REPO_ROOT } from '../helpers/native.js';

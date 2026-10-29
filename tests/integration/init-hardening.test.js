@@ -2,8 +2,8 @@ import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { logger } from '../../src/logger.js';
+import { initStriart } from '../../src/init.ts';
+import { logger } from '../../src/logger.ts';
 import { resetStateProtectionMemo } from '../../src/state-protection.ts';
 import { resetHardenMemo } from '../../src/private-fs.ts';
 

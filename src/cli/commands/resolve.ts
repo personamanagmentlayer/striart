@@ -1,21 +1,21 @@
-import { assertInitialized } from '../../clone.js';
+import { assertInitialized } from '../../clone.ts';
 import {
   closeConflictTicket,
   isReadableTicket,
   listConflictTickets,
   prepareResolutionScaffold,
-} from '../../conflicts.js';
-import { StriartError } from '../../errors.js';
-import { applyTicketResolution } from '../../orchestrator.js';
-import { quoteForShell } from '../../terminal.js';
-import { readState, resetManualMode } from '../../state.js';
+} from '../../conflicts.ts';
+import { StriartError } from '../../errors.ts';
+import { applyTicketResolution } from '../../orchestrator.ts';
+import { quoteForShell } from '../../terminal.ts';
+import { readState, resetManualMode } from '../../state.ts';
 import type {
   CorruptTicket,
   ManualResolutionResult,
   StriartState,
   TicketEntry,
 } from '../../types.js';
-import type { CommandModule } from '../context.ts';
+import type { CommandModule, CommandResult, Ctx } from '../context.ts';
 import { manualResolutionOutcome } from '../exit.ts';
 
 export interface ResolveInput {
@@ -40,7 +40,7 @@ export type ResolveData =
   | { action: 'apply'; result: ManualResolutionResult };
 
 export const resolve: CommandModule<ResolveInput, ResolveData> = {
-  async execute(ctx, input) {
+  async execute(ctx: Ctx, input: ResolveInput): Promise<CommandResult<ResolveData>> {
     // Une option qui n'a de sens qu'avec une autre : refusée AVANT toute action
     // (jamais ignorée en silence — l'humain croirait avoir accepté la version
     // de l'agent).

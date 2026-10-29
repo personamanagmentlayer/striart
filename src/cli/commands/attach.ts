@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { StriartError } from '../../errors.js';
+import { StriartError } from '../../errors.ts';
 import type { CommandModule } from '../context.ts';
 
 export interface AttachInput {

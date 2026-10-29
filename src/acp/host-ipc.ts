@@ -2,8 +2,8 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { lstat, mkdir } from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
-import { StriartError } from '../errors.js';
-import { MAX_UNIX_SOCKET_PATH, privateTmpDir, striartDir } from '../paths.js';
+import { StriartError } from '../errors.ts';
+import { MAX_UNIX_SOCKET_PATH, privateTmpDir, striartDir } from '../paths.ts';
 import { validateAgentName } from '../agent-name.ts';
 import { boundedLines } from '../line-reader.ts';
 

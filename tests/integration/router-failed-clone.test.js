@@ -7,10 +7,10 @@ import {
   mockRouter,
   writeStriartConfig,
 } from '../helpers/orchestration.js';
-import { initStriart } from '../../src/init.js';
-import { readRegistry } from '../../src/clone.js';
-import { applyPlan, retryQueue, runAutonomousTask, runTask } from '../../src/orchestrator.js';
-import { readQueue } from '../../src/queue.js';
+import { initStriart } from '../../src/init.ts';
+import { readRegistry } from '../../src/clone.ts';
+import { applyPlan, retryQueue, runAutonomousTask, runTask } from '../../src/orchestrator.ts';
+import { readQueue } from '../../src/queue.ts';
 
 const exists = async (p) => Boolean(await stat(p).catch(() => null));
 

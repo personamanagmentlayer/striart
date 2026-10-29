@@ -7,12 +7,12 @@ import { fileURLToPath } from 'node:url';
 import { simpleGit } from 'simple-git';
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { createAgent } from '../../src/clone.js';
+import { initStriart } from '../../src/init.ts';
+import { createAgent } from '../../src/clone.ts';
 import { createCollabGroup } from '../../src/collab/channel.ts';
-import { mergeAgentCommit, promoteStaging } from '../../src/orchestrator.js';
-import { withMainLock } from '../../src/lock.js';
-import { handleMcpRequest, startMcpServer } from '../../src/mcp.js';
+import { mergeAgentCommit, promoteStaging } from '../../src/orchestrator.ts';
+import { withMainLock } from '../../src/lock.ts';
+import { handleMcpRequest, startMcpServer } from '../../src/mcp.ts';
 import { resolveMcpSettings } from '../../src/mcp/settings.ts';
 
 const CLI = fileURLToPath(new URL('../../src/cli.js', import.meta.url));

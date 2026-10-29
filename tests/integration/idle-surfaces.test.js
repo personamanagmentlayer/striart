@@ -5,10 +5,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { createAgent } from '../../src/clone.js';
+import { initStriart } from '../../src/init.ts';
+import { createAgent } from '../../src/clone.ts';
 import { collectStatus } from '../../src/status.ts';
-import { startDashboard } from '../../src/dashboard.js';
+import { startDashboard } from '../../src/dashboard.ts';
 import { TOOLS } from '../../src/mcp/tools.ts';
 import { call, signIn, useLoopbackDashboard } from '../helpers/control-client.js';
 

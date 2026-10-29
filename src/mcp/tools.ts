@@ -6,11 +6,11 @@ import {
   mergeAgentCommit,
   promoteStaging,
   runTask,
-} from '../orchestrator.js';
-import { listConflictTickets, prepareResolutionScaffold, readTicketDetail } from '../conflicts.js';
+} from '../orchestrator.ts';
+import { listConflictTickets, prepareResolutionScaffold, readTicketDetail } from '../conflicts.ts';
 import { collectStatus } from '../status.ts';
-import { loadConfig } from '../config.js';
-import { StriartError } from '../errors.js';
+import { loadConfig } from '../config.ts';
+import { StriartError } from '../errors.ts';
 import { COLLAB_GROUP_ID_RE, postAgentMessage, readAgentMessages } from '../collab/channel.ts';
 import { COLLAB_KINDS, ROLE_NAME_RE, fenceUntrusted } from '../collab/message.ts';
 import { messageItems } from '../orchestration/briefing.ts';

@@ -3,9 +3,9 @@ import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { simpleGit } from 'simple-git';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { createAgent } from '../../src/clone.js';
-import { watchAgents } from '../../src/watcher.js';
+import { initStriart } from '../../src/init.ts';
+import { createAgent } from '../../src/clone.ts';
+import { watchAgents } from '../../src/watcher.ts';
 
 function waitForCommit(events, predicate, timeoutMs = 10000) {
   return new Promise((resolve, reject) => {

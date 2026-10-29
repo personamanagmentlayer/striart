@@ -4,14 +4,14 @@ import { chmod, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { StriartError } from '../errors.js';
-import { writeJsonAtomic } from '../json-file.js';
+import { StriartError } from '../errors.ts';
+import { writeJsonAtomic } from '../json-file.ts';
 import { mkdirPrivate } from '../private-fs.ts';
 import { checkProcessInstance, readProcessInfos } from '../process-info.ts';
-import { isProcessAlive, killProcessTree } from '../process-tree.js';
+import { isProcessAlive, killProcessTree } from '../process-tree.ts';
 import { clearStopRequest, requestStop } from '../stop-request.ts';
 import { validateAgentName } from '../agent-name.ts';
-import { sessionLogPath } from '../session.js';
+import { sessionLogPath } from '../session.ts';
 import {
   HOST_PROTOCOL_VERSION,
   acpBusTokenPath,

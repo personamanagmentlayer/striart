@@ -3,7 +3,7 @@ import { constants } from 'node:fs';
 import { access, mkdtemp, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { logger } from '../logger.js';
+import { logger } from '../logger.ts';
 
 /**
  * Détection des outils de coding installés (`striart profiles --detect`).

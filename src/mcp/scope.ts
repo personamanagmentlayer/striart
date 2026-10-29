@@ -1,11 +1,11 @@
 import { realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { AGENT_NAME_RE } from '../agent-name.ts';
-import { loadConfig } from '../config.js';
-import { StriartError } from '../errors.js';
-import { findRepoRoot, readRegistry } from '../clone.js';
-import { striartDir } from '../paths.js';
-import { logger } from '../logger.js';
+import { loadConfig } from '../config.ts';
+import { StriartError } from '../errors.ts';
+import { findRepoRoot, readRegistry } from '../clone.ts';
+import { striartDir } from '../paths.ts';
+import { logger } from '../logger.ts';
 import { resolveMcpSettings } from './settings.ts';
 import type { McpSettings } from '../types.js';
 

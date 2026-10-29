@@ -16,12 +16,12 @@
  * d'exécution (agent ou tâche vivant hors plan) est attendue, bornée par
  * `orchestration.waitTimeoutMs`.
  */
-import { readRegistry } from '../clone.js';
-import { StriartError } from '../errors.js';
-import { logger } from '../logger.js';
-import { removeTask, readQueue } from '../queue.js';
-import { DEFAULT_PROFILE, resolveAgentProfile } from '../session.js';
-import { runAutonomousTask, runTask } from '../orchestrator.js';
+import { readRegistry } from '../clone.ts';
+import { StriartError } from '../errors.ts';
+import { logger } from '../logger.ts';
+import { removeTask, readQueue } from '../queue.ts';
+import { DEFAULT_PROFILE, resolveAgentProfile } from '../session.ts';
+import { runAutonomousTask, runTask } from '../orchestrator.ts';
 import type {
   MergeResult,
   OrchestrationMode,

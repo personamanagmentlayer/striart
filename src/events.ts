@@ -1,5 +1,8 @@
-import { notify } from './notify.js';
-import { logger } from './logger.js';
+import { notify } from './notify.ts';
+import { logger } from './logger.ts';
+import type { StriartConfig, StriartEvent } from './types.js';
+
+type EventSubscriber = (config: StriartConfig, event: StriartEvent) => void | Promise<void>;
 
 /**
  * Bus d'observabilité interne — le mécanisme des CONSÉQUENCES SANS AUTORITÉ.
@@ -30,15 +33,12 @@ import { logger } from './logger.js';
  * liront les champs.
  */
 
-/** @type {Set<(config: import('./types.js').StriartConfig, event: import('./types.js').StriartEvent) => void | Promise<void>>} */
-const subscribers = new Set();
+const subscribers = new Set<EventSubscriber>();
 
 /**
  * Abonne un consommateur. Retourne la fonction de désabonnement.
- * @param {(config: import('./types.js').StriartConfig, event: import('./types.js').StriartEvent) => void | Promise<void>} subscriber
- * @returns {() => void}
  */
-export function onStriartEvent(subscriber) {
+export function onStriartEvent(subscriber: EventSubscriber): () => void {
   subscribers.add(subscriber);
   return () => subscribers.delete(subscriber);
 }
@@ -49,11 +49,8 @@ export function onStriartEvent(subscriber) {
  * le comportement temporel ne change pas. Chaque abonné est isolé : son
  * throw est loggé, jamais propagé.
  *
- * @param {import('./types.js').StriartConfig} config
- * @param {import('./types.js').StriartEvent} event
- * @returns {Promise<void>}
  */
-export async function emitStriartEvent(config, event) {
+export async function emitStriartEvent(config: StriartConfig, event: StriartEvent): Promise<void> {
   for (const subscriber of subscribers) {
     try {
       await subscriber(config, event);
@@ -79,9 +76,9 @@ onStriartEvent(async (config, event) => {
  * Publie un événement de MESURE qui n'a pas de configuration d'origine (le verrou principal n'en
  * porte pas) : mêmes abonnés, mêmes garanties d'isolation. Le pont webhook l'ignore (pas de
  * `message`). Ne rejette jamais ; l'appelant ne l'attend pas (le bus informe, il ne décide pas).
- * @param {Extract<import('./types.js').StriartEvent, {type: 'lock:contention'}>} event
- * @returns {Promise<void>}
  */
-export function emitLockContention(event) {
-  return emitStriartEvent(/** @type {import('./types.js').StriartConfig} */ ({}), event);
+export function emitLockContention(
+  event: Extract<StriartEvent, { type: 'lock:contention' }>,
+): Promise<void> {
+  return emitStriartEvent({} as StriartConfig, event);
 }

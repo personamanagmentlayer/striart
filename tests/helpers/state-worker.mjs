@@ -15,9 +15,9 @@
  * Écrit en fin `RESULT <json>` : `{errors: {code: n}, done: n}`.
  */
 import { readFile } from 'node:fs/promises';
-import { readJson, writeJsonAtomic } from '../../src/json-file.js';
-import { enqueueTask } from '../../src/queue.js';
-import { updateAgentMeta } from '../../src/clone.js';
+import { readJson, writeJsonAtomic } from '../../src/json-file.ts';
+import { enqueueTask } from '../../src/queue.ts';
+import { updateAgentMeta } from '../../src/clone.ts';
 
 const [mode, target, id, iterationsArg] = process.argv.slice(2);
 const iterations = Number(iterationsArg);

@@ -13,7 +13,7 @@
  * utilisateur qui efface sa variable d'environnement n'est pas arrêté par
  * elle (voir SECURITY.md, frontière « même utilisateur »).
  */
-import { StriartError } from '../errors.js';
+import { StriartError } from '../errors.ts';
 
 export function assertHumanPlane(env: NodeJS.ProcessEnv = process.env, surface: string): void {
   if (env.STRIART_SESSION !== '1') return;

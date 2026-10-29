@@ -3,8 +3,8 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { runDoctor } from '../../src/doctor.js';
+import { initStriart } from '../../src/init.ts';
+import { runDoctor } from '../../src/doctor.ts';
 import { en } from '../../src/cli/i18n/en.ts';
 
 const one = (result, id) => result.checks.find((c) => c.id === id);

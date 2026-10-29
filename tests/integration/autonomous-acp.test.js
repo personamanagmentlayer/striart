@@ -3,9 +3,9 @@ import { readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { readRegistry } from '../../src/clone.js';
-import { runAutonomousTask } from '../../src/orchestrator.js';
+import { initStriart } from '../../src/init.ts';
+import { readRegistry } from '../../src/clone.ts';
+import { runAutonomousTask } from '../../src/orchestrator.ts';
 
 const FAKE_ACP = fileURLToPath(new URL('../helpers/fake-acp-agent.cjs', import.meta.url));
 const GATE_OK = 'node -e "process.exit(0)"';

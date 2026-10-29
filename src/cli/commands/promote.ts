@@ -1,6 +1,6 @@
-import { promoteStaging } from '../../orchestrator.js';
+import { promoteStaging } from '../../orchestrator.ts';
 import type { PromoteResult } from '../../types.js';
-import type { CommandModule } from '../context.ts';
+import type { CommandModule, CommandResult, Ctx } from '../context.ts';
 import { promoteOutcome } from '../exit.ts';
 import { renderTicketLocation } from '../render/results.ts';
 
@@ -9,7 +9,7 @@ export interface PromoteInput {
 }
 
 export const promote: CommandModule<PromoteInput, PromoteResult> = {
-  async execute(ctx, input) {
+  async execute(ctx: Ctx, input: PromoteInput): Promise<CommandResult<PromoteResult>> {
     const root = await ctx.repoRoot();
     const result = await ctx.out.task(ctx.m.promote.running, () =>
       promoteStaging({ root, rollback: input.rollback }),

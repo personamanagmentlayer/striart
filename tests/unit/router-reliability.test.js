@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { WHOLE_REPO, predictFiles, predictFilesDetailed } from '../../src/router.js';
+import { WHOLE_REPO, predictFiles, predictFilesDetailed } from '../../src/router.ts';
 import { resetRepoMapCache } from '../../src/router-map.ts';
-import { resetImportGraphCache } from '../../src/imports.js';
+import { resetImportGraphCache } from '../../src/imports.ts';
 import { isValidTokensSettings, resolveTokensSettings } from '../../src/tokens/settings.ts';
 
 const BASE = { ollamaHost: 'http://localhost:11434', ollamaModel: 'llama3.1:8b' };

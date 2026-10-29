@@ -55,8 +55,8 @@ import { readFileSync, rmSync } from 'node:fs';
 import { open, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { StriartError } from './errors.js';
-import { logger } from './logger.js';
+import { StriartError } from './errors.ts';
+import { logger } from './logger.ts';
 import type { BreakContext, LockFileRead } from './break-lock.ts';
 import {
   BREAK_STALE_MS,
@@ -127,7 +127,7 @@ process.on('exit', () => {
  * complétion shell écrit aussi des fichiers d'état.
  */
 async function isAlive(pid: unknown): Promise<boolean> {
-  const { isProcessAlive } = await import('./process-tree.js');
+  const { isProcessAlive } = await import('./process-tree.ts');
   return isProcessAlive(pid as number);
 }
 

@@ -10,10 +10,10 @@ import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { execa } from 'execa';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { createAgent } from '../../src/clone.js';
-import { listMergeHistory } from '../../src/history.js';
-import { mergeAgentCommit, rollbackLastMerge } from '../../src/orchestrator.js';
+import { initStriart } from '../../src/init.ts';
+import { createAgent } from '../../src/clone.ts';
+import { listMergeHistory } from '../../src/history.ts';
+import { mergeAgentCommit, rollbackLastMerge } from '../../src/orchestrator.ts';
 import { formatMergeSubject } from '../../src/merge-subject.ts';
 
 const git = (cwd, ...args) => execa('git', ['-C', cwd, ...args]).then((r) => r.stdout.trim());

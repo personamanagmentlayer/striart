@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildRouterTree, keywords } from '../../src/router-tree.ts';
-import { detectCollisions, WHOLE_REPO } from '../../src/router.js';
+import { detectCollisions, WHOLE_REPO } from '../../src/router.ts';
 
 const ESTIMATOR = { charsPerToken: 3, safetyFactor: 1.15 };
 const SETTINGS = (over = {}) => ({

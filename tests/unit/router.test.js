@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { detectCollisions, normalizeFilePath, predictFiles } from '../../src/router.js';
-import { StriartError } from '../../src/errors.js';
+import { detectCollisions, normalizeFilePath, predictFiles } from '../../src/router.ts';
+import { StriartError } from '../../src/errors.ts';
 
 const CONFIG = { ollamaHost: 'http://localhost:11434', ollamaModel: 'llama3.1:8b' };
 
@@ -150,13 +150,13 @@ describe('predictFiles — prompt surchargé (config.prompts.router)', () => {
 
 describe('isSafeProjectPath', () => {
   it('accepte les chemins de projet relatifs', async () => {
-    const { isSafeProjectPath } = await import('../../src/router.js');
+    const { isSafeProjectPath } = await import('../../src/router.ts');
     expect(isSafeProjectPath('src/auth.js')).toBe(true);
     expect(isSafeProjectPath('a/b/c.ts')).toBe(true);
   });
 
   it('rejette absolus, lettres de lecteur et traversées', async () => {
-    const { isSafeProjectPath } = await import('../../src/router.js');
+    const { isSafeProjectPath } = await import('../../src/router.ts');
     expect(isSafeProjectPath('/etc/passwd')).toBe(false);
     expect(isSafeProjectPath('C:/Windows/system32')).toBe(false);
     expect(isSafeProjectPath('../../../secret')).toBe(false);

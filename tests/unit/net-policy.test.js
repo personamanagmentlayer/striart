@@ -8,7 +8,7 @@ import {
   resolveNetworkPolicy,
 } from '../../src/net.ts';
 import { DEFAULT_USER_CONFIG } from '../../src/user-config.ts';
-import { errorKindOf, StriartError } from '../../src/errors.js';
+import { errorKindOf, StriartError } from '../../src/errors.ts';
 
 /** Config utilisateur avec un bloc réseau partiel (les autres blocs : défauts). */
 const userWith =

@@ -3,7 +3,7 @@ import { nativePtyHostArgs, PTY_HOST_LIMITS } from '../../src/native.ts';
 import { lastNativeErrorCode } from '../../src/pty-attach.ts';
 import { expectedPtyHostIdentity } from '../../src/pty-host-state.ts';
 import { checkProcessInstance } from '../../src/process-info.ts';
-import { DEFAULT_CONFIG, validateConfig } from '../../src/config.js';
+import { DEFAULT_CONFIG, validateConfig } from '../../src/config.ts';
 
 // Lot R2 : hôte de pty natif. Logique pure (argv, identité, journal,
 // config) — les vrais process sont couverts par

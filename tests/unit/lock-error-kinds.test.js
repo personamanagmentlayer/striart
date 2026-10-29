@@ -5,7 +5,7 @@
  * messages anglais correspondants existent.
  */
 import { describe, expect, it } from 'vitest';
-import { ERROR_KINDS, errorKindOf } from '../../src/errors.js';
+import { ERROR_KINDS, errorKindOf } from '../../src/errors.ts';
 import { en } from '../../src/cli/i18n/en.ts';
 
 describe('codes du verrou principal — classement explicite', () => {

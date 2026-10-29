@@ -1,6 +1,6 @@
 import { appendFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
-import { logger } from '../logger.js';
+import { logger } from '../logger.ts';
 import { writePrivateFile } from '../private-fs.ts';
 import { redactSecrets, secretValuesFromEnv } from '../redact-secrets.ts';
 import { ensureStateProtection, repoRootOfStriartPath } from '../state-protection.ts';

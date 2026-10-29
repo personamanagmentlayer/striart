@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import os from 'node:os';
-import { StriartError } from './errors.js';
-import { logger } from './logger.js';
+import { StriartError } from './errors.ts';
+import { logger } from './logger.ts';
 import { inferCloneContext } from './terminal/clone-context.ts';
 import { resolveTerminalSettings } from './terminal/config.ts';
 import { buildLauncherCommand } from './terminal/launchers.ts';
@@ -161,20 +161,6 @@ async function settingsForClone(cwd, loadConfigFn) {
  *
  * `spawnFn` et `loadConfigFn` sont injectables pour les tests (ouvrir un vrai
  * terminal dans une suite de tests n'est pas une option).
- * @param {{
- *   cwd: string,
- *   title: string,
- *   argv: string[],
- *   terminal?: unknown,
- *   root?: string | null,
- *   agent?: string | null,
- *   platform?: NodeJS.Platform,
- *   env?: NodeJS.ProcessEnv,
- *   home?: string,
- *   spawnFn?: typeof spawn,
- *   loadConfigFn?: (root: string) => Promise<{terminal?: unknown}>,
- * }} params
- * @returns {Promise<{launched: true} | {launched: false, error: string}>}
  */
 export async function openAgentTerminal({
   cwd,
@@ -188,7 +174,19 @@ export async function openAgentTerminal({
   home = os.homedir(),
   spawnFn = spawn,
   loadConfigFn = defaultLoadConfig,
-}) {
+}: {
+  cwd: string;
+  title: string;
+  argv: string[];
+  terminal?: unknown;
+  root?: string | null;
+  agent?: string | null;
+  platform?: NodeJS.Platform;
+  env?: NodeJS.ProcessEnv;
+  home?: string;
+  spawnFn?: typeof spawn;
+  loadConfigFn?: (root: string) => Promise<{ terminal?: unknown }>;
+}): Promise<{ launched: true } | { launched: false; error: string }> {
   let plan;
   try {
     // Dans le try : un argument non représentable (TERMINAL_UNSAFE), un
@@ -236,7 +234,7 @@ export async function openAgentTerminal({
 
 /** @param {string} root */
 async function defaultLoadConfig(root) {
-  const { loadConfig } = await import('./config.js');
+  const { loadConfig } = await import('./config.ts');
   return loadConfig(root);
 }
 

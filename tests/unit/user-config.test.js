@@ -5,7 +5,7 @@ import {
   userConfigPath,
   validateUserConfig,
 } from '../../src/user-config.ts';
-import { StriartError } from '../../src/errors.js';
+import { StriartError } from '../../src/errors.ts';
 
 describe('config UTILISATEUR de Striart — emplacement', () => {
   it('Linux / macOS : $XDG_CONFIG_HOME/striart/config.json, sinon ~/.config', () => {

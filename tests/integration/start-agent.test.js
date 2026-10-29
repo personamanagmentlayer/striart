@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { readRegistry } from '../../src/clone.js';
-import { runTask, startAgent } from '../../src/orchestrator.js';
+import { initStriart } from '../../src/init.ts';
+import { readRegistry } from '../../src/clone.ts';
+import { runTask, startAgent } from '../../src/orchestrator.ts';
 
 async function setConfig(root, config) {
   await writeFile(path.join(root, '.striartrc.json'), JSON.stringify(config));

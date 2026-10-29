@@ -25,17 +25,16 @@
  *                il faut une décision humaine. Sortie 3.
  *  - 'failure' : l'exécution a échoué (git, LLM, disque, config, cible
  *                introuvable). Peut être transitoire. Sortie 1.
- * @typedef {'usage'|'refusal'|'failure'} ErrorKind
  */
+export type ErrorKind = 'usage' | 'refusal' | 'failure';
 
 /**
  * Classification des codes — source unique, auditée par
  * tests/unit/cli-exit.test.js (« nature des erreurs du domaine »). Un code
  * absent est un 'failure' : le défaut le plus sûr pour un script appelant
  * (échec, potentiellement relançable).
- * @type {Readonly<Record<string, ErrorKind>>}
  */
-export const ERROR_KINDS = Object.freeze({
+export const ERROR_KINDS: Readonly<Record<string, ErrorKind>> = Object.freeze({
   // Usage : invalide quel que soit l'état du dépôt.
   ATTACH_WRONG_CWD: 'usage',
   EXCESS_ARGUMENTS: 'usage',
@@ -364,8 +363,7 @@ export const ERROR_KINDS = Object.freeze({
   WARP_NOT_FOUND: 'failure',
 });
 
-/** @param {string} code @returns {ErrorKind} */
-export function errorKindOf(code) {
+export function errorKindOf(code: string): ErrorKind {
   return ERROR_KINDS[code] ?? 'failure';
 }
 
@@ -389,12 +387,9 @@ const PROFILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
  * profondeur : la règle reste de n'y mettre que des identifiants (voir
  * StriartError), ce filtre rattrape un oubli plutôt que de laisser fuir un
  * secret sur stdout — d'où un caviardage par nom de champ, récursif.
- * @param {unknown} details
- * @returns {Record<string, unknown>}
  */
-export function publicErrorDetails(details) {
-  /** @param {unknown} value @param {number} depth @returns {unknown} */
-  const scrub = (value, depth) => {
+export function publicErrorDetails(details: unknown): Record<string, unknown> {
+  const scrub = (value: unknown, depth: number): unknown => {
     if (depth > 8) return '[truncated]';
     if (Array.isArray(value)) return value.map((v) => scrub(v, depth + 1));
     if (value === null || typeof value !== 'object') return value;
@@ -406,23 +401,34 @@ export function publicErrorDetails(details) {
     );
   };
   if (details === null || typeof details !== 'object' || Array.isArray(details)) return {};
-  return /** @type {Record<string, unknown>} */ (scrub(details, 0));
+  return scrub(details, 0) as Record<string, unknown>;
+}
+
+export interface StriartErrorOptions {
+  code?: string;
+  details?: Record<string, unknown>;
+  hint?: string | null;
+  /** À passer seulement pour déroger à la table ERROR_KINDS (rare : un même
+   * code dont la nature dépend du contexte). */
+  kind?: ErrorKind;
+  cause?: unknown;
 }
 
 export class StriartError extends Error {
-  /**
-   * @param {string} message
-   * @param {{code?: string, details?: Record<string, unknown>, hint?: string|null, kind?: ErrorKind, cause?: unknown}} [options]
-   *   `kind` n'est à passer que pour déroger à la table ERROR_KINDS (rare :
-   *   un même code dont la nature dépend du contexte).
-   */
-  constructor(message, { code = 'STRIART_ERROR', details = {}, hint = null, kind, cause } = {}) {
+  code: string;
+  details: Record<string, unknown>;
+  hint: string | null;
+  kind: ErrorKind;
+
+  constructor(
+    message: string,
+    { code = 'STRIART_ERROR', details = {}, hint = null, kind, cause }: StriartErrorOptions = {},
+  ) {
     super(message, cause === undefined ? undefined : { cause });
     this.name = 'StriartError';
     this.code = code;
     this.details = details;
     this.hint = hint;
-    /** @type {ErrorKind} */
     this.kind = kind ?? errorKindOf(code);
   }
 }
@@ -431,10 +437,9 @@ export class StriartError extends Error {
  * Agent absent du registre. Une seule fabrique pour les modules qui la
  * lèvent (clone, sync, orchestrateur) : même message, même `details`, même
  * piste de sortie — un texte recopié à six endroits finit par diverger.
- * @param {string} agent
- * @param {{context?: string}} [options] précision ajoutée au message
+ * @param context précision ajoutée au message
  */
-export function agentUnknownError(agent, { context } = {}) {
+export function agentUnknownError(agent: string, { context }: { context?: string } = {}) {
   return new StriartError(`Agent inconnu : « ${agent} »${context ? ` (${context})` : ''}.`, {
     code: 'AGENT_UNKNOWN',
     details: { agent },
@@ -444,9 +449,8 @@ export function agentUnknownError(agent, { context } = {}) {
 
 /**
  * Ticket de conflit introuvable (ni ouvert ni résolu).
- * @param {string} ticketId
  */
-export function ticketUnknownError(ticketId) {
+export function ticketUnknownError(ticketId: string) {
   return new StriartError(`Ticket inconnu : « ${ticketId} ».`, {
     code: 'TICKET_UNKNOWN',
     details: { ticketId },

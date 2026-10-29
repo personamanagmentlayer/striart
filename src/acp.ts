@@ -1,9 +1,9 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { StriartError } from './errors.js';
-import { logger } from './logger.js';
-import { loadConfig } from './config.js';
-import { sessionLogPath } from './session.js';
+import { StriartError } from './errors.ts';
+import { logger } from './logger.ts';
+import { loadConfig } from './config.ts';
+import { sessionLogPath } from './session.ts';
 import { buildAgentInstructions } from './agents/instructions.ts';
 import { resolveAcpOptions } from './acp/protocol.ts';
 import type { AcpOptions, McpServerSpec, TextContentBlock } from './acp/protocol.ts';

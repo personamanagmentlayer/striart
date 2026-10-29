@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createTempRepo } from '../helpers/temp-repo.js';
 import { seedAgentRegistry } from '../helpers/pty-test-utils.js';
-import { initStriart } from '../../src/init.js';
-import { stopDashboardDaemon } from '../../src/daemon.js';
+import { initStriart } from '../../src/init.ts';
+import { stopDashboardDaemon } from '../../src/daemon.ts';
 import { resolveAgentMeta, runShellCommand, runStriartCommand } from '../../src/watch-ui.ts';
 
 /**

@@ -1,5 +1,5 @@
-import { loadConfig } from '../../config.js';
-import { StriartError } from '../../errors.js';
+import { loadConfig } from '../../config.ts';
+import { StriartError } from '../../errors.ts';
 import { USAGE_ROLES } from '../../tokens/ledger.ts';
 import { type UsageReport, type UsageRow, buildUsageReport } from '../../tokens/report.ts';
 import type { UsageRole } from '../../types.js';

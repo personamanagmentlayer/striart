@@ -1,7 +1,7 @@
 // Parties pures du Test Gate (src/gate.js) : plafond de journal en flux et
 // argv du shell. Aucun process : unitaire.
 import { describe, expect, it } from 'vitest';
-import { TailBuffer, gateShellArgv } from '../../src/gate.js';
+import { TailBuffer, gateShellArgv } from '../../src/gate.ts';
 
 describe('TailBuffer — la FIN de la sortie, en mémoire bornée', () => {
   it('sous le plafond : tout est conservé, rien n’est tronqué', () => {

@@ -1,4 +1,4 @@
-import { DEFAULT_CONFIG } from '../config.js';
+import { DEFAULT_CONFIG } from '../config.ts';
 import type { McpSettings, StriartConfig } from '../types.js';
 
 /**

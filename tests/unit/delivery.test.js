@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { StriartError } from '../../src/errors.js';
-import { validateConfig, DEFAULT_CONFIG } from '../../src/config.js';
+import { StriartError } from '../../src/errors.ts';
+import { validateConfig, DEFAULT_CONFIG } from '../../src/config.ts';
 import {
   deliveryBranchName,
   gitSpawnEnv,

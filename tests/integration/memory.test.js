@@ -3,14 +3,14 @@ import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { simpleGit } from 'simple-git';
 import { backdateDir, createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { createAgent, listAgents } from '../../src/clone.js';
-import { mergeAgentCommit, runTask, stopAgent } from '../../src/orchestrator.js';
+import { initStriart } from '../../src/init.ts';
+import { createAgent, listAgents } from '../../src/clone.ts';
+import { mergeAgentCommit, runTask, stopAgent } from '../../src/orchestrator.ts';
 import {
   CLONE_MEMORY_FILE,
   refreshCloneMemories,
   updateMemoryAfterMerge,
-} from '../../src/memory.js';
+} from '../../src/memory.ts';
 
 const GATE_OK = 'node -e "process.exit(0)"';
 const SUMMARY = '- Nouvelle API : `hashPassword(password: string) → string` dans auth.js';
@@ -172,7 +172,7 @@ describe('Memory Layer (intégration)', () => {
     await runTask({ root: repo.root, agent: 'agent-a', prompt: 'tâche a' });
     await runTask({ root: repo.root, agent: 'agent-b', prompt: 'tâche b' });
 
-    const { readRegistry } = await import('../../src/clone.js');
+    const { readRegistry } = await import('../../src/clone.ts');
     const registry = await readRegistry(repo.root);
     // Premier passage explicite pour stabiliser, second mesuré.
     await refreshCloneMemories(repo.root, registry, []);
@@ -190,7 +190,7 @@ describe('Memory Layer (intégration)', () => {
     // Clone vieilli d'une heure : aucune activité de coding.
     await backdateDir(agentA.path);
     // Striart rafraîchit la mémoire (fichier écrit à l'instant dans le worktree).
-    const { readRegistry } = await import('../../src/clone.js');
+    const { readRegistry } = await import('../../src/clone.ts');
     await refreshCloneMemories(repo.root, await readRegistry(repo.root), []);
     expect(await readFile(path.join(agentA.path, CLONE_MEMORY_FILE), 'utf8')).toContain('agent-b');
 

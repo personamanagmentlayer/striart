@@ -5,21 +5,21 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { simpleGit } from 'simple-git';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { createAgent } from '../../src/clone.js';
+import { initStriart } from '../../src/init.ts';
+import { createAgent } from '../../src/clone.ts';
 import {
   readMainSession,
   readMainSessionStatus,
   startMainSession,
   stopMainSession,
-} from '../../src/main-session.js';
-import { reserveMainSession } from '../../src/lock.js';
+} from '../../src/main-session.ts';
+import { reserveMainSession } from '../../src/lock.ts';
 import {
   mergeAgentCommit,
   retryQueue,
   runMainSession,
   syncAgentWithMain,
-} from '../../src/orchestrator.js';
+} from '../../src/orchestrator.ts';
 
 const FAKE_AGENT = fileURLToPath(new URL('../helpers/fake-agent.cjs', import.meta.url));
 const GATE_OK = 'node -e "process.exit(0)"';

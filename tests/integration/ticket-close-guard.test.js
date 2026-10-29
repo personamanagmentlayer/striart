@@ -8,14 +8,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
+import { initStriart } from '../../src/init.ts';
 import {
   closeConflictTicket,
   createConflictTicket,
   listConflictTickets,
-} from '../../src/conflicts.js';
-import { startDashboard } from '../../src/dashboard.js';
-import { handleMcpRequest } from '../../src/mcp.js';
+} from '../../src/conflicts.ts';
+import { startDashboard } from '../../src/dashboard.ts';
+import { handleMcpRequest } from '../../src/mcp.ts';
 import { call, rpc, signIn, useLoopbackDashboard } from '../helpers/control-client.js';
 
 const CLI = fileURLToPath(new URL('../../src/cli.js', import.meta.url));

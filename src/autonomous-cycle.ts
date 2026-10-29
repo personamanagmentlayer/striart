@@ -48,18 +48,18 @@
  *  - l'événement `session:striart-commit` n'est émis que si `announce` (un tour
  *    d'orchestration publie ses propres événements `collab:turn`).
  */
-import { cleanClones, cloneGit, readRegistry, updateAgentMeta } from './clone.js';
+import { cleanClones, cloneGit, readRegistry, updateAgentMeta } from './clone.ts';
 import {
   commitSessionLeftovers,
   resolveCommitPolicy,
   striartShouldCommit,
 } from './commit-policy.ts';
 import type { LeftoverCommitOutcome } from './commit-policy.ts';
-import { loadConfig } from './config.js';
-import { StriartError } from './errors.js';
-import { emitStriartEvent } from './events.js';
-import { logger } from './logger.js';
-import { mergeAgentCommit } from './orchestrator.js';
+import { loadConfig } from './config.ts';
+import { StriartError } from './errors.ts';
+import { emitStriartEvent } from './events.ts';
+import { logger } from './logger.ts';
+import { mergeAgentCommit } from './orchestrator.ts';
 import { isFailedSessionStatus, sessionFailureMarker } from './session-failure.ts';
 import type {
   AcpProxyResult,

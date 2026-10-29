@@ -3,9 +3,9 @@ import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { simpleGit } from 'simple-git';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { createAgent, readRegistry, updateAgentMeta } from '../../src/clone.js';
-import { mergeAgentCommit, stopAgent } from '../../src/orchestrator.js';
+import { initStriart } from '../../src/init.ts';
+import { createAgent, readRegistry, updateAgentMeta } from '../../src/clone.ts';
+import { mergeAgentCommit, stopAgent } from '../../src/orchestrator.ts';
 
 const GATE_OK = 'node -e "process.exit(0)"';
 const GATE_KO = 'node -e "console.error(\'tests cassés\'); process.exit(1)"';

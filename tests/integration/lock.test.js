@@ -6,8 +6,8 @@ import { execa } from 'execa';
 import path from 'node:path';
 import { simpleGit } from 'simple-git';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { withMainLock } from '../../src/lock.js';
+import { initStriart } from '../../src/init.ts';
+import { withMainLock } from '../../src/lock.ts';
 import { en } from '../../src/cli/i18n/en.ts';
 
 const HOLDER = fileURLToPath(new URL('../helpers/lock-holder.mjs', import.meta.url));
@@ -244,7 +244,7 @@ describe('withMainLock — verrou inter-processus (intégration)', () => {
   });
 
   it('assertMainLockHeld : LOCK_LOST hors verrou, ou dès que le jeton du fichier n’est plus le nôtre', async () => {
-    const { assertMainLockHeld } = await import('../../src/lock.js');
+    const { assertMainLockHeld } = await import('../../src/lock.ts');
     await expect(assertMainLockHeld(repo.root)).rejects.toMatchObject({ code: 'LOCK_LOST' });
     await withMainLock(repo.root, 'merge:x', async () => {
       await assertMainLockHeld(repo.root);

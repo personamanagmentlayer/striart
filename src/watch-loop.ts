@@ -17,11 +17,11 @@
  *  - le fetch silencieux ne touche jamais un worktree et ne signale que les
  *    CHANGEMENTS de retard.
  */
-import { StriartError } from './errors.js';
-import { logger } from './logger.js';
-import { loadConfig } from './config.js';
-import { agentsDir } from './paths.js';
-import { watchAgents } from './watcher.js';
+import { StriartError } from './errors.ts';
+import { logger } from './logger.ts';
+import { loadConfig } from './config.ts';
+import { agentsDir } from './paths.ts';
+import { watchAgents } from './watcher.ts';
 import { createOverlapMonitor } from './overlap.ts';
 import type { ObservedOverlap } from './overlap.ts';
 import { resolveOverlapSettings } from './overlap-settings.ts';
@@ -33,7 +33,7 @@ import {
   reconcile,
   shouldWatcherMerge,
   syncAllAgents,
-} from './orchestrator.js';
+} from './orchestrator.ts';
 import type { MergeResult, SyncResult } from './types.js';
 
 export type WatchEvent =

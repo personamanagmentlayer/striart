@@ -13,8 +13,8 @@
  *    merge à la fin (src/orchestration/team.ts).
  */
 import { simpleGit } from 'simple-git';
-import { DEFAULT_PROFILE, resolveAgentProfile } from '../session.js';
-import { slugifyPrompt } from '../orchestrator.js';
+import { DEFAULT_PROFILE, resolveAgentProfile } from '../session.ts';
+import { slugifyPrompt } from '../orchestrator.ts';
 import {
   closeCollabGroup,
   createCollabGroup,
@@ -24,7 +24,7 @@ import {
   setActiveRoles,
 } from '../collab/channel.ts';
 import { collabRulesInSessionInstructions } from '../agents/instructions.ts';
-import { logger } from '../logger.js';
+import { logger } from '../logger.ts';
 import type { OrchestrationNodeResult, PlanNode } from '../types.js';
 import { composeTurnPrompt, messageItems } from './briefing.ts';
 import { nodeResult } from './result.ts';

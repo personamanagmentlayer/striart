@@ -4,9 +4,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { simpleGit } from 'simple-git';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { runAutonomousTask } from '../../src/orchestrator.js';
-import { listMergeHistory } from '../../src/history.js';
+import { initStriart } from '../../src/init.ts';
+import { runAutonomousTask } from '../../src/orchestrator.ts';
+import { listMergeHistory } from '../../src/history.ts';
 
 const FAKE_FILES = fileURLToPath(new URL('../helpers/fake-agent-files.cjs', import.meta.url));
 const GATE_OK = 'node -e "process.exit(0)"';

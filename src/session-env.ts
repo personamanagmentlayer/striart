@@ -21,7 +21,7 @@
  *
  * Pur et synchrone ; `loadSessionNetwork` lit la config utilisateur.
  */
-import { logger } from './logger.js';
+import { logger } from './logger.ts';
 import { readUserConfig } from './user-config.ts';
 
 export interface SessionNetworkInput {

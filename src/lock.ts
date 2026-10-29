@@ -84,11 +84,11 @@ import { mkdir, open, readFile, readdir as fsReaddir, rm, stat, utimes } from 'n
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { simpleGit } from 'simple-git';
-import { striartDir } from './paths.js';
+import { striartDir } from './paths.ts';
 import { ensureStateProtection } from './state-protection.ts';
-import { StriartError } from './errors.js';
-import { logger } from './logger.js';
-import { readMainSession, startMainSession } from './main-session.js';
+import { StriartError } from './errors.ts';
+import { logger } from './logger.ts';
+import { readMainSession, startMainSession } from './main-session.ts';
 import {
   assessDeclaringShell,
   checkProcessInstance,
@@ -96,9 +96,9 @@ import {
   pidHintForShell,
   readProcessChain,
 } from './process-info.ts';
-import { isProcessAlive } from './process-tree.js';
-import { quoteForShell } from './terminal.js';
-import { withTransientRetry, writeJsonAtomic } from './json-file.js';
+import { isProcessAlive } from './process-tree.ts';
+import { quoteForShell } from './terminal.ts';
+import { withTransientRetry, writeJsonAtomic } from './json-file.ts';
 import {
   logIgnored,
   mtimeMs,
@@ -108,6 +108,7 @@ import {
   underBreakLockAt,
   warnFailureOnce,
 } from './break-lock.ts';
+import type { LockFileRead } from './break-lock.ts';
 
 const POLL_MS = 300;
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -151,46 +152,51 @@ const BREAK_LOCK_NAME = 'break.lock';
 /** Marqueur posé par MERGE_STATE_CHANGED : bloque l'auto-récupération d'un merge tiers. */
 const MERGE_STATE_MARKER = 'merge-state-changed.json';
 
-/**
- * @typedef {object} Holding
- * @property {string} key       Racine résolue du repo.
- * @property {string} file      Chemin de main.lock.
- * @property {string} token     Jeton écrit dans le fichier.
- * @property {string} label
- * @property {import('node:fs/promises').FileHandle} handle
- * @property {Record<string, unknown>} record  Contenu courant du fichier.
- * @property {boolean} held     Faux dès la libération (contextes détachés).
- * @property {boolean} lost     Vrai si le fichier n'est plus le nôtre.
- * @property {NodeJS.Timeout | null} timer
- * @property {Promise<void> | null} beating  Battement en cours (jamais deux à la fois).
- */
-
-/**
- * État lu d'un fichier de verrou ou de ticket (`null` = absent) — défini dans
- * break-lock.js, partagé avec le verrou d'état.
- * @typedef {import('./break-lock.ts').LockFileRead} LockFileRead
- */
+interface Holding {
+  /** Racine résolue du repo. */
+  key: string;
+  /** Chemin de main.lock. */
+  file: string;
+  /** Jeton écrit dans le fichier. */
+  token: string;
+  label: string;
+  handle: import('node:fs/promises').FileHandle;
+  /** Contenu courant du fichier. */
+  record: Record<string, unknown>;
+  /** Faux dès la libération (contextes détachés). */
+  held: boolean;
+  /** Vrai si le fichier n'est plus le nôtre. */
+  lost: boolean;
+  timer: NodeJS.Timeout | null;
+  /** Battement en cours (jamais deux à la fois). */
+  beating: Promise<void> | null;
+}
 
 /**
  * Ticket d'attente tenu par CE process dans la file inter-process.
- * @typedef {object} Ticket
- * @property {string} dir
- * @property {string} file
- * @property {number} number
- * @property {string} token     Jeton écrit dans le fichier : l'identité du ticket (le numéro peut être repris).
- * @property {boolean} lost     Vrai si le fichier n'est plus le nôtre (retiré, ou repris au même numéro).
- * @property {NodeJS.Timeout | null} timer
- * @property {Promise<void> | null} refreshing  Rafraîchissement en cours (jamais deux à la fois).
  */
+interface Ticket {
+  dir: string;
+  file: string;
+  number: number;
+  /** Jeton écrit dans le fichier : l'identité du ticket (le numéro peut être repris). */
+  token: string;
+  /** Vrai si le fichier n'est plus le nôtre (retiré, ou repris au même numéro). */
+  lost: boolean;
+  timer: NodeJS.Timeout | null;
+  /** Rafraîchissement en cours (jamais deux à la fois). */
+  refreshing: Promise<void> | null;
+}
 
-/** @type {AsyncLocalStorage<Map<string, Holding>>} */
-const lockContext = new AsyncLocalStorage();
+const lockContext = new AsyncLocalStorage<Map<string, Holding>>();
 
-/**
- * File FIFO en mémoire, par repo.
- * @type {Map<string, {busy: {label: string, since: number} | null, waiters: Array<{grant: () => void}>}>}
- */
-const localQueues = new Map();
+interface LocalQueue {
+  busy: { label: string; since: number } | null;
+  waiters: Array<{ grant: () => void }>;
+}
+
+/** File FIFO en mémoire, par repo. */
+const localQueues = new Map<string, LocalQueue>();
 
 /**
  * Verrous et tickets tenus par CE process, retirés à sa sortie même brutale
@@ -230,7 +236,7 @@ function queueDirOf(root) {
  * @param {unknown} error
  */
 function lockIoError(operation, file, error) {
-  const cause = /** @type {{code?: string}} */ (error)?.code ?? 'UNKNOWN';
+  const cause = /** @type {{code?: string}} */ error?.code ?? 'UNKNOWN';
   return new StriartError(
     `Opération « ${operation} » impossible sur ${file} (${cause}) : le verrou du repo principal ne peut pas être géré en sécurité.`,
     {
@@ -269,7 +275,7 @@ function stopPidCommand(pid) {
  */
 export async function readFrozenBreakPolicy(root) {
   try {
-    const { loadConfig } = await import('./config.js');
+    const { loadConfig } = await import('./config.ts');
     const value = (await loadConfig(root))?.lock?.breakFrozenHolderAfterMs ?? null;
     return Number.isInteger(value) ? value : null;
   } catch (error) {
@@ -459,13 +465,12 @@ async function takeTicket(root, label) {
     }
     await handle.close().catch(logIgnored('Fermeture du ticket', { file }));
     ownedFiles.set(file, token);
-    /** @type {Ticket} */
-    const ticket = { dir, file, number, token, lost: false, timer: null, refreshing: null };
+    const ticket: Ticket = { dir, file, number, token, lost: false, timer: null, refreshing: null };
     startTicketRefresh(ticket);
     return ticket;
   }
   // Numéros disputés sans fin : cause système EEXIST (création exclusive refusée).
-  const contended = /** @type {Error & {code?: string}} */ (new Error('ticket contended'));
+  const contended = new Error('ticket contended') as Error & { code?: string };
   contended.code = 'EEXIST';
   throw lockIoError('ticket', dir, contended);
 }
@@ -476,9 +481,8 @@ async function takeTicket(root, label) {
  * orphelin. Le fichier est vérifié à chaque battement : disparu, ou repris au
  * même numéro par un AUTRE process (jeton différent) → `lost` (la boucle se
  * réinscrit) ; le mtime d'un ticket d'autrui n'est jamais rafraîchi.
- * @param {Ticket} ticket
  */
-function startTicketRefresh(ticket) {
+function startTicketRefresh(ticket: Ticket) {
   ticket.timer = setInterval(() => {
     if (ticket.refreshing) return; // un rafraîchissement lent ne se chevauche pas
     ticket.refreshing = refreshTicket(ticket).finally(() => {
@@ -488,8 +492,7 @@ function startTicketRefresh(ticket) {
   ticket.timer.unref();
 }
 
-/** @param {Ticket} ticket */
-async function refreshTicket(ticket) {
+async function refreshTicket(ticket: Ticket) {
   try {
     const current = await readLockFile(ticket.file);
     if (current === null || (current.state === 'ok' && current.info.token !== ticket.token)) {
@@ -499,10 +502,10 @@ async function refreshTicket(ticket) {
     const now = new Date();
     await utimes(ticket.file, now, now);
   } catch (error) {
-    if (/** @type {{code?: string}} */ (error)?.code === 'ENOENT') ticket.lost = true;
+    if (/** @type {{code?: string}} */ error?.code === 'ENOENT') ticket.lost = true;
     else
       logger.warn(
-        { err: /** @type {Error} */ (error)?.message, ticket: ticket.file },
+        { err: /** @type {Error} */ error?.message, ticket: ticket.file },
         "Rafraîchissement du ticket d'attente en échec",
       );
   }
@@ -541,13 +544,13 @@ async function dropTicket(ticket) {
  * Vérifie aussi que NOTRE ticket est toujours le nôtre — par le JETON, pas par
  * le numéro (un ticket retiré puis repris au même numéro par un autre process
  * porte un autre jeton).
- * @param {string} root
- * @param {Ticket} ticket
- * @returns {Promise<{ahead: Array<{pid: number | null, label: string | null}>, waitingAhead: number}>}
- *   `ahead` : vide (personne de vivant devant) ou le premier ticket vivant ;
- *   `waitingAhead` : tickets encore présents devant nous.
+ * `ahead` : vide (personne de vivant devant) ou le premier ticket vivant ;
+ * `waitingAhead` : tickets encore présents devant nous.
  */
-async function liveTicketsAhead(root, ticket) {
+async function liveTicketsAhead(
+  root: string,
+  ticket: Ticket,
+): Promise<{ ahead: Array<{ pid: number | null; label: string | null }>; waitingAhead: number }> {
   const entries = await listTickets(ticket.dir);
   // Notre propre ticket a disparu ou a été repris (retiré comme orphelin) :
   // se réinscrire AVANT de se croire en tête — sans ticket, on serait
@@ -641,13 +644,31 @@ export function createStaleObservation() {
 /**
  * Juge un main.lock présent. Pur sur l'état lu : horloge, vitalité, identité
  * et politique de cassure sont injectables (tests unitaires).
- * @param {LockFileRead} current
- * @param {number | null} fileMtimeMs
- * @param {ReturnType<typeof createStaleObservation>} observation
- * @param {{now?: () => number, isAlive?: (pid: number) => boolean, checkInstance?: typeof checkProcessInstance, frozenBreakAfterMs?: () => Promise<number | null>}} [deps]
- * @returns {Promise<{stale: true, reason: 'HOLDER_DEAD'|'IDENTITY_FOREIGN'|'LEGACY_TTL'|'INVALID_CONTENT'|'FROZEN_HOLDER_BROKEN', heartbeatAgeMs?: number, breakFrozenHolderAfterMs?: number} | {stale: false, reason: 'HELD'|'HOLDER_FROZEN'|'LOCK_UNREADABLE', heartbeatAgeMs?: number}>}
  */
-export async function judgeLock(current, fileMtimeMs, observation, deps = {}) {
+export async function judgeLock(
+  current: LockFileRead,
+  fileMtimeMs: number | null,
+  observation: ReturnType<typeof createStaleObservation>,
+  deps: {
+    now?: () => number;
+    isAlive?: (pid: number) => boolean;
+    checkInstance?: typeof checkProcessInstance;
+    frozenBreakAfterMs?: () => Promise<number | null>;
+  } = {},
+): Promise<
+  | {
+      stale: true;
+      reason:
+        | 'HOLDER_DEAD'
+        | 'IDENTITY_FOREIGN'
+        | 'LEGACY_TTL'
+        | 'INVALID_CONTENT'
+        | 'FROZEN_HOLDER_BROKEN';
+      heartbeatAgeMs?: number;
+      breakFrozenHolderAfterMs?: number;
+    }
+  | { stale: false; reason: 'HELD' | 'HOLDER_FROZEN' | 'LOCK_UNREADABLE'; heartbeatAgeMs?: number }
+> {
   const {
     now: clock = Date.now,
     isAlive = isProcessAlive,
@@ -738,13 +759,12 @@ function lockWaitCancelledError(operation, file) {
   );
 }
 
-/**
- * @param {string} file
- * @param {LockFileRead | null} current
- * @param {number} waitingAhead
- * @param {{reason?: string, heartbeatAgeMs?: number | null, cause?: string | null}} [verdict]
- */
-function lockTimeoutError(file, current, waitingAhead, verdict = {}) {
+function lockTimeoutError(
+  file: string,
+  current: LockFileRead | null,
+  waitingAhead: number,
+  verdict: { reason?: string; heartbeatAgeMs?: number | null; cause?: string | null } = {},
+) {
   const info = current?.state === 'ok' ? current.info : null;
   const startedAtMs = Date.parse(info?.startedAt ?? '');
   const heldForMs = Number.isFinite(startedAtMs) ? Math.max(0, Date.now() - startedAtMs) : null;
@@ -793,9 +813,16 @@ function lockTimeoutError(file, current, waitingAhead, verdict = {}) {
 
 /**
  * Tour de ce contexte dans la file FIFO en mémoire du repo `key`.
- * @returns {Promise<() => void>} libération (passe la main au suivant)
+ * @returns libération (passe la main au suivant)
  */
-function takeLocalTurn(key, label, deadline, file, signal = null, contention = null) {
+function takeLocalTurn(
+  key: string,
+  label: string,
+  deadline: number,
+  file: string,
+  signal: AbortSignal | null = null,
+  contention: Contention | null = null,
+): Promise<() => void> {
   let queue = localQueues.get(key);
   if (!queue) {
     queue = { busy: null, waiters: [] };
@@ -824,7 +851,7 @@ function takeLocalTurn(key, label, deadline, file, signal = null, contention = n
     contention.holderSince = q.busy.since;
     contention.queued = Math.max(contention.queued, q.waiters.length + 1);
   }
-  return new Promise((resolve, reject) => {
+  return new Promise<() => void>((resolve, reject) => {
     const onAbort = () => {
       clearTimeout(timer);
       clearTimeout(notice);
@@ -953,8 +980,7 @@ async function acquire(root, label, deadline, signal = null, contention = null) 
   let nextNoticeAt = waitStartedAt + WAIT_NOTICE_AFTER_MS;
   // Dernier constat, pour le LOCK_TIMEOUT levé en tête de boucle.
   let lastWaitingAhead = 0;
-  /** @type {{reason?: string, heartbeatAgeMs?: number | null, cause?: string | null}} */
-  let lastVerdict = {};
+  let lastVerdict: { reason?: string; heartbeatAgeMs?: number | null; cause?: string | null } = {};
   let polls = 0;
   try {
     for (;;) {
@@ -982,8 +1008,7 @@ async function acquire(root, label, deadline, signal = null, contention = null) 
       }
       /** @type {LockFileRead | null} */
       let current = null;
-      /** @type {{reason?: string, heartbeatAgeMs?: number | null, cause?: string | null}} */
-      let verdict = {};
+      let verdict: { reason?: string; heartbeatAgeMs?: number | null; cause?: string | null } = {};
       if (ahead.length === 0) {
         const lock = await tryCreateLock(file, label);
         if (lock !== 'EXISTS') return lock;
@@ -1029,7 +1054,7 @@ async function acquire(root, label, deadline, signal = null, contention = null) 
             verdict = {
               reason: 'BREAK_FAILED',
               heartbeatAgeMs: judged.heartbeatAgeMs ?? null,
-              cause: /** @type {{code?: string}} */ (removal.error)?.code ?? 'UNKNOWN',
+              cause: (removal.error as { code?: string } | undefined)?.code ?? 'UNKNOWN',
             };
           } else if (removal.status === 'busy') {
             verdict = {
@@ -1105,7 +1130,7 @@ async function releaseLock(holding) {
         {
           operation: holding.label,
           lockFile: holding.file,
-          cause: /** @type {{code?: string}} */ (error)?.code ?? 'UNKNOWN',
+          cause: /** @type {{code?: string}} */ error?.code ?? 'UNKNOWN',
         },
         'Verrou du repo principal impossible à supprimer à la libération : laissé en place',
       );
@@ -1301,7 +1326,7 @@ async function resolveGitDir(root) {
     raw = await readFile(dotGit, 'utf8');
   } catch (error) {
     // EISDIR (Linux/macOS) ou EPERM/EACCES (Windows) sur un dossier : `.git` ordinaire.
-    const code = /** @type {{code?: string}} */ (error)?.code;
+    const code = /** @type {{code?: string}} */ error?.code;
     if (code === 'EISDIR' || code === 'EPERM' || code === 'EACCES' || code === 'ENOENT')
       return dotGit;
     throw error;
@@ -1320,7 +1345,7 @@ async function readOpenMergeHead(root) {
     const raw = await readFile(path.join(await resolveGitDir(root), 'MERGE_HEAD'), 'utf8');
     return raw.trim().split(/\s+/)[0] || '';
   } catch (error) {
-    if (/** @type {{code?: string}} */ (error)?.code === 'ENOENT') return null;
+    if (/** @type {{code?: string}} */ error?.code === 'ENOENT') return null;
     // Présent mais illisible : un merge est ouvert, son SHA est inconnu.
     return '';
   }
@@ -1354,7 +1379,7 @@ async function clearMergeStateMarker(root, why) {
     logger.info(`Marqueur MERGE_STATE_CHANGED levé : ${why}`);
   } catch (error) {
     logger.warn(
-      { file, cause: /** @type {{code?: string}} */ (error)?.code ?? 'UNKNOWN' },
+      { file, cause: /** @type {{code?: string}} */ error?.code ?? 'UNKNOWN' },
       'Marqueur MERGE_STATE_CHANGED périmé impossible à supprimer — sans effet tant qu’il ne désigne aucun merge ouvert',
     );
   }
@@ -1414,7 +1439,7 @@ async function recoverOrphanMerge(root) {
     return;
   } catch (error) {
     logger.warn(
-      { err: /** @type {Error} */ (error)?.message },
+      { err: /** @type {Error} */ error?.message },
       'git merge --abort de récupération en échec — état relu',
     );
   }
@@ -1441,10 +1466,13 @@ async function stateDirExists(root) {
   }
 }
 
-/**
- * Ce qu'un appelant a constaté en attendant le verrou (lock:contention).
- * @typedef {{contended: boolean, holderLabel: string | null, holderSince: number | null, queued: number}} Contention
- */
+/** Ce qu'un appelant a constaté en attendant le verrou (lock:contention). */
+interface Contention {
+  contended: boolean;
+  holderLabel: string | null;
+  holderSince: number | null;
+  queued: number;
+}
 
 /** Verbe seul d'une étiquette (`merge:agent-x` → `merge`) : jamais un identifiant, qui peut dériver d'un prompt. */
 function operationVerb(label) {
@@ -1456,15 +1484,14 @@ function operationVerb(label) {
  * Publie `lock:contention` sur le bus (events.js) quand l'acquisition n'a pas été immédiate.
  * Mesure pure, hors chemin de décision : chargement paresseux (la complétion shell et les
  * commandes sans contention ne paient pas le bus), émission différée, aucune erreur propagée.
- * @param {string} label @param {number} waitedMs @param {Contention} contention
  */
-function reportContention(label, waitedMs, contention) {
+function reportContention(label: string, waitedMs: number, contention: Contention) {
   if (!contention.contended) return;
   const holderLabel = contention.holderLabel;
   const holderAgeMs =
     contention.holderSince === null ? null : Math.max(0, Date.now() - contention.holderSince);
   setImmediate(() => {
-    import('./events.js')
+    import('./events.ts')
       .then(({ emitLockContention }) =>
         emitLockContention({
           type: 'lock:contention',
@@ -1503,26 +1530,26 @@ function lockKey(root) {
  * - à l'acquisition, récupération d'un éventuel merge orphelin (sauf merge
  *   tiers signalé : MERGE_RECOVERY_BLOCKED).
  *
- * @template T
- * @param {string} root
- * @param {string} label   Nom de l'opération, affiché à qui attend le verrou.
- * @param {() => Promise<T>} fn
- * @param {{timeoutMs?: number, signal?: AbortSignal | null, recoverMerge?: boolean}} [opts]
- *   `signal` annule l'ATTENTE du verrou (file en mémoire, file inter-process,
- *   sondage) tant qu'il n'est pas acquis : ticket retiré, LOCK_WAIT_CANCELLED.
- *   Une fois le verrou acquis, il n'interrompt jamais la section critique.
- *   `recoverMerge: false` saute la récupération d'un merge ouvert (ni abort,
- *   ni MERGE_RECOVERY_BLOCKED) : réservé à `reserveMainSession`, qui ne touche
- *   pas au repo et ne doit ni annuler le merge de l'humain qu'elle protège, ni
- *   lui être refusée pendant qu'il le termine.
- * @returns {Promise<T>}
+ * `signal` annule l'ATTENTE du verrou (file en mémoire, file inter-process,
+ * sondage) tant qu'il n'est pas acquis : ticket retiré, LOCK_WAIT_CANCELLED.
+ * Une fois le verrou acquis, il n'interrompt jamais la section critique.
+ * `recoverMerge: false` saute la récupération d'un merge ouvert (ni abort,
+ * ni MERGE_RECOVERY_BLOCKED) : réservé à `reserveMainSession`, qui ne touche
+ * pas au repo et ne doit ni annuler le merge de l'humain qu'elle protège, ni
+ * lui être refusée pendant qu'il le termine.
+ *
+ * @param label Nom de l'opération, affiché à qui attend le verrou.
  */
-export async function withMainLock(
-  root,
-  label,
-  fn,
-  { timeoutMs = DEFAULT_TIMEOUT_MS, signal = null, recoverMerge = true } = {},
-) {
+export async function withMainLock<T>(
+  root: string,
+  label: string,
+  fn: () => Promise<T>,
+  {
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+    signal = null,
+    recoverMerge = true,
+  }: { timeoutMs?: number; signal?: AbortSignal | null; recoverMerge?: boolean } = {},
+): Promise<T> {
   const key = lockKey(root);
   const store = lockContext.getStore();
   // Réentrant : le verrou est déjà tenu, il n'y a aucune attente à annuler.
@@ -1539,8 +1566,7 @@ export async function withMainLock(
   if (await stateDirExists(root)) await ensureStateProtection(root);
   const deadline = Date.now() + timeoutMs;
   const arrivedAt = performance.now();
-  /** @type {Contention} */
-  const contention = {
+  const contention: Contention = {
     contended: false,
     holderLabel: null,
     holderSince: null,

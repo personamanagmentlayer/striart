@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { CLONE_MEMORY_FILE, syncMemoryToClone } from '../../src/memory.js';
-import { striartDir } from '../../src/paths.js';
+import { CLONE_MEMORY_FILE, syncMemoryToClone } from '../../src/memory.ts';
+import { striartDir } from '../../src/paths.ts';
 
 const memoryPath = (root) => path.join(striartDir(root), 'memory.md');
 

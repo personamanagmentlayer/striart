@@ -1,4 +1,4 @@
-import { mergeAgentCommit } from '../../orchestrator.js';
+import { mergeAgentCommit } from '../../orchestrator.ts';
 import type { MergeResult } from '../../types.js';
 import type { CommandModule } from '../context.ts';
 import { mergeOutcome } from '../exit.ts';

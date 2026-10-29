@@ -15,7 +15,7 @@
  *    appels échouent immédiatement pendant `cooldownMs`, puis UN appel sonde
  *    est admis (demi-ouvert) ; son succès ferme, son échec rouvre.
  */
-import { StriartError } from './errors.js';
+import { StriartError } from './errors.ts';
 
 type Rec = Record<string, unknown>;
 

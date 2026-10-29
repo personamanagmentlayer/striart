@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
-import { PAGE } from '../../src/dashboard.js';
+import { PAGE } from '../../src/dashboard.ts';
 import { METHOD_SPECS } from '../../src/control/schema.ts';
 
 /**

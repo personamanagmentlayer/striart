@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { DEFAULT_CONFIG } from '../../src/config.js';
+import { DEFAULT_CONFIG } from '../../src/config.ts';
 
 // Le registre est simulé (aucun disque) : `meta.collab` est ce que l'orchestrateur
 // y publie avant chaque tour (team.ts, review.ts, pipeline.ts).
@@ -10,7 +10,7 @@ vi.mock('../../src/clone.js', () => ({
 
 const { buildAgentInstructions, renderCollabBlock } =
   await import('../../src/agents/instructions.ts');
-const { readRegistry } = await import('../../src/clone.js');
+const { readRegistry } = await import('../../src/clone.ts');
 const { resolveCollabSettings } = await import('../../src/orchestration/settings.ts');
 
 const SETTINGS = resolveCollabSettings(null);

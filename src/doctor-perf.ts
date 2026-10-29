@@ -12,7 +12,7 @@
 import { readdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { simpleGit } from 'simple-git';
-import { writeJsonAtomic } from './json-file.js';
+import { writeJsonAtomic } from './json-file.ts';
 import { withStateLock } from './state-lock.ts';
 
 export const STATE_LOCK_BUDGET_MS = 100;

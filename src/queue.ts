@@ -1,30 +1,31 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { striartDir } from './paths.js';
-import { UNCHANGED, readJson, updateJsonLocked } from './json-file.js';
+import { striartDir } from './paths.ts';
+import { UNCHANGED, readJson, updateJsonLocked } from './json-file.ts';
+import type { QueueTask } from './types.js';
+import type { PublicRouterDetails } from './router-details.ts';
 
-function queuePath(root) {
+function queuePath(root: string) {
   return path.join(striartDir(root), 'queue.json');
 }
 
 /**
  * Lecture-modification-écriture de la file sous le verrou d'état : deux
  * process qui enfilent ou retirent en même temps ne perdent aucune tâche.
- * @param {string} root
- * @param {(queue: import('./types.js').QueueTask[]) => import('./types.js').QueueTask[] | typeof UNCHANGED} mutator
  */
-function updateQueue(root, mutator) {
+function updateQueue(
+  root: string,
+  mutator: (queue: QueueTask[]) => QueueTask[] | typeof UNCHANGED,
+) {
   return updateJsonLocked(queuePath(root), { fallback: [], code: 'QUEUE_CORRUPT' }, mutator);
 }
 
-/** @param {string} root @returns {Promise<import('./types.js').QueueTask[]>} */
-export async function readQueue(root) {
+export async function readQueue(root: string): Promise<QueueTask[]> {
   return readJson(queuePath(root), { fallback: [], code: 'QUEUE_CORRUPT' });
 }
 
-/** @param {string} root @param {{agent: string, prompt: string, predictedFiles: string[], routing?: import('./router-details.ts').PublicRouterDetails|null, collisions: import('./types.js').Collision[], command?: string|null, after?: string|null, reuse?: boolean, allowHistoricalSecrets?: boolean}} task @returns {Promise<import('./types.js').QueueTask>} */
 export async function enqueueTask(
-  root,
+  root: string,
   {
     agent,
     prompt,
@@ -35,9 +36,19 @@ export async function enqueueTask(
     after = null,
     reuse = false,
     allowHistoricalSecrets = false,
+  }: {
+    agent: string;
+    prompt: string;
+    predictedFiles: string[];
+    routing?: PublicRouterDetails | null;
+    collisions: QueueTask['collisions'];
+    command?: string | null;
+    after?: string | null;
+    reuse?: boolean;
+    allowHistoricalSecrets?: boolean;
   },
-) {
-  const task = /** @type {import('./types.js').QueueTask} */ ({
+): Promise<QueueTask> {
+  const task: QueueTask = {
     id: `task-${randomUUID().slice(0, 8)}`,
     status: 'WAITING',
     agent,
@@ -56,12 +67,12 @@ export async function enqueueTask(
     // perdre du travail ici : il ne vaut que pour l'état constaté à l'instant.
     allowHistoricalSecrets,
     createdAt: new Date().toISOString(),
-  });
+  };
   await updateQueue(root, (queue) => [...queue, task]);
   return task;
 }
 
-export async function removeTask(root, taskId) {
+export async function removeTask(root: string, taskId: string): Promise<boolean> {
   let removed = false;
   await updateQueue(root, (queue) => {
     const remaining = queue.filter((t) => t.id !== taskId);

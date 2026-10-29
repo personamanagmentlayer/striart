@@ -1,4 +1,4 @@
-import { assertInitialized } from '../../clone.js';
+import { assertInitialized } from '../../clone.ts';
 import { sweepIdle } from '../../idle/sweep.ts';
 import type { SweepReport } from '../../idle/sweep.ts';
 import type { CommandModule } from '../context.ts';

@@ -9,7 +9,7 @@ import {
 import { MAX_EVENT_BYTES, parseHookPayload, readBoundedInput } from '../../src/hooks/stdin.ts';
 import { toCloneRelative } from '../../src/hooks/advisory.ts';
 import { DEFAULT_HOOK_SETTINGS, isValidHookSettings } from '../../src/hooks/config.ts';
-import { DEFAULT_CONFIG, validateConfig } from '../../src/config.js';
+import { DEFAULT_CONFIG, validateConfig } from '../../src/config.ts';
 
 const streamOf = (chunks) => Readable.from(chunks.map((c) => Buffer.from(c)));
 

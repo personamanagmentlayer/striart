@@ -1,8 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import chokidar from 'chokidar';
-import { agentsDir } from './paths.js';
-import { logger } from './logger.js';
+import { agentsDir } from './paths.ts';
+import { logger } from './logger.ts';
 
 /**
  * Surveille .striart/agents/<name>/.git/refs/heads/** de tous les agents.
@@ -12,7 +12,15 @@ import { logger } from './logger.js';
  * On ne watch que le sous-arbre .git/refs de chaque clone : le worktree
  * (node_modules inclus) est ignoré pour ne pas saturer le watcher.
  */
-export function watchAgents({ root, onCommit, usePolling = false }) {
+export function watchAgents({
+  root,
+  onCommit,
+  usePolling = false,
+}: {
+  root: string;
+  onCommit: (info: { agent: string; branch: string; sha: string; refPath: string }) => void;
+  usePolling?: boolean;
+}) {
   const dir = agentsDir(root);
 
   const isWatchable = (p) => {

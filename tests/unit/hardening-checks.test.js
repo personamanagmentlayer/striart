@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_CONFIG, validateConfig } from '../../src/config.js';
+import { DEFAULT_CONFIG, validateConfig } from '../../src/config.ts';
 import { checkGateEnv, hardeningRelaxations } from '../../src/hardening-checks.ts';
 
 describe('config — gateEnv / privateStateDir', () => {

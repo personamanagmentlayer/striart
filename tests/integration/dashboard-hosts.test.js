@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { startDashboard } from '../../src/dashboard.js';
+import { initStriart } from '../../src/init.ts';
+import { startDashboard } from '../../src/dashboard.ts';
 import { baseUrl, rawRequest, signIn, useLoopbackDashboard } from '../helpers/control-client.js';
 
 /**

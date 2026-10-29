@@ -9,9 +9,9 @@ import { stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { execa } from 'execa';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { createAgent } from '../../src/clone.js';
-import { mergeAgentCommit, runTask } from '../../src/orchestrator.js';
+import { initStriart } from '../../src/init.ts';
+import { createAgent } from '../../src/clone.ts';
+import { mergeAgentCommit, runTask } from '../../src/orchestrator.ts';
 
 const WEBHOOK = 'https://hooks.example.invalid/slack';
 const git = (cwd, ...args) => execa('git', ['-C', cwd, ...args]).then((r) => r.stdout.trim());

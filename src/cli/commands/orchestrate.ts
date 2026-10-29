@@ -8,7 +8,7 @@
  * Une option qui ne s'applique pas au mode choisi est refusée (sortie 2) :
  * l'ignorer laisserait croire à un réglage actif.
  */
-import { StriartError } from '../../errors.js';
+import { StriartError } from '../../errors.ts';
 import type { CommandModule } from '../context.ts';
 import { executePlanText, renderPlanResult } from './plan.ts';
 import type { PlanData } from './plan.ts';

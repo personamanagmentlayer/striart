@@ -17,11 +17,11 @@
 import { randomBytes } from 'node:crypto';
 import { readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
-import { StriartError } from '../errors.js';
-import { UNCHANGED, readJson, updateJsonLocked } from '../json-file.js';
-import { striartDir } from '../paths.js';
+import { StriartError } from '../errors.ts';
+import { UNCHANGED, readJson, updateJsonLocked } from '../json-file.ts';
+import { striartDir } from '../paths.ts';
 import { mkdirPrivate } from '../private-fs.ts';
-import { isProcessAlive } from '../process-tree.js';
+import { isProcessAlive } from '../process-tree.ts';
 import type { HumanReviewRequest, ReviewVerdict } from '../types.js';
 import { parseVerdict } from './verdict.ts';
 import { sleepAbortable } from './wait.ts';

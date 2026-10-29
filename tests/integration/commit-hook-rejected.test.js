@@ -14,11 +14,11 @@ import { readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { execa } from 'execa';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { createAgent, readRegistry } from '../../src/clone.js';
-import { mergeAgentCommit } from '../../src/orchestrator.js';
-import { listConflictTickets } from '../../src/conflicts.js';
-import { readState } from '../../src/state.js';
+import { initStriart } from '../../src/init.ts';
+import { createAgent, readRegistry } from '../../src/clone.ts';
+import { mergeAgentCommit } from '../../src/orchestrator.ts';
+import { listConflictTickets } from '../../src/conflicts.ts';
+import { readState } from '../../src/state.ts';
 
 const GATE_OK = 'node -e "process.exit(0)"';
 const git = (cwd, ...args) => execa('git', ['-C', cwd, ...args]).then((r) => r.stdout.trim());

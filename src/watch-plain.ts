@@ -11,9 +11,9 @@
  * Écran = stdout (les données de la commande) ; la saisie vient de stdin.
  */
 import readline from 'node:readline';
-import { listAgents } from './clone.js';
-import { listConflictTickets } from './conflicts.js';
-import { loadConfig } from './config.js';
+import { listAgents } from './clone.ts';
+import { listConflictTickets } from './conflicts.ts';
+import { loadConfig } from './config.ts';
 import { Output } from './cli/output.ts';
 import { agentStateView, stateGlyphChar } from './cli/render/agents.ts';
 import { createIdleCellsProvider } from './idle/status.ts';

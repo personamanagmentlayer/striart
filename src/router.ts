@@ -1,7 +1,7 @@
-import { StriartError } from './errors.js';
-import { buildImportGraph, invertImportGraph } from './imports.js';
-import { fillPromptTemplate, llmGenerate } from './llm.js';
-import { logger } from './logger.js';
+import { StriartError } from './errors.ts';
+import { buildImportGraph, invertImportGraph } from './imports.ts';
+import { fillPromptTemplate, llmGenerate } from './llm.ts';
+import { logger } from './logger.ts';
 import { isSafeProjectPath, normalizeFilePath } from './project-path.ts';
 import { buildCoChange, loadCoChange } from './router-cochange.ts';
 import { expandPrediction } from './router-expand.ts';
@@ -274,7 +274,7 @@ export async function predictFilesDetailed({
   };
   // Troncature déclarée AU LLM : sans elle il croirait voir tout le dépôt et
   // prédirait « ce qu'il voit » avec une fausse assurance.
-  let treeText = treeTruncated
+  const treeText = treeTruncated
     ? `${tree.text}
 ${truncationNote(treeTruncated)}`
     : tree.text;
@@ -419,7 +419,7 @@ ${treeText}
   const wantsGraph = exp.imports !== 'off' || exp.tests;
   if (core.length > 0 && (wantsGraph || exp.siblings || exp.contracts || exp.coChange)) {
     try {
-      const fileSet = new Set(files);
+      const fileSet = new Set<string>(files);
       let graph = null;
       let inverse = null;
       if (wantsGraph && reader) {

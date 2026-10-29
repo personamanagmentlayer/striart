@@ -100,7 +100,7 @@ async function collect(root: string, kind: CompleteKind): Promise<string[]> {
  * profiles` — commande explicite, qui, elle, l'exécute.
  */
 async function completeProfiles(root: string): Promise<string[]> {
-  const { DEFAULT_CONFIG, findConfigWithoutExecuting } = await import('../../config.js');
+  const { DEFAULT_CONFIG, findConfigWithoutExecuting } = await import('../../config.ts');
   const names = new Set(Object.keys(DEFAULT_CONFIG.agentProfiles));
   const found = await findConfigWithoutExecuting(root);
   let declared: unknown = null;
@@ -149,6 +149,6 @@ export async function writeProfileCache(
   profiles: string[],
 ): Promise<void> {
   if (configPath === null) return;
-  const { writeJsonAtomic } = await import('../../json-file.js');
+  const { writeJsonAtomic } = await import('../../json-file.ts');
   await writeJsonAtomic(path.join(root, '.striart', PROFILE_CACHE), { configPath, profiles });
 }

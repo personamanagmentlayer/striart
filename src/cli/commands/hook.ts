@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { StriartError, agentUnknownError } from '../../errors.js';
+import { StriartError, agentUnknownError } from '../../errors.ts';
 import type { HookFileChange, HookScope } from '../../hooks/install.ts';
 import type { CommandModule, Ctx } from '../context.ts';
 
@@ -105,7 +105,7 @@ async function manage(ctx: Ctx, input: HookInput, action: 'install' | 'uninstall
   const scope: HookScope = input.user ? 'user' : 'clone';
   let clone: { root: string; agent: string; clonePath: string } | null = null;
   if (input.agent !== null) {
-    const { assertInitialized, readRegistry } = await import('../../clone.js');
+    const { assertInitialized, readRegistry } = await import('../../clone.ts');
     const root = await ctx.repoRoot();
     await assertInitialized(root);
     const registry = await readRegistry(root);

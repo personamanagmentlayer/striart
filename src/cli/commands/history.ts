@@ -1,4 +1,4 @@
-import { listMergeHistory } from '../../history.js';
+import { listMergeHistory } from '../../history.ts';
 import type { CommandModule } from '../context.ts';
 
 export interface HistoryInput {

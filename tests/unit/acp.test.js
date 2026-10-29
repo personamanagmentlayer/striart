@@ -11,7 +11,7 @@ import {
   selectPermissionOption,
   striartMcpServers,
 } from '../../src/acp.ts';
-import { runAgentSession } from '../../src/session.js';
+import { runAgentSession } from '../../src/session.ts';
 import { ensureStateProtection } from '../../src/state-protection.ts';
 import {
   answerPermissionRequest,

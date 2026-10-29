@@ -1,5 +1,5 @@
-import { loadConfig } from '../../config.js';
-import { listProfiles } from '../../session.js';
+import { loadConfig } from '../../config.ts';
+import { listProfiles } from '../../session.ts';
 import type { AcpImportResult } from '../../agents/acp-registry.ts';
 import type { DetectionResult } from '../../agents/detect.ts';
 import type { CommandModule, CommandWarning } from '../context.ts';

@@ -8,10 +8,10 @@ import {
   mockRouter,
   writeStriartConfig,
 } from '../helpers/orchestration.js';
-import { initStriart } from '../../src/init.js';
-import { readRegistry, updateAgentMeta } from '../../src/clone.js';
-import { applyPlan } from '../../src/orchestrator.js';
-import { isProcessAlive } from '../../src/process-tree.js';
+import { initStriart } from '../../src/init.ts';
+import { readRegistry, updateAgentMeta } from '../../src/clone.ts';
+import { applyPlan } from '../../src/orchestrator.ts';
+import { isProcessAlive } from '../../src/process-tree.ts';
 
 const exists = async (p) => Boolean(await stat(p).catch(() => null));
 const mergeCount = async (git) =>

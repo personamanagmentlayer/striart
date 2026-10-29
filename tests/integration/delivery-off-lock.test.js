@@ -13,16 +13,16 @@ import os from 'node:os';
 import path from 'node:path';
 import { execa } from 'execa';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { createAgent } from '../../src/clone.js';
-import { withMainLock } from '../../src/lock.js';
+import { initStriart } from '../../src/init.ts';
+import { createAgent } from '../../src/clone.ts';
+import { withMainLock } from '../../src/lock.ts';
 import {
   applyTicketResolution,
   mergeAgentCommit,
   promoteStaging,
   rollbackLastMerge,
-} from '../../src/orchestrator.js';
-import { prepareResolutionScaffold } from '../../src/conflicts.js';
+} from '../../src/orchestrator.ts';
+import { prepareResolutionScaffold } from '../../src/conflicts.ts';
 
 const GATE_OK = 'node -e "process.exit(0)"';
 const git = (cwd, ...args) => execa('git', ['-C', cwd, ...args]).then((r) => r.stdout.trim());

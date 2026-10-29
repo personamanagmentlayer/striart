@@ -1,7 +1,7 @@
 import { execa, type ResultPromise } from 'execa';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { killProcessTree, normalizeExitCode } from '../process-tree.js';
+import { killProcessTree, normalizeExitCode } from '../process-tree.ts';
 import { resolvePathInsideClone } from './protocol.ts';
 import { JSONRPC } from './protocol.ts';
 

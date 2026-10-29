@@ -1,8 +1,8 @@
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { loadConfig } from './config.js';
-import { findRepoRoot } from './clone.js';
-import { agentsDir, striartDir } from './paths.js';
+import { loadConfig } from './config.ts';
+import { findRepoRoot } from './clone.ts';
+import { agentsDir, striartDir } from './paths.ts';
 import { ensureStateProtection } from './state-protection.ts';
 
 const CONFIG_TEMPLATE = `export default {

@@ -15,14 +15,15 @@ import {
   TEST_COMMAND_PLACEHOLDER,
 } from './agents/profile-schema.ts';
 import { transcribeStructuredOutput } from './agents/transcript.ts';
-import { loadConfig } from './config.js';
+import { loadConfig } from './config.ts';
 import { startOutputBeat } from './idle/heartbeat.ts';
 import { closeRequestPath } from './idle/paths.ts';
-import { StriartError } from './errors.js';
-import { logger } from './logger.js';
-import { striartDir } from './paths.js';
+import { StriartError } from './errors.ts';
+import { logger } from './logger.ts';
+import { striartDir } from './paths.ts';
 import { writePrivateFile } from './private-fs.ts';
-import { killProcessTree, normalizeExitCode } from './process-tree.js';
+import { killProcessTree, normalizeExitCode } from './process-tree.ts';
+import type { AgentProfile, SessionResult, StriartConfig } from './types.js';
 import { redactSecrets, secretValuesFromEnv } from './redact-secrets.ts';
 import { buildSessionEnv } from './session-env.ts';
 import { ensureStateProtection } from './state-protection.ts';
@@ -94,11 +95,9 @@ export function sessionRawLogPath(root, agent, taskId) {
  * commande unique : c'est ce qui permet de superviser des agents Claude,
  * OpenAI, Ollama ou Kimi côte à côte sur le même projet.
  *
- * @param {import('./types.js').StriartConfig} config
- * @param {string} name Clé dans config.agentProfiles.
- * @returns {import('./types.js').AgentProfile}
+ * @param name Clé dans config.agentProfiles.
  */
-export function resolveAgentProfile(config, name) {
+export function resolveAgentProfile(config: StriartConfig, name: string): AgentProfile {
   const profiles = config.agentProfiles ?? {};
   const profile = profiles[name];
   if (!profile) {
@@ -118,11 +117,22 @@ export function resolveAgentProfile(config, name) {
  * en principe contenir une valeur sensible, on ne la relaie pas dans une
  * sortie de commande.
  *
- * @param {import('./types.js').StriartConfig} config
- * @returns {Array<{name: string, command: string, invocation: string, envKeys: string[], timeout: number | null, acp: boolean, preset: string | null, experimental: boolean, writeMode: string | null, commitPolicy: string | null, structuredOutput: string, instructions: string}>}
  */
-export function listProfiles(config) {
-  const profiles = config.agentProfiles ?? {};
+export function listProfiles(config: StriartConfig): Array<{
+  name: string;
+  command: string;
+  invocation: string;
+  envKeys: string[];
+  timeout: number | null;
+  acp: boolean;
+  preset: string | null;
+  experimental: boolean;
+  writeMode: string | null;
+  commitPolicy: string | null;
+  structuredOutput: string;
+  instructions: string;
+}> {
+  const profiles: Record<string, AgentProfile> = config.agentProfiles ?? {};
   return Object.entries(profiles)
     .map(([name, p]) => ({
       name,
@@ -159,15 +169,17 @@ export function listProfiles(config) {
  * emplacement sans valeur est retiré, avec le drapeau qui le précède
  * (`--flag {{slot}}`) : un drapeau orphelin avalerait l'argument suivant.
  *
- * @param {import('./types.js').AgentProfile} profile
- * @param {string} prompt
- * @param {{instructions?: string, instructionsFile?: string, testCommand?: string}} [slots]
- *   `testCommand` remplit `{{striartTestCommand}}` (règles d'autorisation
- *   d'un preset qui laissent l'agent lancer le Test Gate lui-même).
- * @param {string[]} [appendArgs] Ajoutés en fin d'argv (canal system-prompt-file).
- * @returns {{command: string, args: string[]}}
+ * `testCommand` remplit `{{striartTestCommand}}` (règles d'autorisation
+ * d'un preset qui laissent l'agent lancer le Test Gate lui-même).
+ *
+ * @param appendArgs Ajoutés en fin d'argv (canal system-prompt-file).
  */
-export function buildAgentArgv(profile, prompt, slots = {}, appendArgs = []) {
+export function buildAgentArgv(
+  profile: AgentProfile,
+  prompt: string,
+  slots: { instructions?: string; instructionsFile?: string; testCommand?: string } = {},
+  appendArgs: string[] = [],
+): { command: string; args: string[] } {
   // Un profil ACP ne construit pas d'argv-avec-prompt : le prompt passe par
   // le protocole (voir acp.ts). Arriver ici avec un tel profil est une erreur
   // d'aiguillage, pas un cas à rattraper en silence.
@@ -251,24 +263,13 @@ export function buildAgentArgv(profile, prompt, slots = {}, appendArgs = []) {
  * fonction rapporte, l'orchestrateur décide. Un throw ici empêcherait la
  * suite du cycle (conservation du clone, ticket) de s'exécuter.
  *
- * @param {{
- *   root: string, agent: string, taskId: string, cwd: string,
- *   profile: import('./types.js').AgentProfile, prompt: string,
- *   timeoutMs?: number, env?: NodeJS.ProcessEnv,
- *   onSpawn?: (pid: number|undefined) => Promise<void>|void,
- *   signal?: AbortSignal|null,
- *   config?: import('./types.js').StriartConfig|null,
- *   profileKey?: string|null,
- *   onMain?: boolean,
- * }} params
- *   `onMain` : session sur le repo PRINCIPAL (`run --on-main`) — aucune
- *   consigne de clone n'est injectée ; absent, déduit de `cwd === root`.
- *   `config` / `profileKey` : config déjà chargée et clé du profil, pour les
- *   consignes Striart (src/agents/instructions.ts) ; relue / déduite sinon.
- *   `signal` : arrêt demandé par l'appelant (Ctrl+C de la CLI). L'arbre de
- *   process est tué et la session rend 'CANCELLED' — sans lui, l'agent
- *   (groupe de process propre sous POSIX) survivrait à l'orchestrateur.
- * @returns {Promise<import('./types.js').SessionResult>}
+ * `onMain` : session sur le repo PRINCIPAL (`run --on-main`) — aucune
+ * consigne de clone n'est injectée ; absent, déduit de `cwd === root`.
+ * `config` / `profileKey` : config déjà chargée et clé du profil, pour les
+ * consignes Striart (src/agents/instructions.ts) ; relue / déduite sinon.
+ * `signal` : arrêt demandé par l'appelant (Ctrl+C de la CLI). L'arbre de
+ * process est tué et la session rend 'CANCELLED' — sans lui, l'agent
+ * (groupe de process propre sous POSIX) survivrait à l'orchestrateur.
  */
 export async function runAgentSession({
   root,
@@ -284,7 +285,21 @@ export async function runAgentSession({
   config = null,
   profileKey = null,
   onMain = undefined,
-}) {
+}: {
+  root: string;
+  agent: string;
+  taskId: string;
+  cwd: string;
+  profile: AgentProfile;
+  prompt: string;
+  timeoutMs?: number;
+  env?: NodeJS.ProcessEnv;
+  onSpawn?: ((pid: number | undefined) => Promise<void> | void) | null;
+  signal?: AbortSignal | null;
+  config?: StriartConfig | null;
+  profileKey?: string | null;
+  onMain?: boolean;
+}): Promise<SessionResult> {
   // Valeurs à caviarder : celles de l'environnement D'ORIGINE (STRIART_PROXY_AUTH
   // comprise), même si la session ne la reçoit pas.
   const redactionEnv = env;

@@ -21,13 +21,13 @@ import { open, rm } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { striartDir } from './paths.js';
-import { StriartError } from './errors.js';
-import { readJson, writeJsonAtomic } from './json-file.js';
+import { striartDir } from './paths.ts';
+import { StriartError } from './errors.ts';
+import { readJson, writeJsonAtomic } from './json-file.ts';
 import { mkdirPrivate } from './private-fs.ts';
 import { withFileLock } from './state-lock.ts';
-import { loadConfig } from './config.js';
-import { DAEMON_LOG_ENV, logger } from './logger.js';
+import { loadConfig } from './config.ts';
+import { DAEMON_LOG_ENV, logger } from './logger.ts';
 import { rotateLogFileIfNeeded } from './log-rotation.ts';
 import { checkProcessInstance } from './process-info.ts';
 import { clearStopRequest, requestStop, watchStopRequest } from './stop-request.ts';
@@ -117,11 +117,13 @@ const PID_LOCK_SLOW_WARN_MS = 15_000;
  * démarreur MORT est repris tout de suite, les cassures sont sérialisées sous
  * le verrou de cassure (jamais deux casseurs qui s'effacent l'un l'autre), un
  * détenteur vivant n'est jamais cassé.
- * @template T @param {string} root @param {string} name @param {() => Promise<T>} fn
- * @param {number} [timeoutMs]
- * @returns {Promise<T>}
  */
-async function withPidLock(root, name, fn, timeoutMs = PID_LOCK_TIMEOUT_MS) {
+async function withPidLock<T>(
+  root: string,
+  name: string,
+  fn: () => Promise<T>,
+  timeoutMs: number = PID_LOCK_TIMEOUT_MS,
+): Promise<T> {
   const lock = pidLockPath(root, name);
   await mkdirPrivate(path.dirname(lock));
   try {
@@ -232,10 +234,15 @@ export async function publishDaemonInfo({ root, name, patch }) {
  * `{ noMerge }` pour watch, `{ port }` pour dashboard) — informatif, jamais
  * relu pour une décision de sécurité.
  * `lockTimeoutMs` : attente maximale du verrou du PID file (défaut 10 s).
- * @param {{root: string, name: string, label: string, args: string[], extraMeta?: object, lockTimeoutMs?: number}} params
- * @returns {Promise<{pid: number, logPath: string}>}
  */
-export async function startDaemon(params) {
+export async function startDaemon(params: {
+  root: string;
+  name: string;
+  label: string;
+  args: string[];
+  extraMeta?: object;
+  lockTimeoutMs?: number;
+}): Promise<{ pid: number; logPath: string }> {
   return withPidLock(
     params.root,
     params.name,
@@ -244,9 +251,7 @@ export async function startDaemon(params) {
   );
 }
 
-/** @param {{root: string, name: string, label: string, args: string[], extraMeta?: object, lockTimeoutMs?: number}} params */
-/** @param {string} name @param {unknown} cause */
-function spawnFailed(name, cause) {
+function spawnFailed(name: string, cause: unknown) {
   const message = cause instanceof Error ? cause.message : String(cause);
   return new StriartError(`Le ${name} daemon n'a pas pu être lancé : ${message}.`, {
     code: 'DAEMON_SPAWN_FAILED',
@@ -255,7 +260,19 @@ function spawnFailed(name, cause) {
   });
 }
 
-async function startDaemonLocked({ root, name, label, args, extraMeta = {} }) {
+async function startDaemonLocked({
+  root,
+  name,
+  label,
+  args,
+  extraMeta = {},
+}: {
+  root: string;
+  name: string;
+  label: string;
+  args: string[];
+  extraMeta?: object;
+}): Promise<{ pid: number; logPath: string }> {
   const status = await daemonStatus({ root, name });
   if (status.running) {
     throw new StriartError(
@@ -332,7 +349,7 @@ async function startDaemonLocked({ root, name, label, args, extraMeta = {} }) {
   } catch (error) {
     // Un daemon sans PID file serait invisible de `--status`/`--stop` : on ne le laisse pas vivre.
     try {
-      process.kill(/** @type {number} */ (child.pid));
+      process.kill(/** @type {number} */ child.pid);
     } catch (killError) {
       logger.error(
         { name, pid: child.pid, err: killError },
@@ -341,7 +358,7 @@ async function startDaemonLocked({ root, name, label, args, extraMeta = {} }) {
     }
     throw error;
   }
-  return { pid: /** @type {number} */ (child.pid), logPath };
+  return { pid: /** @type {number} */ child.pid, logPath };
 }
 
 /**
@@ -379,7 +396,7 @@ export async function stopDaemon({
     if (status.stale) await releasePidFileOf(root, name, status.pid);
     return { stopped: false, stopping: false, wasStale: status.stale, pid: status.pid };
   }
-  const pid = /** @type {number} */ (status.pid);
+  const pid = /** @type {number} */ status.pid;
   if (!status.verified) {
     throw new StriartError(
       `Le PID ${pid} du ${name} daemon est vivant mais son identité est illisible : rien n'est tué à l'aveugle.`,
@@ -405,7 +422,7 @@ export async function stopDaemon({
         'alive',
     });
   } catch (error) {
-    const code = /** @type {NodeJS.ErrnoException} */ (error)?.code;
+    const code = /** @type {NodeJS.ErrnoException} */ error?.code;
     if (code === 'ESRCH') {
       // Sorti entre l'état et le signal : course bénigne, PID file orphelin.
       await releasePidFileOf(root, name, pid);
@@ -492,8 +509,13 @@ export async function dashboardDaemonStatus({ root }) {
   return daemonStatus({ root, name: 'dashboard' });
 }
 
-/** @param {{root: string, port?: number|null}} params */
-export async function startDashboardDaemon({ root, port = null }) {
+export async function startDashboardDaemon({
+  root,
+  port = null,
+}: {
+  root: string;
+  port?: number | null;
+}): Promise<{ pid: number; logPath: string }> {
   return startDaemon({
     root,
     name: 'dashboard',

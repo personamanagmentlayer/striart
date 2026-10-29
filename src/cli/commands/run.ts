@@ -1,5 +1,5 @@
-import { StriartError } from '../../errors.js';
-import { runAutonomousTask, runMainSession, runTask } from '../../orchestrator.js';
+import { StriartError } from '../../errors.ts';
+import { runAutonomousTask, runMainSession, runTask } from '../../orchestrator.ts';
 import { openAttendedSession } from '../../pty-host.ts';
 import type { AttendedSession } from '../../pty-host.ts';
 import type { AutonomousResult, RunResult, SessionResult } from '../../types.js';

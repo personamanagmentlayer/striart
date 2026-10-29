@@ -10,9 +10,9 @@
  * jamais un repli silencieux.
  */
 import path from 'node:path';
-import { loadConfig } from './config.js';
-import { logger } from './logger.js';
-import { striartDir } from './paths.js';
+import { loadConfig } from './config.ts';
+import { logger } from './logger.ts';
+import { striartDir } from './paths.ts';
 import { hardenStriartDir, type PrivacyReport } from './private-fs.ts';
 
 const settled = new Map<string, Promise<PrivacyReport | null>>();

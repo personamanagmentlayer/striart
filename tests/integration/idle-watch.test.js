@@ -4,10 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { readRegistry } from '../../src/clone.js';
-import { runAutonomousTask } from '../../src/orchestrator.js';
-import { isProcessAlive } from '../../src/process-tree.js';
+import { initStriart } from '../../src/init.ts';
+import { readRegistry } from '../../src/clone.ts';
+import { runAutonomousTask } from '../../src/orchestrator.ts';
+import { isProcessAlive } from '../../src/process-tree.ts';
 import { startWatchLoop } from '../../src/watch-loop.ts';
 import { outputBeatPath } from '../../src/idle/paths.ts';
 

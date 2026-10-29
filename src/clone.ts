@@ -2,7 +2,7 @@ import { mkdir, readdir, readFile, stat, unlink } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { simpleGit } from 'simple-git';
-import { StriartError, agentUnknownError } from './errors.js';
+import { StriartError, agentUnknownError } from './errors.ts';
 import {
   assertSecretPatternSyntax,
   compileSecretPattern,
@@ -15,22 +15,23 @@ import {
   removeTreeWithBackoff,
   updateJsonLocked,
   writeJsonAtomic,
-} from './json-file.js';
-import { logger } from './logger.js';
+} from './json-file.ts';
+import { logger } from './logger.ts';
 import { withStateLock } from './state-lock.ts';
-import { agentsDir, striartDir } from './paths.js';
-import { syncLocks } from './locks.js';
-import { withMainLock } from './lock.js';
-import { CLONE_MEMORY_FILE, syncMemoryToClone } from './memory.js';
+import type { AgentMeta, AgentRegistry } from './types.js';
+import { agentsDir, striartDir } from './paths.ts';
+import { syncLocks } from './locks.ts';
+import { withMainLock } from './lock.ts';
+import { CLONE_MEMORY_FILE, syncMemoryToClone } from './memory.ts';
 import { cloneDiskSize, cloneWorkScan } from './clone-disk.ts';
 import { createSizeCache } from './clone-size-cache.ts';
 import { syncAgentInstructionsToClone } from './agents/instructions.ts';
 import { releaseAgentArtifacts } from './agent-artifacts.ts';
-import { isProcessAlive } from './process-tree.js';
+import { isProcessAlive } from './process-tree.ts';
 import { ptyHostStatus } from './pty-host-state.ts';
 
 // Ré-export : les modules historiques importent ces helpers depuis clone.js.
-export { agentsDir, striartDir } from './paths.js';
+export { agentsDir, striartDir } from './paths.ts';
 
 /** Séparateur des sorties git -z. */
 const NUL_BYTE = String.fromCharCode(0);
@@ -61,9 +62,8 @@ export { validateAgentName } from './agent-name.ts';
  * `simpleGit(meta.path)` directement.
  * @param {string} clonePath
  */
-export function cloneGit(clonePath) {
-  /** @type {Record<string, string>} */
-  const env = {};
+export function cloneGit(clonePath: string) {
+  const env: Record<string, string> = {};
   for (const [name, value] of Object.entries(process.env)) {
     if (value !== undefined && !isUnsafeCloneEnv(name)) env[name] = value;
   }
@@ -123,8 +123,7 @@ export async function assertInitialized(root) {
   }
 }
 
-/** @param {string} root @returns {Promise<import('./types.js').AgentRegistry>} */
-export async function readRegistry(root) {
+export async function readRegistry(root: string): Promise<AgentRegistry> {
   return readJson(registryPath(root), { fallback: {}, code: 'REGISTRY_CORRUPT' });
 }
 
@@ -471,8 +470,19 @@ async function readMainHeadOrRefuse(mainGit, root) {
   }
 }
 
-/** @param {{root: string, name: string, prompt?: string|null, predictedFiles?: string[], command?: string|null, cloneFilter?: string|null, secretPatterns?: string[]|null, mode?: 'attended'|'autonomous', profile?: string|null, allowHistoricalSecrets?: boolean, signal?: AbortSignal|null}} params @returns {Promise<import('./types.js').AgentMeta & {name: string}>} */
-export async function createAgent(params) {
+export async function createAgent(params: {
+  root: string;
+  name: string;
+  prompt?: string | null;
+  predictedFiles?: string[];
+  command?: string | null;
+  cloneFilter?: string | null;
+  secretPatterns?: string[] | null;
+  mode?: 'attended' | 'autonomous';
+  profile?: string | null;
+  allowHistoricalSecrets?: boolean;
+  signal?: AbortSignal | null;
+}): Promise<AgentMeta & { name: string }> {
   // `signal` n'annule que l'ATTENTE du verrou, jamais un clonage commencé.
   return withMainLock(params.root, `start:${params.name}`, () => createAgentImpl(params), {
     signal: params.signal ?? null,
@@ -491,7 +501,18 @@ async function createAgentImpl({
   mode = 'attended',
   profile = null,
   allowHistoricalSecrets = false,
-}) {
+}: {
+  root: string;
+  name: string;
+  prompt?: string | null;
+  predictedFiles?: string[];
+  command?: string | null;
+  cloneFilter?: string | null;
+  secretPatterns?: string[] | null;
+  mode?: 'attended' | 'autonomous';
+  profile?: string | null;
+  allowHistoricalSecrets?: boolean;
+}): Promise<AgentMeta & { name: string }> {
   validateAgentName(name);
   await assertInitialized(root);
 
@@ -573,8 +594,7 @@ async function createAgentImpl({
   // passés (no-op si la mémoire n'existe pas encore).
   await syncMemoryToClone(root, dest);
 
-  /** @type {import('./types.js').AgentMeta} */
-  const meta = {
+  const meta: AgentMeta = {
     branch,
     taskId,
     path: dest,
@@ -624,17 +644,26 @@ async function createAgentImpl({
  * n'implique pas l'autre : un `--force` donné pour abandonner un brouillon
  * ne lève pas en silence le contrôle des secrets.
  *
- * @param {{root: string, name: string, prompt?: string|null, predictedFiles?: string[], command?: string|null, secretPatterns?: string[]|null, mode?: 'attended'|'autonomous', profile?: string|null, force?: boolean, allowHistoricalSecrets?: boolean, signal?: AbortSignal|null}} params
- * @returns {Promise<import('./types.js').AgentMeta & {name: string}>}
  */
-export async function reuseAgent(params) {
+export async function reuseAgent(params: {
+  root: string;
+  name: string;
+  prompt?: string | null;
+  predictedFiles?: string[];
+  command?: string | null;
+  secretPatterns?: string[] | null;
+  mode?: 'attended' | 'autonomous';
+  profile?: string | null;
+  force?: boolean;
+  allowHistoricalSecrets?: boolean;
+  signal?: AbortSignal | null;
+}): Promise<AgentMeta & { name: string }> {
   // `signal` n'annule que l'ATTENTE du verrou, jamais une réhabilitation commencée.
   return withMainLock(params.root, `reuse:${params.name}`, () => reuseAgentImpl(params), {
     signal: params.signal ?? null,
   });
 }
 
-/** @param {{root: string, name: string, prompt?: string|null, predictedFiles?: string[], command?: string|null, secretPatterns?: string[]|null, mode?: 'attended'|'autonomous', profile?: string|null, force?: boolean, allowHistoricalSecrets?: boolean}} params */
 async function reuseAgentImpl({
   root,
   name,
@@ -646,7 +675,18 @@ async function reuseAgentImpl({
   profile = null,
   force = false,
   allowHistoricalSecrets = false,
-}) {
+}: {
+  root: string;
+  name: string;
+  prompt?: string | null;
+  predictedFiles?: string[];
+  command?: string | null;
+  secretPatterns?: string[] | null;
+  mode?: 'attended' | 'autonomous';
+  profile?: string | null;
+  force?: boolean;
+  allowHistoricalSecrets?: boolean;
+}): Promise<AgentMeta & { name: string }> {
   validateAgentName(name);
   await assertInitialized(root);
 
@@ -770,8 +810,7 @@ async function reuseAgentImpl({
       await agentGit.raw(['config', '--get', 'remote.origin.partialclonefilter']).catch(() => '')
     ).trim() || null;
 
-  /** @type {import('./types.js').AgentMeta} */
-  const meta = {
+  const meta: AgentMeta = {
     branch,
     taskId,
     path: dest,
@@ -891,7 +930,7 @@ async function cachedCloneSize(clonePath, scan) {
 /** La config est lue best effort — un état consultable ne doit jamais échouer sur elle. */
 async function presenceWindowMs(root) {
   try {
-    const { loadConfig } = await import('./config.js');
+    const { loadConfig } = await import('./config.ts');
     return (await loadConfig(root)).presenceMinutes * 60_000;
   } catch {
     return DEFAULT_PRESENCE_MINUTES * 60_000;
@@ -1346,7 +1385,7 @@ async function finishCloneRemoval(root, name) {
  * @param {string} root
  * @returns {Promise<{completed: string[], pending: Array<{name: string, reason: 'SESSION_LIVE'|'BUSY'|'ACTIVE'}>}>}
  */
-export async function resumeCloneRemovals(root) {
+export async function resumeCloneRemovals(root: string) {
   const registry = await readRegistry(root);
   const names = new Set(
     Object.entries(registry)

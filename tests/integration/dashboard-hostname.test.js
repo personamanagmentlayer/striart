@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { startDashboard } from '../../src/dashboard.js';
+import { initStriart } from '../../src/init.ts';
+import { startDashboard } from '../../src/dashboard.ts';
 import { readTokenFile } from '../../src/control/auth.ts';
 import { rawRequest } from '../helpers/control-client.js';
 

@@ -1,10 +1,10 @@
 import { open, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { isReadableTicket, listConflictTickets } from '../conflicts.js';
-import { striartDir } from '../paths.js';
+import { isReadableTicket, listConflictTickets } from '../conflicts.ts';
+import { striartDir } from '../paths.ts';
 import { TICKET_ID_RE } from '../ticket-id.ts';
 import { collectStatus } from '../status.ts';
-import { StriartError } from '../errors.js';
+import { StriartError } from '../errors.ts';
 import { readTicketView } from './tools.ts';
 import { TICKET_VIEW_HTML, TICKET_VIEW_URI } from './ticket-view.ts';
 import { UI_MIME } from './protocol.ts';

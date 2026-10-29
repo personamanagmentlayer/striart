@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { validateConfig } from '../../src/config.js';
+import { validateConfig } from '../../src/config.ts';
 import {
   DEFAULT_COLLAB_SETTINGS,
   DEFAULT_ORCHESTRATION_SETTINGS,

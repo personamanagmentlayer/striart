@@ -6,11 +6,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SessionLog } from '../../src/acp/session-log.ts';
-import { createConflictTicket } from '../../src/conflicts.js';
-import { initStriart } from '../../src/init.js';
+import { createConflictTicket } from '../../src/conflicts.ts';
+import { initStriart } from '../../src/init.ts';
 import { isPrivate, resetHardenMemo } from '../../src/private-fs.ts';
 import { ensureStateProtection, resetStateProtectionMemo } from '../../src/state-protection.ts';
-import { runAgentSession } from '../../src/session.js';
+import { runAgentSession } from '../../src/session.ts';
 import { createTempRepo } from '../helpers/temp-repo.js';
 
 const WIN = process.platform === 'win32';

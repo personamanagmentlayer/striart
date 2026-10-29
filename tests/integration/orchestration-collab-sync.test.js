@@ -3,8 +3,8 @@ import { readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { simpleGit } from 'simple-git';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { createAgent, readRegistry } from '../../src/clone.js';
+import { initStriart } from '../../src/init.ts';
+import { createAgent, readRegistry } from '../../src/clone.ts';
 import { publishAgentCollab } from '../../src/orchestration/unit.ts';
 
 const exists = async (p) => Boolean(await stat(p).catch(() => null));

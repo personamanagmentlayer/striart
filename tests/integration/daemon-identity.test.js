@@ -3,8 +3,8 @@ import { spawn } from 'node:child_process';
 import { stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { isProcessAlive } from '../../src/process-tree.js';
+import { initStriart } from '../../src/init.ts';
+import { isProcessAlive } from '../../src/process-tree.ts';
 
 // Lecture d'identité en panne (PowerShell bloqué, WMI cassé…) : le verdict
 // est `unverified`. Il suffit pour s'abstenir, jamais pour tuer.
@@ -13,7 +13,7 @@ vi.mock('../../src/process-info.ts', async (importOriginal) => ({
   checkProcessInstance: async () => 'unverified',
 }));
 
-const { stopDaemon, daemonStatus } = await import('../../src/daemon.js');
+const { stopDaemon, daemonStatus } = await import('../../src/daemon.ts');
 const { stopPtyHost } = await import('../../src/pty-host.ts');
 
 describe('PID vivant mais non identifiable : jamais tué', () => {

@@ -22,8 +22,8 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
-import { StriartError } from '../errors.js';
-import { striartDir } from '../paths.js';
+import { StriartError } from '../errors.ts';
+import { striartDir } from '../paths.ts';
 import {
   assertPrivate as assertFilePrivate,
   restrictToCurrentUser as restrictFileToCurrentUser,

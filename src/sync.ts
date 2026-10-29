@@ -17,15 +17,15 @@
  * rattrapera au prochain commit.
  */
 import { simpleGit } from 'simple-git';
-import { StriartError, agentUnknownError } from './errors.js';
-import { loadConfig } from './config.js';
-import { assertInitialized, cloneGit, readRegistry, updateAgentMeta } from './clone.js';
-import { emitStriartEvent } from './events.js';
-import { withMainLock } from './lock.js';
-import { syncMemoryToClone } from './memory.js';
+import { StriartError, agentUnknownError } from './errors.ts';
+import { loadConfig } from './config.ts';
+import { assertInitialized, cloneGit, readRegistry, updateAgentMeta } from './clone.ts';
+import { emitStriartEvent } from './events.ts';
+import { withMainLock } from './lock.ts';
+import { syncMemoryToClone } from './memory.ts';
 import { syncAgentInstructionsToClone } from './agents/instructions.ts';
-import { isProcessAlive } from './process-tree.js';
-import { logger } from './logger.js';
+import { isProcessAlive } from './process-tree.ts';
+import { logger } from './logger.ts';
 
 /**
  * Tête d'une branche du repo principal, ou refus explicite si elle n'existe
@@ -251,7 +251,7 @@ async function syncAgentWithMainImpl({ root, agent, config = null, verifyTarget 
   // Le rebase réécrit les SHAs : la base de comptage des commits
   // en attente devient la tête de main (les commits déjà mergés
   // ont été dédupliqués par le rebase).
-  const patch = { baseCommit: mainHead };
+  const patch: { baseCommit: string; lastMergedCommit?: string } = { baseCommit: mainHead };
   if (meta.lastMergedCommit) patch.lastMergedCommit = mainHead;
   await updateAgentMeta(root, agent, patch);
 

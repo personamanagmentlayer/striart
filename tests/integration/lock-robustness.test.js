@@ -16,11 +16,11 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { withMainLock } from '../../src/lock.js';
-import { logger } from '../../src/logger.js';
+import { initStriart } from '../../src/init.ts';
+import { withMainLock } from '../../src/lock.ts';
+import { logger } from '../../src/logger.ts';
 import { en } from '../../src/cli/i18n/en.ts';
-import { startDashboard } from '../../src/dashboard.js';
+import { startDashboard } from '../../src/dashboard.ts';
 import { baseUrl, signIn, useLoopbackDashboard } from '../helpers/control-client.js';
 
 const HOLDER = fileURLToPath(new URL('../helpers/lock-holder.mjs', import.meta.url));
@@ -449,11 +449,11 @@ describe('verrou principal — annulation de l’attente (AbortSignal)', () => {
   });
 
   it('propagé (suite M7) : start, reuse, clean, run, stop, queue retry, reconcile, rollback, prune, sync-all et run --on-main annulent leur attente du verrou', async () => {
-    const { createAgent, reuseAgent, cleanClones } = await import('../../src/clone.js');
+    const { createAgent, reuseAgent, cleanClones } = await import('../../src/clone.ts');
     const { runTask, stopAgent, retryQueue, reconcile, rollbackLastMerge, runMainSession } =
-      await import('../../src/orchestrator.js');
-    const { pruneWorkspace } = await import('../../src/prune.js');
-    const { syncAllAgents } = await import('../../src/sync.js');
+      await import('../../src/orchestrator.ts');
+    const { pruneWorkspace } = await import('../../src/prune.ts');
+    const { syncAllAgents } = await import('../../src/sync.ts');
     // runTask prédit les fichiers (Router, appel LLM) AVANT de prendre le verrou : sans
     // Ollama joignable il échouerait (ROUTER_FAILED) avant d'attendre le verrou.
     vi.stubGlobal(
@@ -507,9 +507,9 @@ describe('verrou principal — annulation de l’attente (AbortSignal)', () => {
   });
 
   it('propagé : merge, resolve --apply, sync et promote annulent leur attente du verrou', async () => {
-    const { createAgent } = await import('../../src/clone.js');
+    const { createAgent } = await import('../../src/clone.ts');
     const { applyTicketResolution, mergeAgentCommit, promoteStaging, syncAgentWithMain } =
-      await import('../../src/orchestrator.js');
+      await import('../../src/orchestrator.ts');
     await createAgent({ root: repo.root, name: 'agent-a' });
     let release;
     const holder = withMainLock(

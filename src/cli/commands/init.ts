@@ -1,5 +1,5 @@
-import { initStriart } from '../../init.js';
-import { runDoctor } from '../../doctor.js';
+import { initStriart } from '../../init.ts';
+import { runDoctor } from '../../doctor.ts';
 import type { CommandModule } from '../context.ts';
 import { checkDetail, checkHint, checkLabel } from './doctor.ts';
 

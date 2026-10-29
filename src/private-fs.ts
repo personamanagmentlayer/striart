@@ -31,8 +31,8 @@ import { chmod, lstat, mkdir, open, readdir, readFile, rm, stat } from 'node:fs/
 import os from 'node:os';
 import path from 'node:path';
 import { execa } from 'execa';
-import { StriartError } from './errors.js';
-import { striartDir } from './paths.js';
+import { StriartError } from './errors.ts';
+import { striartDir } from './paths.ts';
 
 /** Sous-dossiers de `.striart/` qui sont des arbres de travail (jamais parcourus ni resserrés). */
 export const WORKTREE_DIRS: readonly string[] = Object.freeze(['agents', 'removing']);

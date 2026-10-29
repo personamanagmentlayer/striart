@@ -4,7 +4,7 @@
 // d'où l'intégration (ces tests vivaient en unitaire tant que le gate lançait
 // un simple execa).
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { runTestGate } from '../../src/gate.js';
+import { runTestGate } from '../../src/gate.ts';
 import { resetNativeBinaryCache } from '../../src/native.ts';
 import { requireNativeBuild } from '../helpers/native-build.js';
 import { REPO_ROOT } from '../helpers/native.js';

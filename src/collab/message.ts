@@ -12,7 +12,7 @@
  * fabriquer la fermeture, faute de connaître le jeton au moment d'écrire.
  */
 import { randomBytes } from 'node:crypto';
-import { StriartError } from '../errors.js';
+import { StriartError } from '../errors.ts';
 import type { CollabMessageKind, CollabSettings } from '../types.js';
 
 export const COLLAB_KINDS: readonly CollabMessageKind[] = Object.freeze([

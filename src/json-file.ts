@@ -2,8 +2,8 @@ import { randomBytes } from 'node:crypto';
 import { open, readFile, readdir, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { StriartError } from './errors.js';
-import { logger } from './logger.js';
+import { StriartError } from './errors.ts';
+import { logger } from './logger.ts';
 import { assertStateLockHeld, withStateLock } from './state-lock.ts';
 
 /**
@@ -258,7 +258,7 @@ export async function sweepOrphanTempFiles(dir, { maxDepth = 2, skip = [] } = {}
   const removed = [];
   const now = Date.now();
   // Chargé à la demande (binaire natif, execa) : hors du chemin d'écriture.
-  const { isProcessAlive } = await import('./process-tree.js');
+  const { isProcessAlive } = await import('./process-tree.ts');
   const walk = async (current, depth) => {
     const entries = await readdir(current, { withFileTypes: true }).catch(() => []);
     for (const entry of entries) {

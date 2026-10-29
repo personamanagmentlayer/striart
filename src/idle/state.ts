@@ -15,7 +15,7 @@
  * d'état de `idle/`, section courte : ni git, ni process, ni attente réseau).
  */
 import { mkdir } from 'node:fs/promises';
-import { readJson, updateJsonLocked, UNCHANGED } from '../json-file.js';
+import { readJson, updateJsonLocked, UNCHANGED } from '../json-file.ts';
 import { idleDir, idleStatePath } from './paths.ts';
 
 export interface AgentIdleRecord {

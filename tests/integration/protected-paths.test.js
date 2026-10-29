@@ -4,21 +4,21 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { simpleGit } from 'simple-git';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { createAgent } from '../../src/clone.js';
+import { initStriart } from '../../src/init.ts';
+import { createAgent } from '../../src/clone.ts';
 import {
   applyTicketResolution,
   mergeAgentCommit,
   runAutonomousTask,
-} from '../../src/orchestrator.js';
+} from '../../src/orchestrator.ts';
 import {
   createConflictTicket,
   listConflictTickets,
   prepareResolutionScaffold,
   safeFileName,
-} from '../../src/conflicts.js';
-import { logger } from '../../src/logger.js';
-import { runDoctor } from '../../src/doctor.js';
+} from '../../src/conflicts.ts';
+import { logger } from '../../src/logger.ts';
+import { runDoctor } from '../../src/doctor.ts';
 
 /** Gate vert qui laisse une trace : prouve qu'il a (ou n'a pas) tourné. */
 const GATE_MARK = "node -e \"require('fs').writeFileSync('.gate-ran', '1')\"";

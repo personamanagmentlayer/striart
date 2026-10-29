@@ -14,7 +14,7 @@
  * désynchronisation irréparable du cadrage Content-Length (en-têtes
  * illisibles) est FATALE : on ne devine pas où recommence le message suivant.
  */
-import { StriartError } from '../errors.js';
+import { StriartError } from '../errors.ts';
 import { boundedLines } from '../line-reader.ts';
 
 export type Framing = 'ndjson' | 'content-length';

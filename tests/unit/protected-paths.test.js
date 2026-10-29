@@ -7,7 +7,7 @@ import {
   protectedPatternProblem,
   resolveProtectedPathsPolicy,
 } from '../../src/protected-paths.ts';
-import { DEFAULT_CONFIG, validateConfig } from '../../src/config.js';
+import { DEFAULT_CONFIG, validateConfig } from '../../src/config.ts';
 
 const policy = (protectedAgentPaths = DEFAULT_CONFIG.protectedAgentPaths, platform = 'linux') =>
   resolveProtectedPathsPolicy({ protectedAgentPaths }, platform);

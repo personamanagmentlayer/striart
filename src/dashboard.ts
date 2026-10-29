@@ -2,10 +2,10 @@ import http from 'node:http';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { loadConfig } from './config.js';
+import { loadConfig } from './config.ts';
 import { hostAllowed, parseAllowedHosts } from './control/hosts.ts';
-import { logger } from './logger.js';
-import { StriartError } from './errors.js';
+import { logger } from './logger.ts';
+import { StriartError } from './errors.ts';
 import { detectLocale, loadMessages } from './cli/i18n/index.ts';
 import {
   SessionStore,
@@ -27,6 +27,7 @@ import { collectControlState } from './control/state.ts';
 import { clientScript } from './dashboard-client.ts';
 import { renderPage } from './dashboard-page.ts';
 import { INFO_STYLE, STYLE } from './dashboard-style.ts';
+import type { MethodContext } from './control/methods.ts';
 
 /**
  * Dashboard local = client navigateur du Striart Control Protocol v1,
@@ -56,8 +57,9 @@ const SSE_HEARTBEAT_MS = 25_000;
 /** Ré-export historique (tests, consommateurs) : l'état vit dans control/state.ts. */
 export const collectDashboardState = collectControlState;
 
-const VERSION = /** @type {{version: string}} */ (createRequire(import.meta.url)('../package.json'))
-  .version;
+const VERSION = /** @type {{version: string}} */ createRequire(import.meta.url)(
+  '../package.json',
+).version;
 
 /**
  * La page (squelette HTML, feuille de style, client) vit dans `dashboard-page.ts`,
@@ -198,9 +200,9 @@ const sendHtml = (res, status, html, csp) =>
   send(res, status, 'text/html; charset=utf-8', html, { 'Content-Security-Policy': csp });
 
 /** Corps borné : au-delà de MAX_MESSAGE_BYTES, la lecture s'arrête (null). */
-function readBody(req) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
+function readBody(req: import('node:http').IncomingMessage): Promise<string | null> {
+  return new Promise<string | null>((resolve, reject) => {
+    const chunks: Buffer[] = [];
     let size = 0;
     let overflow = false;
     req.on('data', (chunk) => {
@@ -301,8 +303,15 @@ export async function startDashboard({ root, port = null }) {
   let actualPort = 0;
   let cookieName = '';
 
-  /** @type {import('./control/methods.ts').MethodContext} */
-  const ctx = { root, hub, m, locale, version: VERSION, transport: 'http', connection: null };
+  const ctx: MethodContext = {
+    root,
+    hub,
+    m,
+    locale,
+    version: VERSION,
+    transport: 'http',
+    connection: null,
+  };
 
   /** @type {Map<http.ServerResponse, string>} */
   const sseClients = new Map();
@@ -549,7 +558,7 @@ export async function startDashboard({ root, port = null }) {
   await new Promise((resolve, reject) => {
     server.once('error', (error) => {
       void teardown();
-      if (/** @type {NodeJS.ErrnoException} */ (error).code === 'EADDRINUSE') {
+      if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') {
         reject(
           new StriartError(`Le port ${listenPort} est déjà utilisé sur 127.0.0.1.`, {
             code: 'PORT_IN_USE',

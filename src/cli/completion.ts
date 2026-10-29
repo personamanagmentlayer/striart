@@ -8,7 +8,7 @@
  */
 import type { Command, Option } from 'commander';
 import type { Messages } from './i18n/fr.ts';
-import { quotePowerShell } from '../terminal.js';
+import { quotePowerShell } from '../terminal.ts';
 
 import type { Shell } from './registry.ts';
 

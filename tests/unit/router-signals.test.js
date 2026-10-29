@@ -14,7 +14,7 @@ import {
   compileSharedMatcher,
   partitionShared,
 } from '../../src/router-shared.ts';
-import { buildImportGraph, invertImportGraph, resetImportGraphCache } from '../../src/imports.js';
+import { buildImportGraph, invertImportGraph, resetImportGraphCache } from '../../src/imports.ts';
 
 /** Sources en mémoire (le Router lit aussi un arbre qui n'est pas sur le disque). */
 function memorySources(files) {

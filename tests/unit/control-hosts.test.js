@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { hostAllowed, parseAllowedHost, parseAllowedHosts } from '../../src/control/hosts.ts';
-import { DEFAULT_CONFIG, validateConfig } from '../../src/config.js';
-import { StriartError } from '../../src/errors.js';
+import { DEFAULT_CONFIG, validateConfig } from '../../src/config.ts';
+import { StriartError } from '../../src/errors.ts';
 
 const rules = (...list) => {
   const parsed = parseAllowedHosts(list);

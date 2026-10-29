@@ -16,14 +16,14 @@ import { execFileSync } from 'node:child_process';
 import { backdateDir, createTempRepo } from '../../helpers/temp-repo.js';
 import { outputBeatPath } from '../../../src/idle/paths.ts';
 import { recordMark } from '../../../src/idle/state.ts';
-import { initStriart } from '../../../src/init.js';
-import { createAgent, readRegistry } from '../../../src/clone.js';
-import { writeJsonAtomic } from '../../../src/json-file.js';
-import { createConflictTicket } from '../../../src/conflicts.js';
-import { enqueueTask, readQueue, removeTask } from '../../../src/queue.js';
-import { startDashboard } from '../../../src/dashboard.js';
+import { initStriart } from '../../../src/init.ts';
+import { createAgent, readRegistry } from '../../../src/clone.ts';
+import { writeJsonAtomic } from '../../../src/json-file.ts';
+import { createConflictTicket } from '../../../src/conflicts.ts';
+import { enqueueTask, readQueue, removeTask } from '../../../src/queue.ts';
+import { startDashboard } from '../../../src/dashboard.ts';
 import { createElicitationRequest, createPermissionRequest } from '../../../src/permissions.ts';
-import { startMainSession } from '../../../src/main-session.js';
+import { startMainSession } from '../../../src/main-session.ts';
 
 interface Scenario {
   /** Nombre d'agents (clones réels). */

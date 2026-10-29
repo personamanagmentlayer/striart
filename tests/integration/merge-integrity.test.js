@@ -65,8 +65,8 @@ vi.mock('simple-git', async (importOriginal) => {
 });
 
 const { createTempRepo } = await import('../helpers/temp-repo.js');
-const { initStriart } = await import('../../src/init.js');
-const { createAgent, readRegistry } = await import('../../src/clone.js');
+const { initStriart } = await import('../../src/init.ts');
+const { createAgent, readRegistry } = await import('../../src/clone.ts');
 const {
   applyTicketResolution,
   checkAgentsBehind,
@@ -74,13 +74,13 @@ const {
   promoteStaging,
   reconcile,
   stopAgent,
-} = await import('../../src/orchestrator.js');
+} = await import('../../src/orchestrator.ts');
 const { parseMergeSubject } = await import('../../src/merge-subject.ts');
-const { prepareResolutionScaffold, safeFileName } = await import('../../src/conflicts.js');
+const { prepareResolutionScaffold, safeFileName } = await import('../../src/conflicts.ts');
 const { en } = await import('../../src/cli/i18n/en.ts');
-const { reserveMainSession, withMainLock } = await import('../../src/lock.js');
-const { stopMainSession } = await import('../../src/main-session.js');
-const { readState } = await import('../../src/state.js');
+const { reserveMainSession, withMainLock } = await import('../../src/lock.ts');
+const { stopMainSession } = await import('../../src/main-session.ts');
+const { readState } = await import('../../src/state.ts');
 
 const GATE_OK = 'node -e "process.exit(0)"';
 

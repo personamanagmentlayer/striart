@@ -9,8 +9,8 @@
  * `lock.breakFrozenHolderAfterMs` le permet, après une observation active.
  */
 import { describe, expect, it, vi } from 'vitest';
-import { createStaleObservation, judgeLock, listTickets } from '../../src/lock.js';
-import { validateConfig } from '../../src/config.js';
+import { createStaleObservation, judgeLock, listTickets } from '../../src/lock.ts';
+import { validateConfig } from '../../src/config.ts';
 
 const T0 = Date.parse('2026-10-24T10:00:00.000Z');
 const MIN = 60_000;

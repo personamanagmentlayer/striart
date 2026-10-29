@@ -4,14 +4,14 @@ import { access, mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { StriartError } from '../../src/errors.js';
+import { StriartError } from '../../src/errors.ts';
 
 vi.mock('../../src/state-protection.ts', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, ensureStateProtection: vi.fn(actual.ensureStateProtection) };
 });
 
-const { withMainLock } = await import('../../src/lock.js');
+const { withMainLock } = await import('../../src/lock.ts');
 const protection = await import('../../src/state-protection.ts');
 const { resetHardenMemo } = await import('../../src/private-fs.ts');
 const ensure = protection.ensureStateProtection;

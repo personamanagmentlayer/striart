@@ -2,11 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { readRegistry } from '../../src/clone.js';
-import { retryQueue, runTask, stopAgent } from '../../src/orchestrator.js';
-import { readQueue } from '../../src/queue.js';
-import { writeJsonAtomic } from '../../src/json-file.js';
+import { initStriart } from '../../src/init.ts';
+import { readRegistry } from '../../src/clone.ts';
+import { retryQueue, runTask, stopAgent } from '../../src/orchestrator.ts';
+import { readQueue } from '../../src/queue.ts';
+import { writeJsonAtomic } from '../../src/json-file.ts';
 
 /** Router mocké : des fichiers DISJOINTS par prompt — --after doit bloquer
  *  seul, sans l'aide d'aucune collision. */

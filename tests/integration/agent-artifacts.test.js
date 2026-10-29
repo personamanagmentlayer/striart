@@ -22,9 +22,9 @@ vi.mock('../../src/terminal.js', async (importOriginal) => ({
   removeAgentTerminalArtifacts: spies.removeAgentTerminalArtifacts,
 }));
 
-const { initStriart } = await import('../../src/init.js');
-const { createAgent, cleanClones, removeAgentFromRegistry } = await import('../../src/clone.js');
-const { stopAgent } = await import('../../src/orchestrator.js');
+const { initStriart } = await import('../../src/init.ts');
+const { createAgent, cleanClones, removeAgentFromRegistry } = await import('../../src/clone.ts');
+const { stopAgent } = await import('../../src/orchestrator.ts');
 
 describe('artefacts périphériques à l’arrêt et au nettoyage (intégration)', () => {
   let repo;

@@ -9,8 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, readdir, stat, utimes, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { createAgent, removeAgentFromRegistry, reuseAgent } from '../../src/clone.js';
+import { initStriart } from '../../src/init.ts';
+import { createAgent, removeAgentFromRegistry, reuseAgent } from '../../src/clone.ts';
 
 // Identité de l'hôte : pilotée par le test (vivant reconnu / mort).
 const verdict = vi.hoisted(() => ({ value: 'alive' }));
@@ -22,7 +22,7 @@ vi.mock('../../src/process-info.ts', async (importOriginal) => ({
   },
 }));
 
-const { pruneWorkspace } = await import('../../src/prune.js');
+const { pruneWorkspace } = await import('../../src/prune.ts');
 
 async function ageDirectory(dir, date) {
   for (const entry of await readdir(dir, { withFileTypes: true })) {

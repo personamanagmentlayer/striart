@@ -1,6 +1,6 @@
 import { setTimeout as sleep } from 'node:timers/promises';
-import { StriartError } from './errors.js';
-import { logger } from './logger.js';
+import { StriartError } from './errors.ts';
+import { logger } from './logger.ts';
 import { isLoopbackHost, netFetch } from './net.ts';
 import { llmConfigForRole } from './orchestration/llm-roles.ts';
 import { LLM_ROLE_NAMES } from './orchestration/settings.ts';
@@ -480,7 +480,7 @@ function classifyError(error) {
   }
   if (error instanceof TypeError) {
     // fetch() lève un TypeError pour toute panne de transport (DNS, refus, reset).
-    const detail = /** @type {any} */ (error).cause?.code ?? error.message;
+    const detail = (error.cause as { code?: string } | undefined)?.code ?? error.message;
     return new LlmCallError(`panne de transport (${detail})`, {
       retryable: true,
       causeCode: 'TRANSPORT',

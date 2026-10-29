@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_CONFIG, validateConfig } from '../../src/config.js';
+import { DEFAULT_CONFIG, validateConfig } from '../../src/config.ts';
 import {
   DEFAULT_TOKENS_SETTINGS,
   isValidTokensSettings,

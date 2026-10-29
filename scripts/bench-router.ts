@@ -65,9 +65,9 @@ try {
   // Pas de .env : les clés viennent peut-être déjà de l'environnement.
 }
 
-const { DEFAULT_CONFIG } = await import('../src/config.js');
+const { DEFAULT_CONFIG } = await import('../src/config.ts');
 const { compileSharedMatcher, DEFAULT_SHARED_PATTERNS } = await import('../src/router-shared.ts');
-const { predictFilesDetailed, WHOLE_REPO } = await import('../src/router.js');
+const { predictFilesDetailed, WHOLE_REPO } = await import('../src/router.ts');
 
 const { values } = parseArgs({
   options: {
@@ -402,7 +402,7 @@ const isShared = compileSharedMatcher(DEFAULT_SHARED_PATTERNS);
 async function analyzeMisses(cases: Case[], outcomes: Outcome[]) {
   const { buildRepoMap } = await import('../src/router-map.ts');
   const { buildRetrievalIndex, retrieve } = await import('../src/router-retrieval.ts');
-  const { buildImportGraph, invertImportGraph } = await import('../src/imports.js');
+  const { buildImportGraph, invertImportGraph } = await import('../src/imports.ts');
   const { expandPrediction } = await import('../src/router-expand.ts');
   const { buildCoChange } = await import('../src/router-cochange.ts');
   const counts = { missed: 0, lexical: 0, structural: 0, invisible: 0 };

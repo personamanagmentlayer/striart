@@ -10,7 +10,7 @@ import {
 } from '../../src/idle/settings.ts';
 import { collectRelaxations } from '../../src/doctor-relaxations.ts';
 import { validateUserConfig } from '../../src/user-config.ts';
-import { errorKindOf } from '../../src/errors.js';
+import { errorKindOf } from '../../src/errors.ts';
 
 describe('idle : réglages', () => {
   it('défauts conservateurs : détection et rapport, fermeture NON activée', () => {

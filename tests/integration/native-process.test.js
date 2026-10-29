@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { nativeProcessInfo, nativeTreeKill, startNativeJob } from '../../src/native.ts';
 import { checkProcessInstance, readProcessChain } from '../../src/process-info.ts';
-import { isProcessAlive, killProcessTree } from '../../src/process-tree.js';
+import { isProcessAlive, killProcessTree } from '../../src/process-tree.ts';
 import { requireNativeBuild } from '../helpers/native-build.js';
 import { REPO_ROOT } from '../helpers/native.js';
 

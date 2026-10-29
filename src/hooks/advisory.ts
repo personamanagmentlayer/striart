@@ -1,8 +1,8 @@
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
-import { readJson } from '../json-file.js';
-import { striartDir } from '../paths.js';
-import { normalizeFilePath } from '../router.js';
+import { readJson } from '../json-file.ts';
+import { striartDir } from '../paths.ts';
+import { normalizeFilePath } from '../router.ts';
 import { inferCloneContext } from '../terminal/clone-context.ts';
 import type { AgentMeta, AgentRegistry } from '../types.js';
 

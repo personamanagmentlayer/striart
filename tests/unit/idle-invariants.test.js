@@ -26,7 +26,7 @@ const code = (text) =>
     .replace(/\s\/\/.*$/gm, '');
 
 describe('GC d’inactivité — ce qu’il ne peut pas faire (invariants structurels)', () => {
-  it('ne prend JAMAIS le verrou principal (ni withMainLock, ni lock.js hors lecture du statut)', async () => {
+  it('ne prend JAMAIS le verrou principal (ni withMainLock, ni lock.ts hors lecture du statut)', async () => {
     for (const { file, text } of await sources()) {
       const c = code(text);
       expect(c, file).not.toMatch(/withMainLock/);
@@ -34,7 +34,7 @@ describe('GC d’inactivité — ce qu’il ne peut pas faire (invariants struct
     }
     // La seule lecture permise du verrou : son statut, en lecture seule.
     const signals = (await sources()).find((s) => s.file === 'signals.ts');
-    expect(signals.text).toMatch(/import \{ readMainLockStatus \} from '\.\.\/lock\.js'/);
+    expect(signals.text).toMatch(/import \{ readMainLockStatus \} from '\.\.\/lock\.ts'/);
   });
 
   it('ne merge, ne rebase, ne supprime et ne retire jamais un clone ou un agent du registre', async () => {

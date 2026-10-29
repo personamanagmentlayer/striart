@@ -10,8 +10,8 @@
  * d'avancer à l'aveugle (un appel LLM dont le relevé échoue est alors rejeté,
  * une session dont les cumuls sont illisibles ne démarre pas).
  */
-import { StriartError } from '../errors.js';
-import { logger } from '../logger.js';
+import { StriartError } from '../errors.ts';
+import { logger } from '../logger.ts';
 import type { TokensSettings } from './settings.ts';
 
 export const ACCOUNTING_FAILED_CODE = 'TOKEN_ACCOUNTING_FAILED';

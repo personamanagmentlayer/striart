@@ -8,9 +8,9 @@ import {
   mockRouter,
   writeStriartConfig,
 } from '../helpers/orchestration.js';
-import { initStriart } from '../../src/init.js';
-import { readRegistry } from '../../src/clone.js';
-import { applyPlan, stopAgent } from '../../src/orchestrator.js';
+import { initStriart } from '../../src/init.ts';
+import { readRegistry } from '../../src/clone.ts';
+import { applyPlan, stopAgent } from '../../src/orchestrator.ts';
 import { collectStatus } from '../../src/status.ts';
 
 const exists = async (p) => Boolean(await stat(p).catch(() => null));

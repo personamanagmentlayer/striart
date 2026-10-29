@@ -20,9 +20,9 @@
 import { appendFile, open, readFile, readdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { UsageRecord, UsageRole, UsageSource } from '../types.js';
-import { striartDir } from '../paths.js';
-import { withTransientRetry } from '../json-file.js';
-import { logger } from '../logger.js';
+import { striartDir } from '../paths.ts';
+import { withTransientRetry } from '../json-file.ts';
+import { logger } from '../logger.ts';
 import { mkdirPrivate } from '../private-fs.ts';
 
 export function usageDir(root: string): string {

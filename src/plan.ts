@@ -1,5 +1,5 @@
 import { parse } from 'yaml';
-import { StriartError } from './errors.js';
+import { StriartError } from './errors.ts';
 import { isExecutableName } from './plan-command.ts';
 import { MAX_TIMER_MS } from './timer-limits.ts';
 import { validatePlanV2 } from './orchestration/plan-schema.ts';

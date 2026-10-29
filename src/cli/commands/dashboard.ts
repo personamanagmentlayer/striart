@@ -1,7 +1,7 @@
 import { once } from 'node:events';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { assertInitialized } from '../../clone.js';
-import { loadConfig } from '../../config.js';
+import { assertInitialized } from '../../clone.ts';
+import { loadConfig } from '../../config.ts';
 import {
   dashboardDaemonStatus,
   publishDaemonInfo,
@@ -9,8 +9,8 @@ import {
   releaseDaemonPidFile,
   startDashboardDaemon,
   stopDashboardDaemon,
-} from '../../daemon.js';
-import { StriartError } from '../../errors.js';
+} from '../../daemon.ts';
+import { StriartError } from '../../errors.ts';
 import { SCHEMA_VERSION } from '../../control/envelope.ts';
 import { assertHumanPlane } from '../../control/guard.ts';
 import { issueSignInLink, portOfUrl } from '../../control/link.ts';
@@ -114,7 +114,7 @@ export const dashboard: CommandModule<DashboardInput, DashboardData> = {
       return { data: { action: 'daemon', ...started, url, ...signIn }, outcome: 'ok', warnings };
     }
 
-    const { startDashboard } = await import('../../dashboard.js');
+    const { startDashboard } = await import('../../dashboard.ts');
     const server = await startDashboard({ root, port: input.port });
     const address = server.address();
     const port = typeof address === 'object' && address ? address.port : input.port;

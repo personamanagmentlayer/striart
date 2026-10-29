@@ -3,7 +3,7 @@
  * `agents/`, qui est le worktree du clone : y écrire polluerait l'agent).
  */
 import path from 'node:path';
-import { striartDir } from '../paths.js';
+import { striartDir } from '../paths.ts';
 
 export const idleDir = (root: string): string => path.join(striartDir(root), 'idle');
 

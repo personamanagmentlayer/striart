@@ -11,8 +11,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { runDoctor } from '../../src/doctor.js';
+import { initStriart } from '../../src/init.ts';
+import { runDoctor } from '../../src/doctor.ts';
 import { en } from '../../src/cli/i18n/en.ts';
 
 const HOLDER = fileURLToPath(new URL('../helpers/lock-holder.mjs', import.meta.url));

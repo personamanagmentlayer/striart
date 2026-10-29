@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { openAgentTerminal, removeAgentTerminalArtifacts } from '../../src/terminal.js';
+import { openAgentTerminal, removeAgentTerminalArtifacts } from '../../src/terminal.ts';
 import { warpDirectories, warpTabConfigName } from '../../src/terminal/warp.ts';
 
 // En intégration : la Tab Config est réellement écrite sur disque (dossier

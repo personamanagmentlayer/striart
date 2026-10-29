@@ -1,12 +1,21 @@
 import { mkdir, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { striartDir } from './paths.js';
-import { StriartError, ticketUnknownError } from './errors.js';
-import { removeTreeWithBackoff, withTransientRetry, writeJsonAtomic } from './json-file.js';
+import { striartDir } from './paths.ts';
+import { StriartError, ticketUnknownError } from './errors.ts';
+import { removeTreeWithBackoff, withTransientRetry, writeJsonAtomic } from './json-file.ts';
 import { writePrivateFile } from './private-fs.ts';
 import { redactSecrets, secretValuesFromEnv } from './redact-secrets.ts';
 import { ensureStateProtection } from './state-protection.ts';
+import type {
+  ConflictClass,
+  CorruptTicket,
+  GateFailureCode,
+  ProtectedPathChange,
+  Ticket,
+  TicketEntry,
+  TicketReason,
+} from './types.js';
 
 /**
  * Dossier de ticket sans ticket.json depuis plus longtemps que ça : débris
@@ -56,7 +65,7 @@ function ticketPrefix(ticket, filePath) {
  * a tourné), écrites à côté du ticket pour la résolution humaine.
  */
 export async function createConflictTicket(
-  root,
+  root: string,
   {
     agent,
     branch,
@@ -70,8 +79,27 @@ export async function createConflictTicket(
     protectedChanges = [],
     mergeConflictedFiles = null,
     gate = null,
+  }: {
+    agent: string;
+    branch: string;
+    sha: string;
+    reason: TicketReason;
+    conflictedFiles?: string[];
+    prompt?: string | null;
+    log?: string;
+    resolutions?: Array<{
+      path: string;
+      base: string | null;
+      ours: string | null;
+      theirs: string | null;
+      llmAttempt?: string | null;
+    }>;
+    unmergeable?: Array<{ path: string } & ConflictClass>;
+    protectedChanges?: ProtectedPathChange[];
+    mergeConflictedFiles?: string[] | null;
+    gate?: { code?: GateFailureCode; orphanPids?: number[]; truncated?: boolean } | null;
   },
-) {
+): Promise<Ticket> {
   // Un même commit d'agent re-tenté (watch qui re-déclenche, merge relancé à
   // la main) ne crée pas un ticket de plus : il met à jour le ticket OUVERT
   // qui le concerne déjà. Sans ça, trois tentatives du même conflit
@@ -97,7 +125,7 @@ export async function createConflictTicket(
     reason, // voir TicketReason dans types.d.ts
     // Convention de nommage des fichiers du ticket (safeFileName) : 2 = injective ;
     // un ticket rafraîchi garde celle de sa création (ses .resolved existants).
-    fileNaming: /** @type {1 | 2} */ (existing ? (existing.fileNaming === 2 ? 2 : 1) : 2),
+    fileNaming: (existing ? (existing.fileNaming === 2 ? 2 : 1) : 2) as 1 | 2,
     conflictedFiles,
     // Conflits hors de portée du Merger (delete/binaire/lockfile/oversize/opaque),
     // avec la nature de chacun — guide la résolution humaine.
@@ -262,25 +290,18 @@ async function loadTicketFile(ticketDir, dirMtimeMs) {
  * Refuse toute exploitation du contenu d'un ticket CORRUPT : ses fichiers en
  * conflit et son commit sont inconnus, donc rien ne peut être lu, préparé ni
  * appliqué — seulement fermé.
- * @param {import('./types.js').TicketEntry} ticket
- * @returns {asserts ticket is import('./types.js').Ticket}
  */
-function assertTicketUsable(ticket) {
+function assertTicketUsable(ticket: TicketEntry): asserts ticket is Ticket {
   if (!isReadableTicket(ticket)) {
-    throw ticketCorruptError(/** @type {import('./types.js').CorruptTicket} */ (ticket));
+    throw ticketCorruptError(ticket);
   }
 }
 
-/**
- * @param {import('./types.js').TicketEntry} ticket
- * @returns {ticket is import('./types.js').Ticket}
- */
-export function isReadableTicket(ticket) {
+export function isReadableTicket(ticket: TicketEntry): ticket is Ticket {
   return ticket.status !== 'CORRUPT';
 }
 
-/** @param {import('./types.js').CorruptTicket} ticket */
-function ticketCorruptError(ticket) {
+function ticketCorruptError(ticket: CorruptTicket) {
   return new StriartError(
     `Ticket "${ticket.id}" illisible (${ticket.cause}) : son contenu ne peut être ni lu, ni préparé, ni appliqué. ` +
       'Inspecte son dossier, puis ferme-le.',
@@ -331,10 +352,22 @@ export function assertTicketPathSafe(ticketId, filePath, root = null) {
  * Détail complet d'un ticket pour la résolution humaine : métadonnées +
  * contenu des 3 versions (et de la tentative LLM) de chaque fichier en
  * conflit + log du Test Gate. Les fichiers absents valent null.
- * @param {string} root @param {string} ticketId
- * @returns {Promise<import('./types.js').Ticket & {resolutions: Array<{path: string, base: string|null, ours: string|null, theirs: string|null, llmAttempt: string|null}>, log: string|null}>}
  */
-export async function readTicketDetail(root, ticketId) {
+export async function readTicketDetail(
+  root: string,
+  ticketId: string,
+): Promise<
+  Ticket & {
+    resolutions: Array<{
+      path: string;
+      base: string | null;
+      ours: string | null;
+      theirs: string | null;
+      llmAttempt: string | null;
+    }>;
+    log: string | null;
+  }
+> {
   const tickets = await listConflictTickets(root, { includeResolved: true });
   const ticket = tickets.find((t) => t.id === ticketId);
   if (!ticket) {
@@ -463,11 +496,19 @@ export async function readResolutionInputs(root, ticketId) {
  * scaffold automatique la lui ferait approuver sans lecture (S-I2). L'humain
  * écrit le contenu, ou nomme le chemin dans `acceptTheirs`. Les chemins
  * retenus sont rendus avec `held: true`.
- * @param {string} root @param {string} ticketId
- * @param {{acceptTheirs?: readonly string[]}} [options]
- * @returns {Promise<Array<{path: string, created: boolean, source: 'theirs' | 'ours' | 'base' | null, held?: boolean}>>}
  */
-export async function prepareResolutionScaffold(root, ticketId, options = {}) {
+export async function prepareResolutionScaffold(
+  root: string,
+  ticketId: string,
+  options: { acceptTheirs?: readonly string[] } = {},
+): Promise<
+  Array<{
+    path: string;
+    created: boolean;
+    source: 'theirs' | 'ours' | 'base' | null;
+    held?: boolean;
+  }>
+> {
   const tickets = await listConflictTickets(root, { includeResolved: true });
   const ticket = tickets.find((t) => t.id === ticketId);
   if (!ticket) {
@@ -497,7 +538,7 @@ export async function prepareResolutionScaffold(root, ticketId, options = {}) {
       if (protectedPaths.has(filePath) && !accepted.has(filePath)) {
         return { path: filePath, created: false, source: null, held: true };
       }
-      for (const source of /** @type {const} */ (['theirs', 'ours', 'base'])) {
+      for (const source of ['theirs', 'ours', 'base'] as const) {
         const content = await readFile(path.join(ticket.dir, `${prefix}.${source}`)).catch(
           () => null,
         );

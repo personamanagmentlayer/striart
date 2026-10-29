@@ -1,11 +1,11 @@
 import { readFile, readdir, rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { writeJsonAtomic } from './json-file.js';
-import { striartDir } from './paths.js';
+import { writeJsonAtomic } from './json-file.ts';
+import { striartDir } from './paths.ts';
 import { mkdirPrivate } from './private-fs.ts';
-import { StriartError } from './errors.js';
-import { logger } from './logger.js';
+import { StriartError } from './errors.ts';
+import { logger } from './logger.ts';
 import { sanitizeAgentText } from './collab/message.ts';
 import { elicitationSchemaProblem, validateElicitationContent } from './acp/elicitation-schema.ts';
 

@@ -6,9 +6,9 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { simpleGit } from 'simple-git';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { createAgent } from '../../src/clone.js';
-import { DEFAULT_CONFIG } from '../../src/config.js';
+import { initStriart } from '../../src/init.ts';
+import { createAgent } from '../../src/clone.ts';
+import { DEFAULT_CONFIG } from '../../src/config.ts';
 
 /**
  * Profils proposés par la complétion : ceux par défaut (catalogue de presets

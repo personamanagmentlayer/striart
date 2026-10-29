@@ -188,7 +188,7 @@ async function rank(p: BuildTreeParams, grandTotal: number): Promise<TreeResult>
         .slice(0, 8)
         .map(([f]) => f);
       if (seeds.length > 0) {
-        const { buildImportGraph } = await import('./imports.js');
+        const { buildImportGraph } = await import('./imports.ts');
         const codeFiles = files.slice(0, 4000);
         const graph = (await buildImportGraph(p.root ?? '', codeFiles, p.sources ?? null)) as Map<
           string,

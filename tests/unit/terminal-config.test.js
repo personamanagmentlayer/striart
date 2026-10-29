@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { validateConfig, DEFAULT_CONFIG } from '../../src/config.js';
+import { validateConfig, DEFAULT_CONFIG } from '../../src/config.ts';
 import {
   DEFAULT_TERMINAL_SETTINGS,
   isValidTerminalSettings,

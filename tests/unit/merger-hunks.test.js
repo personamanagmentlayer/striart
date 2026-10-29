@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { maxMergeInputChars, parseRegionResponse, semanticMerge } from '../../src/merger.js';
+import { maxMergeInputChars, parseRegionResponse, semanticMerge } from '../../src/merger.ts';
 
 const CONFIG = {
   ollamaHost: 'http://localhost:11434',

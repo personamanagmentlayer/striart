@@ -1,4 +1,4 @@
-import { stopAgent } from '../../orchestrator.js';
+import { stopAgent } from '../../orchestrator.ts';
 import type { AttendedSession } from '../../pty-host.ts';
 import type { CommandModule, CommandWarning } from '../context.ts';
 import { renderStartedTasks, withSessions } from './queue.ts';

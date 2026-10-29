@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
-import { LOG_REDACT_PATHS, logRedactionOptions, scrubForLog } from '../../src/logger.js';
+import { LOG_REDACT_PATHS, logRedactionOptions, scrubForLog } from '../../src/logger.ts';
 
 const require = createRequire(import.meta.url);
 const pino = require('pino');

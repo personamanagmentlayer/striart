@@ -14,7 +14,7 @@
  */
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { logger } from '../logger.js';
+import { logger } from '../logger.ts';
 import { outputBeatPath } from './paths.ts';
 
 export const DEFAULT_BEAT_INTERVAL_MS = 10_000;

@@ -1,4 +1,4 @@
-import { logger } from './logger.js';
+import { logger } from './logger.ts';
 import { nativeTreeKill } from './native.ts';
 
 /**
@@ -83,11 +83,10 @@ export async function killProcessTree(
   }
   try {
     const result =
-      /** @type {{failed?: {pid: number, reason: string}[], complete?: boolean, survivors?: {pid: number}[]}} */ (
-        await (rootStartedMs === null
-          ? treeKill(subprocess.pid)
-          : treeKill(subprocess.pid, { rootStartedMs }))
-      );
+      /** @type {{failed?: {pid: number, reason: string}[], complete?: boolean, survivors?: {pid: number}[]}} */ await (rootStartedMs ===
+      null
+        ? treeKill(subprocess.pid)
+        : treeKill(subprocess.pid, { rootStartedMs }));
     if (result?.complete === false) {
       // L'arbre n'est PAS éteint : jamais présenté comme un succès. Le
       // chemin de nettoyage ne lève pas (voir plus haut), mais l'erreur est

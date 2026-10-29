@@ -1,8 +1,8 @@
 import tls from 'node:tls';
 import { readFile, stat } from 'node:fs/promises';
 import { ProxyAgent, fetch as undiciFetch } from 'undici';
-import { StriartError } from './errors.js';
-import { logger } from './logger.js';
+import { StriartError } from './errors.ts';
+import { logger } from './logger.ts';
 import { readUserConfig, type NetworkConfig, type UserConfig } from './user-config.ts';
 
 /**

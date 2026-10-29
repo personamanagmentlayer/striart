@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { logger } from '../../src/logger.js';
+import { logger } from '../../src/logger.ts';
 import { logMcpScope } from '../../src/mcp/scope.ts';
 import { detectCapabilities } from '../../src/cli/caps.ts';
 import { Output } from '../../src/cli/output.ts';
@@ -11,7 +11,7 @@ import { isVersionRequest } from '../../src/cli/main.ts';
 import { en } from '../../src/cli/i18n/en.ts';
 import { fr } from '../../src/cli/i18n/fr.ts';
 import { validatePlan } from '../../src/plan.ts';
-import { errorKindOf } from '../../src/errors.js';
+import { errorKindOf } from '../../src/errors.ts';
 
 /**
  * Anomalies de la campagne de recette (CLI). Ces tests ont été écrits AVANT les correctifs

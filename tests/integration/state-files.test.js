@@ -4,17 +4,17 @@ import { mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from '
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readJson, sweepOrphanTempFiles, updateJsonLocked } from '../../src/json-file.js';
+import { readJson, sweepOrphanTempFiles, updateJsonLocked } from '../../src/json-file.ts';
 import { readStateLockStatus } from '../../src/state-lock.ts';
-import { readQueue } from '../../src/queue.js';
-import { readMainSession, startMainSession, stopMainSession } from '../../src/main-session.js';
+import { readQueue } from '../../src/queue.ts';
+import { readMainSession, startMainSession, stopMainSession } from '../../src/main-session.ts';
 import {
   closeConflictTicket,
   listConflictTickets,
   prepareResolutionScaffold,
   readResolutionInputs,
   readTicketDetail,
-} from '../../src/conflicts.js';
+} from '../../src/conflicts.ts';
 import { createRotatingFileSink, rotateLogFileIfNeeded } from '../../src/log-rotation.ts';
 
 const WORKER = fileURLToPath(new URL('../helpers/state-worker.mjs', import.meta.url));

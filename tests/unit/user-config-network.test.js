@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_USER_CONFIG, validateUserConfig } from '../../src/user-config.ts';
-import { validateConfig } from '../../src/config.js';
+import { validateConfig } from '../../src/config.ts';
 import { filterEnvFile } from '../../src/cli/env-file.ts';
 
 const net = (network) => validateUserConfig({ network }).network;

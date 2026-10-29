@@ -1,10 +1,10 @@
 import net from 'node:net';
 import { chmod, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
-import { writeJsonAtomic } from '../json-file.js';
-import { logger } from '../logger.js';
+import { writeJsonAtomic } from '../json-file.ts';
+import { logger } from '../logger.ts';
 import { mkdirPrivate } from '../private-fs.ts';
-import { isProcessAlive } from '../process-tree.js';
+import { isProcessAlive } from '../process-tree.ts';
 import { clearStopRequest, watchStopRequest } from '../stop-request.ts';
 import {
   HOST_PROTOCOL_VERSION,

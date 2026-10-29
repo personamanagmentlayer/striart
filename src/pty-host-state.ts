@@ -8,7 +8,7 @@
 import { createHash } from 'node:crypto';
 import { open, readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { MAX_UNIX_SOCKET_PATH, privateTmpDir, ptyDir } from './paths.js';
+import { MAX_UNIX_SOCKET_PATH, privateTmpDir, ptyDir } from './paths.ts';
 import { checkProcessInstance } from './process-info.ts';
 import type { ExpectedStriartProcess } from './process-info.ts';
 

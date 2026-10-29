@@ -21,9 +21,9 @@
  */
 import { collabRulesInSessionInstructions } from '../agents/instructions.ts';
 import { commitSessionLeftovers } from '../commit-policy.ts';
-import { StriartError } from '../errors.js';
-import { logger } from '../logger.js';
-import { DEFAULT_PROFILE, resolveAgentProfile } from '../session.js';
+import { StriartError } from '../errors.ts';
+import { logger } from '../logger.ts';
+import { DEFAULT_PROFILE, resolveAgentProfile } from '../session.ts';
 import {
   closeCollabGroup,
   createCollabGroup,

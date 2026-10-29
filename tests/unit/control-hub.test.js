@@ -232,7 +232,7 @@ describe('hub du protocole de contrôle', () => {
   });
 
   it('lock:contention (mesure du verrou, L8) ne déclenche ni recollecte ni notice', async () => {
-    const { emitStriartEvent } = await import('../../src/events.js');
+    const { emitStriartEvent } = await import('../../src/events.ts');
     hub = new ControlHub({
       root: '/r',
       collect: async () => ({ generatedAt: 'x', agents: [] }),

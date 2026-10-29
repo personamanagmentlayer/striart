@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { readRegistry } from '../../src/clone.js';
-import { applyPlan } from '../../src/orchestrator.js';
-import { readQueue } from '../../src/queue.js';
+import { initStriart } from '../../src/init.ts';
+import { readRegistry } from '../../src/clone.ts';
+import { applyPlan } from '../../src/orchestrator.ts';
+import { readQueue } from '../../src/queue.ts';
 
 function mockRouter(filesByPrompt) {
   vi.stubGlobal(

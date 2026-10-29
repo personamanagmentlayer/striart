@@ -4,7 +4,7 @@
  * garde le repli sur le texte pour une cause sans code.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { llmGenerate } from '../../src/llm.js';
+import { llmGenerate } from '../../src/llm.ts';
 import { resetCircuitBreakers } from '../../src/llm-resilience.ts';
 import { en } from '../../src/cli/i18n/en.ts';
 

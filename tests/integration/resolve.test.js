@@ -3,11 +3,11 @@ import { chmod, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { simpleGit } from 'simple-git';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { createAgent, readRegistry, updateAgentMeta } from '../../src/clone.js';
-import { applyTicketResolution, mergeAgentCommit, stopAgent } from '../../src/orchestrator.js';
-import { readState, recordSemanticFailure } from '../../src/state.js';
-import { listMergeHistory } from '../../src/history.js';
+import { initStriart } from '../../src/init.ts';
+import { createAgent, readRegistry, updateAgentMeta } from '../../src/clone.ts';
+import { applyTicketResolution, mergeAgentCommit, stopAgent } from '../../src/orchestrator.ts';
+import { readState, recordSemanticFailure } from '../../src/state.ts';
+import { listMergeHistory } from '../../src/history.ts';
 import {
   createConflictTicket,
   listConflictTickets,
@@ -15,7 +15,7 @@ import {
   readResolutionInputs,
   readTicketDetail,
   safeFileName,
-} from '../../src/conflicts.js';
+} from '../../src/conflicts.ts';
 
 const GATE_OK = 'node -e "process.exit(0)"';
 const GATE_KO = 'node -e "console.error(\'gate rouge\'); process.exit(1)"';

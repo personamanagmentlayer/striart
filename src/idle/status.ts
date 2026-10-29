@@ -8,7 +8,7 @@
  * parcours). Ne throw jamais : une panne se déclare (`available: false`), elle
  * ne casse pas la vue d'état.
  */
-import { loadConfig } from '../config.js';
+import { loadConfig } from '../config.ts';
 import { readIdleState } from './state.ts';
 import { sweepIdle } from './sweep.ts';
 import type { SweepReport } from './sweep.ts';

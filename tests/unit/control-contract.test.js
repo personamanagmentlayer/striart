@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFile } from 'node:fs/promises';
-import { StriartError } from '../../src/errors.js';
+import { StriartError } from '../../src/errors.ts';
 import { en } from '../../src/cli/i18n/en.ts';
 import { fr } from '../../src/cli/i18n/fr.ts';
 import { errorDocument, errorObject, successDocument } from '../../src/control/envelope.ts';

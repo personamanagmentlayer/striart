@@ -4,11 +4,11 @@ import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
+import { initStriart } from '../../src/init.ts';
 import { appendUsage } from '../../src/tokens/ledger.ts';
-import { pruneWorkspace } from '../../src/prune.js';
+import { pruneWorkspace } from '../../src/prune.ts';
 import { collectStatus } from '../../src/status.ts';
-import { runDoctor } from '../../src/doctor.js';
+import { runDoctor } from '../../src/doctor.ts';
 
 const CLI = fileURLToPath(new URL('../../src/cli.js', import.meta.url));
 

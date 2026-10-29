@@ -16,8 +16,8 @@ import {
   isValidCommitAuthor,
   isValidCommitMessageTemplate,
 } from '../../src/agents/profile-schema.ts';
-import { DEFAULT_CONFIG, validateConfig } from '../../src/config.js';
-import { StriartError } from '../../src/errors.js';
+import { DEFAULT_CONFIG, validateConfig } from '../../src/config.ts';
+import { StriartError } from '../../src/errors.ts';
 
 const argOf = (profile, flag) => profile.args[profile.args.indexOf(flag) + 1];
 
