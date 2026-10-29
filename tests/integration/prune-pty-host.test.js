@@ -11,6 +11,7 @@ import path from 'node:path';
 import { createTempRepo } from '../helpers/temp-repo.js';
 import { initStriart } from '../../src/init.ts';
 import { createAgent, removeAgentFromRegistry, reuseAgent } from '../../src/clone.ts';
+import { ptyHostPidFilePath } from '../../src/pty-host-state.ts';
 
 // Identité de l'hôte : pilotée par le test (vivant reconnu / mort).
 const verdict = vi.hoisted(() => ({ value: 'alive' }));
@@ -45,7 +46,13 @@ describe('prune — hôte de pty vivant', () => {
   }
 
   async function publishHost(name, content) {
-    const pidFile = path.join(repo.root, '.striart', 'pty', name, 'host.pid');
+    // Pas forcément `.striart/pty/<name>/` : `ptyHostStateDir` bascule sur un
+    // dossier de repli (hors du dépôt) quand ce chemin naturel dépasse la
+    // limite des sockets Unix — déterministe sur les runners macOS de CI
+    // (`os.tmpdir()` y est déjà long). Publier au chemin que l'implémentation
+    // RÉELLE lit (`ptyHostPidFilePath`), jamais le chemin naturel codé en dur,
+    // sous peine de tester un hôte que `pruneWorkspace` ne verra jamais.
+    const pidFile = ptyHostPidFilePath(repo.root, name);
     await mkdir(path.dirname(pidFile), { recursive: true });
     await writeFile(pidFile, content);
   }
