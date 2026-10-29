@@ -1,0 +1,188 @@
+name: Release
+
+# Déclenchée par un tag annoté vX.Y.Z ou vX.Y.Z-rc.N poussé sur un commit déjà
+# testé. Elle ne publie RIEN sur un registre de paquets : elle vérifie, construit
+# les archives signées, et prépare une release GitHub en BROUILLON que le
+# mainteneur relit puis publie à la main.
+#
+# Chaîne : verify (aucun secret) → archives (secret de signature, environment
+# « release » à relecteurs requis) → draft (seul job qui écrit des releases).
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+'
+
+# Moindre privilège : chaque job déclare ce dont il a besoin en plus.
+permissions:
+  contents: read
+
+# Une release à la fois par tag ; jamais annulée en cours de route.
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+# Actions épinglées par SHA de commit (le commentaire donne la version) ; les
+# mêmes SHA que ci.yml. Le nom du tag n'est jamais interpolé dans un script :
+# il passe par une variable d'environnement (aucune injection par nom de tag).
+
+jobs:
+  verify:
+    name: vérification
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      ci-run: ${{ steps.ci.outputs.run }}
+      prerelease: ${{ steps.kind.outputs.prerelease }}
+    env:
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+
+      - run: npm ci --ignore-scripts
+
+      # Tag = version de package.json = entrée datée du CHANGELOG, tag annoté
+      # sur HEAD, version qui progresse, commit atteignable depuis une branche
+      # de release, arbre propre, et CI verte sur CE commit (--require-ci : si
+      # l'état est invérifiable, la release est refusée).
+      - name: Cohérence de la release
+        run: node scripts/release-check.ts --tag "$TAG" --require-ci --notes release-notes.md
+
+      # Le job « ci-ok » de ci.yml est le contrôle unique : on retrouve l'exécution
+      # verte de ce commit pour en réutiliser les binaires natifs (ce qui est
+      # livré est ce qui a été testé, pas une reconstruction).
+      - name: Exécution de CI verte de ce commit
+        id: ci
+        run: |
+          run_id=$(gh run list --workflow ci.yml --commit "$GITHUB_SHA" --status success \
+            --json databaseId --jq '.[0].databaseId')
+          if [ -z "$run_id" ] || [ "$run_id" = "null" ]; then
+            echo "::error::aucune exécution de ci.yml verte pour $GITHUB_SHA"
+            exit 1
+          fi
+          echo "run=$run_id" >> "$GITHUB_OUTPUT"
+
+      - name: Nature de la release
+        id: kind
+        run: |
+          case "$TAG" in
+            *-rc.*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-notes
+          path: release-notes.md
+          if-no-files-found: error
+
+  archives:
+    name: archives signées
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+    env:
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: npm
+
+      # Pas de scripts de cycle de vie des dépendances dans le job qui détient
+      # la clé de signature (chaîne d'approvisionnement).
+      - run: npm ci --ignore-scripts
+
+      - name: Binaires natifs de la CI verte
+        env:
+          CI_RUN: ${{ needs.verify.outputs.ci-run }}
+        run: |
+          gh run download "$CI_RUN" --pattern 'native-*' --dir native-dist
+          for dir in native-dist/native-*; do mv "$dir" "native-dist/${dir#native-dist/native-}"; done
+          ls -R native-dist
+
+      # Les secrets ne sont exposés qu'aux deux étapes qui signent ; leur
+      # valeur n'est jamais affichée (aucun `set -x`, aucun echo de l'environnement).
+      # SOURCE_DATE_EPOCH = date du commit : l'horodatage de la signature est
+      # fixe, donc deux constructions donnent des archives identiques.
+      - name: Archive reproductible (deux constructions identiques)
+        env:
+          STRIART_NATIVE_SIGNING_KEY: ${{ secrets.STRIART_NATIVE_SIGNING_KEY }}
+          STRIART_NATIVE_SIGNING_KEY_PASSWORD: ${{ secrets.STRIART_NATIVE_SIGNING_KEY_PASSWORD }}
+        run: node scripts/release-check.ts --tag "$TAG" --repro --native-dir native-dist
+
+      - name: Archives signées, SBOM, empreintes
+        env:
+          STRIART_NATIVE_SIGNING_KEY: ${{ secrets.STRIART_NATIVE_SIGNING_KEY }}
+          STRIART_NATIVE_SIGNING_KEY_PASSWORD: ${{ secrets.STRIART_NATIVE_SIGNING_KEY_PASSWORD }}
+        run: |
+          if [ -z "$STRIART_NATIVE_SIGNING_KEY" ]; then
+            echo "::error::secret STRIART_NATIVE_SIGNING_KEY absent : pas de release non signée"
+            exit 1
+          fi
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct HEAD)"
+          npm run pack:release -- --native-dir native-dist --out-dir dist --json > dist-result.json
+          (cd dist && sha256sum -- *.tgz *.cdx.json > SHA256SUMS && cat SHA256SUMS)
+
+      - name: Attestation de provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.tgz
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-dist
+          path: |
+            dist/*.tgz
+            dist/*.cdx.json
+            dist/SHA256SUMS
+          if-no-files-found: error
+
+  draft:
+    name: release en brouillon
+    needs: [verify, archives]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+      PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-notes
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-dist
+          path: dist
+
+      # Brouillon : rien n'est visible publiquement tant que le mainteneur ne l'a
+      # pas relu et publié. --verify-tag refuse de créer un tag à la volée.
+      - name: Créer la release (brouillon)
+        run: |
+          flags=""
+          if [ "$PRERELEASE" = "true" ]; then flags="--prerelease"; fi
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
+            --title "$TAG" --notes-file release-notes.md $flags dist/*

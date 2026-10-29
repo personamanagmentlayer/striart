@@ -3,8 +3,8 @@ import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { simpleGit } from 'simple-git';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { createAgent, updateAgentMeta } from '../../src/clone.js';
+import { initStriart } from '../../src/init.ts';
+import { createAgent, updateAgentMeta } from '../../src/clone.ts';
 import { startWatchLoop } from '../../src/watch-loop.ts';
 
 const GATE_OK = 'node -e "process.exit(0)"';

@@ -1,16 +1,17 @@
 import { spawn } from 'node:child_process';
 import { openSync, closeSync } from 'node:fs';
-import { chmod, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { StriartError } from '../errors.js';
-import { writeJsonAtomic } from '../json-file.js';
+import { StriartError } from '../errors.ts';
+import { writeJsonAtomic } from '../json-file.ts';
+import { mkdirPrivate } from '../private-fs.ts';
 import { checkProcessInstance, readProcessInfos } from '../process-info.ts';
-import { isProcessAlive, killProcessTree } from '../process-tree.js';
+import { isProcessAlive, killProcessTree } from '../process-tree.ts';
 import { clearStopRequest, requestStop } from '../stop-request.ts';
 import { validateAgentName } from '../agent-name.ts';
-import { sessionLogPath } from '../session.js';
+import { sessionLogPath } from '../session.ts';
 import {
   HOST_PROTOCOL_VERSION,
   acpBusTokenPath,
@@ -212,7 +213,7 @@ export async function launchAcpHost(
     );
   }
   await releaseHostFiles(root, agent);
-  await mkdir(acpHostDir(root, agent), { recursive: true });
+  await mkdirPrivate(acpHostDir(root, agent));
 
   const ownerToken = newToken();
   const busToken = newToken();
@@ -237,7 +238,7 @@ export async function launchAcpHost(
   };
 
   const hostLog = acpHostLogPath(root, agent);
-  await mkdir(path.dirname(hostLog), { recursive: true });
+  await mkdirPrivate(path.dirname(hostLog));
   const logFd = openSync(hostLog, 'a');
   let child;
   try {

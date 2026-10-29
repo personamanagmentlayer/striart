@@ -1,13 +1,14 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { DEFAULT_CONFIG, loadConfig } from '../config.js';
-import { StriartError } from '../errors.js';
-import { writeJsonAtomic } from '../json-file.js';
-import { logger } from '../logger.js';
-import { ensureCloneExclude } from '../memory.js';
+import { DEFAULT_CONFIG, loadConfig } from '../config.ts';
+import { StriartError } from '../errors.ts';
+import { writeJsonAtomic } from '../json-file.ts';
+import { logger } from '../logger.ts';
+import { ensureCloneExclude } from '../memory.ts';
+import { mkdirPrivate } from '../private-fs.ts';
 import { safeEntryKind, safeReadText, safeRemove, safeWriteFile } from '../safe-write.ts';
-import { striartDir } from '../paths.js';
+import { striartDir } from '../paths.ts';
 import { resolveTokensSettings } from '../tokens/settings.ts';
 import { resolveCollabSettings } from '../orchestration/settings.ts';
 import type {
@@ -218,7 +219,7 @@ async function agentRegistryInfo(
   let branch = 'your current task branch';
   let collab: AgentCollabInfo | null = null;
   try {
-    const { readRegistry } = await import('../clone.js');
+    const { readRegistry } = await import('../clone.ts');
     const meta = (await readRegistry(root))[agent];
     if (typeof meta?.branch === 'string' && meta.branch.length > 0) branch = meta.branch;
     collab = meta?.collab ?? null;
@@ -478,7 +479,7 @@ export async function planArgvInstructions({
       );
     }
     const file = sessionInstructionsPath(root, agent, taskId);
-    await mkdir(path.dirname(file), { recursive: true });
+    await mkdirPrivate(path.dirname(file));
     await writeFile(file, instructions, 'utf8');
     return {
       channel,
@@ -531,7 +532,7 @@ export async function writeSessionSettings({
     json.claudeMdExcludes = [...given, ...parentInstructionExcludes(root, cwd)];
   }
   const file = sessionSettingsPath(root, agent, taskId);
-  await mkdir(path.dirname(file), { recursive: true });
+  await mkdirPrivate(path.dirname(file));
   await writeFile(file, `${JSON.stringify(json, null, 2)}\n`, 'utf8');
   return [spec.flag, file];
 }
@@ -620,13 +621,13 @@ function isSafeRelative(p: string): boolean {
 }
 
 async function isTracked(clonePath: string, rel: string): Promise<boolean> {
-  const { cloneGit } = await import('../clone.js');
+  const { cloneGit } = await import('../clone.ts');
   const out = await cloneGit(clonePath).raw(['ls-files', '--', rel]);
   return out.trim().length > 0;
 }
 
 async function showAtHead(clonePath: string, rel: string): Promise<string | null> {
-  const { cloneGit } = await import('../clone.js');
+  const { cloneGit } = await import('../clone.ts');
   try {
     return await cloneGit(clonePath).show([`HEAD:${rel}`]);
   } catch {
@@ -725,7 +726,7 @@ async function injectAttended({
       const current = await safeReadText(clonePath, rel);
       if (current !== null && sha256(current) === hash) await safeRemove(clonePath, rel);
     }
-    await mkdir(path.dirname(manifestPath(root, agent)), { recursive: true });
+    await mkdirPrivate(path.dirname(manifestPath(root, agent)));
     await writeJsonAtomic(manifestPath(root, agent), nextManifest);
   };
 

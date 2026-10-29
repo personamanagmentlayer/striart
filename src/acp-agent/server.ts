@@ -15,10 +15,10 @@
  * comme demande d'arbitrage humain.
  */
 import path from 'node:path';
-import { assertInitialized, findRepoRoot } from '../clone.js';
-import { loadConfig } from '../config.js';
-import { StriartError, errorKindOf, publicErrorDetails } from '../errors.js';
-import { logger } from '../logger.js';
+import { assertInitialized, findRepoRoot } from '../clone.ts';
+import { loadConfig } from '../config.ts';
+import { StriartError, errorKindOf, publicErrorDetails } from '../errors.ts';
+import { logger } from '../logger.ts';
 import type { Messages } from '../cli/i18n/index.ts';
 import type { StriartConfig } from '../types.js';
 import { ACP_PROTOCOL_VERSION } from '../acp/protocol.ts';

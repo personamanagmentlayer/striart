@@ -1,4 +1,4 @@
-import { StriartError } from './errors.js';
+import { StriartError } from './errors.ts';
 
 /**
  * Nom d'agent : alphanumérique en tête, puis alphanumérique, tiret ou

@@ -17,7 +17,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os';
 import path from 'node:path';
 import { execa } from 'execa';
-import { isProcessAlive } from '../../src/process-tree.js';
+import { isProcessAlive } from '../../src/process-tree.ts';
 
 const mocks = vi.hoisted(() => ({
   /** @type {null | ((file: string) => Error | null)} */
@@ -65,7 +65,7 @@ vi.mock('../../src/process-info.ts', async (importOriginal) => ({
   checkProcessInstance: async () => mocks.identitySeq.shift() ?? mocks.identity,
 }));
 
-const { daemonStatus, startDaemon, stopDaemon } = await import('../../src/daemon.js');
+const { daemonStatus, startDaemon, stopDaemon } = await import('../../src/daemon.ts');
 
 function okChild(pid = 424242) {
   const child = new EventEmitter();

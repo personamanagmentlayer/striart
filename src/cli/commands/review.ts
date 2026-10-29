@@ -5,8 +5,8 @@
  * d'un agent ; il ne fait que permettre la tentative de merge — le Test Gate
  * décide toujours.
  */
-import { assertInitialized } from '../../clone.js';
-import { StriartError } from '../../errors.js';
+import { assertInitialized } from '../../clone.ts';
+import { StriartError } from '../../errors.ts';
 import { answerHumanReview, listHumanReviews } from '../../orchestration/human-review.ts';
 import type { HumanReviewRequest, ReviewVerdictValue } from '../../types.js';
 import type { CommandModule } from '../context.ts';

@@ -1,4 +1,4 @@
-import { StriartError } from '../errors.js';
+import { StriartError } from '../errors.ts';
 
 /**
  * Grammaires de citation des lanceurs de terminal. Chaque élément d'argv est

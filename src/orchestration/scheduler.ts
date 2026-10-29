@@ -16,12 +16,12 @@
  * d'exécution (agent ou tâche vivant hors plan) est attendue, bornée par
  * `orchestration.waitTimeoutMs`.
  */
-import { readRegistry } from '../clone.js';
-import { StriartError } from '../errors.js';
-import { logger } from '../logger.js';
-import { removeTask, readQueue } from '../queue.js';
-import { DEFAULT_PROFILE, resolveAgentProfile } from '../session.js';
-import { runAutonomousTask, runTask } from '../orchestrator.js';
+import { readRegistry } from '../clone.ts';
+import { StriartError } from '../errors.ts';
+import { logger } from '../logger.ts';
+import { removeTask, readQueue } from '../queue.ts';
+import { DEFAULT_PROFILE, resolveAgentProfile } from '../session.ts';
+import { runAutonomousTask, runTask } from '../orchestrator.ts';
 import type {
   MergeResult,
   OrchestrationMode,
@@ -417,6 +417,15 @@ async function runAutonomousNode(
     });
     if (r.status !== 'QUEUED') {
       if (r.agent) report(ctx, { type: 'node-started', nodeId: node.id, kind: 'task', info: null });
+      // Sérialisation prudente (tâche vague) allégée : le nœud n'a pas attendu ces clones en
+      // échec — dit à l'écran et dans le résultat du nœud, jamais en silence.
+      if (r.relaxedBlockers?.length) {
+        report(ctx, {
+          type: 'serialization-relaxed',
+          nodeId: node.id,
+          blockers: r.relaxedBlockers.map((b) => b.agent),
+        });
+      }
       const status: OrchestrationStatus =
         r.status === 'SESSION_FAILED' && r.session?.status === 'CANCELLED' ? 'CANCELLED' : r.status;
       return nodeResult(node, {
@@ -426,6 +435,7 @@ async function runAutonomousNode(
         detail: r.keptCode ? `${r.keptCode}${r.keptDetail ? `:${r.keptDetail}` : ''}` : null,
         kept: !r.cleaned,
         merge: nodeMergeOf(r.merge),
+        ...(r.relaxedBlockers?.length ? { relaxedBlockers: r.relaxedBlockers } : {}),
       });
     }
     const task = r.task;

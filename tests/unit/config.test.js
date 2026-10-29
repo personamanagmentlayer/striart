@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { DEFAULT_CONFIG, loadConfig, validateConfig } from '../../src/config.js';
-import { StriartError } from '../../src/errors.js';
+import { DEFAULT_CONFIG, loadConfig, validateConfig } from '../../src/config.ts';
+import { StriartError } from '../../src/errors.ts';
 
 describe('validateConfig', () => {
   it('accepte une config vide', () => {

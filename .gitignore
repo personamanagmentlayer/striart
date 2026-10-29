@@ -11,3 +11,7 @@ native/target/
 roadmap/*
 .claude/*
 
+
+# Suite de bout en bout Playwright (npm run test:e2e)
+test-results/
+playwright-report/

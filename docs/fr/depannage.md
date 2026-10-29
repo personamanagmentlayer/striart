@@ -9,17 +9,25 @@ striart doctor                              # tableau des constats + actions à 
 striart doctor --json | jq ".data.summary"  # scriptable : nombre de ok/warn/fail/skip
 ```
 
-Le doctor fait 23 contrôles : la version de git, le **composant natif**
+Le doctor fait 29 contrôles : la version de git, le **composant natif**
 (binaire `striart-native`, signature, clés de confiance), le **conteneur du
 Test Gate**, l'**hôte de terminal (pty)**, le dépôt
 et son premier commit, l'initialisation, que la config charge et valide, la
 **branche cible** (absente → erreur ; branche courante différente → « merge et
 watch refuseront »), que le LLM répond (ping Ollama, ou présence de la clé API
-du provider cloud), les secrets historiques, le **verrou principal** et le
+du provider cloud), le **réseau** (politique hors ligne / liste blanche, proxy
+actif ou inactif, CA et TLS), les secrets historiques, le **verrou principal** et le
 **verrou d'état**, la session principale, les agents, les tickets ouverts, le
 mode manuel, les **chemins protégés**, le **serveur MCP**, les **profils
 d'agents**, les **tokens et coûts**, l'**orchestration**, le **dashboard**
-(hôtes admis) et une synthèse des **protections relâchées** par la config.
+(hôtes admis), les **données locales** (`.striart/` réservé à
+l'utilisateur), l'**environnement du Test Gate** (variables demandées par le
+dépôt et non autorisées), le **GC d'inactivité** (politique, autorisation de
+fermer), la **livraison** (`delivery`, délais du push et du commit de merge), la
+**performance** (latence du verrou d'état, `git status` du principal, taille de
+`.striart/`, âge du plus vieux verrou tenu — un constat de lenteur est un
+avertissement, jamais une erreur) et une synthèse des **protections relâchées**
+par la config.
 Chaque constat sépare le **fait** de l'**action** (commande exacte à lancer).
 « Opérationnel » n'est annoncé qu'en l'absence de tout avertissement ;
 sortie 1 dès qu'un prérequis manque. `striart init` enchaîne ce même
@@ -52,7 +60,7 @@ changera rien :
 
 | Code | Signification | Issue |
 |---|---|---|
-| `TARGET_BRANCH_MISMATCH` | Le repo principal n'est pas sur `targetBranch`. | `git switch <targetBranch>`, ou ajuster la config — voir [Branches](branches.md#la-contrainte--le-repo-principal-doit-être-sur-targetbranch). |
+| `TARGET_BRANCH_MISMATCH` | Le repo principal n'est pas sur `targetBranch` — y compris quand `HEAD` pointe une autre branche **sans commit** (levé par `merge`, `resolve --apply`, `rollback` et `promote`). | `git switch <targetBranch>`, ou ajuster la config — voir [Branches](branches.md#la-contrainte--le-repo-principal-doit-être-sur-targetbranch). |
 | `MAIN_DIRTY` | Le repo principal a des modifications non commitées. | Commit ou stash, puis relancer. |
 | `UNTRACKED_COLLISION` | Des fichiers untracked du principal seraient écrasés par le merge. | Les commiter, déplacer ou supprimer. |
 | `SESSION_LIVE` | Le clone héberge une session vivante (PID autonome vérifié, hôte de session ACP, ou terminal `--open` pour `clean`). | Attendre la fin de session — ni `stop`, ni `clean`, ni `--force` ne passeront (`striart stop` arrête un terminal `--open`). |
@@ -66,24 +74,20 @@ changera rien :
 | `RESOLUTION_INCOMPLETE` / `STALE_TICKET` / `TICKET_NOT_APPLICABLE` / `TICKET_ALREADY_RESOLVED` | `resolve --apply` : résolution manquante, ticket périmé, conflit non fichier par fichier, déjà résolu. | `striart resolve --prepare <id>`, ou relancer un merge normal. |
 | `TICKET_CORRUPT` | Le `ticket.json` est illisible : rien ne peut être lu, préparé ni appliqué. | Inspecter le dossier du ticket (le chemin est donné), puis `striart resolve --close <id>`. |
 | `TICKET_PATH_UNSAFE` | Un ticket nomme un chemin qui n'est pas un chemin de projet sûr (absolu, remontant par `..`, ou dans `.git`) : rien n'est écrit. Le fichier du ticket a probablement été modifié à la main. | `striart resolve --close <id>`, puis relancer le merge. |
-| `TICKETS_UNREADABLE` | Le dossier `.striart/conflicts/` est illisible (droits, fichier à la place du dossier, E/S) — `details.cause` porte la cause système. | `striart doctor` ; corriger les droits. |
 | `PROTECTED_PATHS_CHANGED` | Le commit de l'agent change un chemin protégé (`AGENTS.md`, `.claude`, `striart.config.*`…) sans résolution humaine préparée. | Relancer `striart merge <agent>` pour rafraîchir le ticket avec ces chemins, puis décider chacun (`resolve --prepare` / `--apply`). |
 | `MERGE_WINDOW_EXCEEDED` | Un conflit dépasse la fenêtre du Merger (`tokens.merger.maxWindowTokens`) : le modèle le tronquerait. | Résoudre à la main (`resolve --prepare`), ou relever la fenêtre. |
 | `TOKEN_BUDGET_EXCEEDED` | Un plafond `tokens.budgets` est atteint : appel LLM refusé *avant* envoi, ou session d'agent arrêtée. | `striart usage` ; relever le plafond ou attendre la fin de la période. Ne compte pas dans le mode manuel. |
 | `TOKEN_PRICE_MISSING` | Un plafond de **coût** est posé sans prix déclaré pour ce modèle : il ne peut pas être tenu. | Déclarer le modèle dans `tokens.pricing` (avec `asOf`), ou retirer le plafond de coût. |
-| `TOKEN_ACCOUNTING_FAILED` | `tokens.onAccountingError: 'fail'` : le relevé d'un appel LLM (ou la relecture des cumuls de budget au démarrage d'une session) a échoué — la comptabilité serait aveugle, l'opération est refusée (`details.what` : `usage-ledger-write`, `post-call-budget-evaluation`, `session-budget-baseline`). Avec `'warn'` (défaut) l'échec n'est que journalisé sous ce même code. | Inspecter `.striart/usage/` (droits, disque, antivirus), relancer ; ou repasser à `'warn'`. |
 | `LOCK_LOST` | Le verrou principal a été perdu (ou n'était pas tenu) pendant une opération : rien n'a été commité. | Voir « Verrou bloqué ? ». |
 | `MERGE_STATE_CHANGED` | L'état du principal a changé sous l'opération (`HEAD`, merge ouvert par un tiers) : rien n'a été commité. | Voir « Verrou bloqué ? ». |
 | `MERGE_RECOVERY_BLOCKED` | Un merge ouvert dans le principal ne sera **pas** annulé par Striart (une opération antérieure a constaté qu'il n'était pas à elle). | Le terminer (`git commit`) ou l'annuler (`git merge --abort`) à la main. |
-| `MAIN_DIVERGED` | `promote` : `mainBranch` a des commits hors pipeline. | Merger `mainBranch` dans `targetBranch` à la main. |
+| `MAIN_DIVERGED` | `promote` : `mainBranch` a des commits hors pipeline, ou a bougé pendant la promotion (la mise à jour de `mainBranch` est un compare-and-swap sur l'ancien SHA : rien n'a été promu). | Merger `mainBranch` dans `targetBranch` à la main, ou relancer `promote`. |
 | `NOT_A_STRIART_MERGE` | `rollback` : le dernier commit n'est pas un merge Striart. | `striart history` ; au-delà, `git revert`. |
 | `DAEMON_RUNNING` | Un daemon `watch`/`dashboard` tourne déjà. | `--status`, puis `--stop`. |
 | `DAEMON_STOP_DENIED` | `--stop` : le daemon appartient à un autre utilisateur (`EPERM`), impossible de le signaler depuis ce compte. Rien n'est tué ni oublié : le PID file reste en place. | `striart <watch\|dashboard> --status` ; l'arrêter depuis le compte qui l'a lancé. |
 | `DAEMON_IDENTITY_UNVERIFIED` | `--stop` : le PID publié est vivant mais son identité est illisible (process d'un autre utilisateur, ligne de commande cachée) — rien n'est tué à l'aveugle, le PID file reste en place. | `striart <watch\|dashboard> --status` ; vérifier le process à la main (`ps`, Gestionnaire des tâches). |
 | `DAEMON_PIDFILE_CORRUPT` | Le PID file d'un daemon (`.striart/<watch\|dashboard>.pid`) est illisible ou sans PID valide : impossible de savoir si un daemon tourne. Striart ne le prend **pas** pour « aucun daemon » (cela lancerait un second daemon et laisserait `--stop` sans effet sur le premier). | Inspecter le fichier (`details.path`), le supprimer si aucun daemon ne tourne, puis relancer. |
-| `DAEMON_SPAWN_FAILED` | Le process détaché du daemon n'a pas pu être lancé (exécutable introuvable, droits, PID non obtenu). `details.cause` donne la raison ; aucun PID file n'est laissé. | `striart doctor` ; corriger la cause, relancer `--daemon`. |
 | `PTY_HOST_ALREADY_RUNNING` | Un hôte de pty natif tient déjà cet agent (verrou exclusif de l'hôte). | S'y attacher : `striart attach <agent>`. |
-| `PTY_SHELL_INVALID` | `pty.shell` désigne un shell inutilisable : chemin relatif, introuvable dans les dossiers absolus du `PATH`, ou non exécutable. Aucun repli sur `auto`. | Corriger `pty.shell` dans la config, ou le remettre à `auto`. |
 | `TERMINAL_UNSAFE` | Un chemin ou argument contient NUL/CR/LF (ou `"` sous Windows) : aucun lanceur de terminal ne sait le transmettre. | Lancer l'outil à la main (la commande est affichée). |
 | `NATIVE_INTEGRITY_FAILED` | Le binaire natif est altéré ou non vérifiable (empreinte divergente, signature invalide, manifeste absent, versions discordantes) : il n'est **jamais** exécuté. | Réinstaller Striart (`npm install`), puis `striart doctor`. Voir « Composant natif ». |
 | `MCP_READ_ONLY` / `MCP_DEPTH_LIMIT` / `MCP_SCOPE_DENIED` / `MCP_PROTECTED_TICKET` | Outil MCP mutant refusé : serveur lancé en `--read-only` / process descendant d'une session autonome / hors du périmètre de l'agent appelant (ou aucun agent borné, ticket d'un autre agent) / `resolve_prepare` ou `resolve_apply` sur un ticket `PROTECTED_PATHS_CHANGED` — approuver un changement de chemin protégé est la décision que la garde réserve à l'humain, refusée à tout appelant MCP. | Voir [Serveur MCP](mcp.md#qui-appelle-et-sur-quoi-il-peut-agir) ; l'humain passe par `striart resolve`. |
@@ -95,6 +99,25 @@ changera rien :
 | `COLLAB_DISABLED` / `COLLAB_NOT_MEMBER` / `COLLAB_KIND_FORBIDDEN` / `COLLAB_LIMIT_REACHED` | Canal de collaboration : coupé (`collab.enabled: false`) / l'agent n'est dans aucun groupe ouvert / `verdict` hors du tour d'un relecteur / borne de messages atteinte. | Voir [Modes d'exécution](modes-execution.md#les-modes-dorchestration). |
 | `REVIEW_NOT_PENDING` | Verdict humain demandé sur une relecture qui n'attend plus (délai écoulé, déjà répondue). | `striart review` pour la liste. |
 | `HOOK_TARGET_TRACKED` / `HOOK_TARGET_FOREIGN` / `HOOK_PATH_UNSAFE` | `hook install` : la cible est versionnée par le dépôt / existe sans être de Striart / un chemin ne peut pas être écrit fidèlement dans la commande du hook. | `--user` plutôt que `--agent` ; ne jamais écraser un fichier étranger ; `STRIART_HOOK_BIN_DIR` vers un dossier sans espace. |
+| `EMPTY_REPO` | Le dépôt n'a aucun commit : aucune branche cible utilisable. | Faire un premier commit. |
+| `USER_CONFIG_UNSAFE` | La config **utilisateur** est modifiable par le groupe ou les autres, ou n'appartient pas à l'utilisateur (POSIX) : ignorée, aucune confiance. | `chmod 600` sur le fichier. |
+| `AFTER_UNKNOWN` | `--after` ne désigne aucune tâche en file ni agent actif. | `striart queue`. |
+| `CONTROL_TOKEN_UNPROTECTED` | Le fichier du jeton ne peut pas être réservé à l'utilisateur : refus, aucun jeton n'est laissé lisible par d'autres. | Droits du dossier d'état. |
+| `COMMITTER_IDENTITY_MISSING` / `STRIART_COMMIT_UNSAFE` | Contrat de commit : aucune identité git pour l'utilisateur dans le principal (`user.name`, `user.email`) / le commit Striart contenait des chemins interdits et a été défait. | Configurer l'identité git ; inspecter le clone. |
+| `ACP_IMPORT_PLATFORM_UNSUPPORTED` | `--import-acp` : le registre ne propose aucune distribution pour cette plateforme. | Choisir un autre agent, ou déclarer le profil à la main. |
+| `ACP_IMPORT_ENV_FORBIDDEN` | `--import-acp` : l'agent du registre demande une variable d'environnement non autorisée (`details.variable`). | La lister dans `acpRegistry.allowEnv` si elle est sûre ; jamais possible pour `NODE_OPTIONS`, `PATH`, `LD_*`… |
+| `ACP_SOCKET_DIR_UNSAFE` | POSIX : le dossier privé du socket de l'hôte de session ACP n'est pas un vrai dossier de l'utilisateur en mode `0700` (`details.path`). | L'inspecter, le supprimer (`rm -r <chemin>`), relancer. |
+| `PERMISSION_NOT_PENDING` / `ELICITATION_NOT_PENDING` | Arbitrage : demande ou question qui n'attend plus. | Rafraîchir l'état ; la demande a peut-être expiré (fail closed). |
+| `SAFE_WRITE_UNSAFE` | Striart refuse d'écrire (mémoire, consignes, boîte de collaboration, exclusion git, config des hooks) parce qu'un composant du chemin est un lien symbolique, une jonction ou un non-dossier dans le clone (`details.reason`, `details.path`) — jamais d'écriture à travers un lien. | Inspecter le chemin dans le clone (un agent l'a peut-être planté), le retirer ; `striart doctor`. |
+| `PROMOTION_DISABLED` / `UNSUPPORTED_RESOLUTION_KIND` | `promote` sans `mainBranch` / `--apply` sur un conflit non résolvable fichier par fichier. | Voir [Branches](branches.md#le-pipeline-staging--main) ; `git` à la main puis `resolve --close`. |
+| `STATE_UNPROTECTED` | `.striart/` ne peut pas être réservé à l'utilisateur courant (`details.reason` : `icacls`, `acl-open`, `mode-open`, `foreign-owner`, `chmod`, `not-a-directory`) : refusé plutôt que de laisser le code, les journaux et les jetons lisibles par d'autres comptes. Levé par `striart init`, par toute opération sous le verrou principal, au lancement d'une session et à l'écriture d'un ticket. Causes : système de fichiers sans permissions (FAT, exFAT, certains partages), propriétaire étranger, `icacls` en échec (Windows). | Vérifier les droits et le propriétaire de `.striart/`, relancer `striart init` (il resserre l'existant) puis `striart doctor`. Sur un système de fichiers sans permissions : `privateStateDir: false` (relâchement explicite, journalisé et affiché par `doctor`). |
+| `NET_OFFLINE` | Mode hors ligne (`network.offline` ou `STRIART_OFFLINE`) : l'appel sortant vers un hôte non local est refusé. La boucle locale (Ollama) n'est jamais concernée. | Retirer `network.offline` / `STRIART_OFFLINE`, ou travailler avec un LLM local. |
+| `NET_HOST_NOT_ALLOWED` | L'hôte n'est pas dans la liste blanche réseau (`network.allowedHosts`, `STRIART_ALLOWED_HOSTS` — avec les deux, il doit figurer dans les deux). | L'ajouter à la config **utilisateur** ou à la variable, si c'est voulu. |
+| `NET_INSECURE_TRANSPORT` | HTTP en clair vers un hôte distant (`details.reason` : `PLAIN_HTTP` — clé d'API ou non), ou `NODE_TLS_REJECT_UNAUTHORIZED=0` dans l'environnement (`TLS_VERIFICATION_DISABLED`). `llm.allowInsecureTransport` seul (config du dépôt) ne lève pas le refus. | `https://` ; ou déclarer l'hôte dans `network.allowInsecureHosts` (config utilisateur, en connaissance de cause) ; retirer `NODE_TLS_REJECT_UNAUTHORIZED=0` et ajouter la CA d'entreprise (`NODE_EXTRA_CA_CERTS`). |
+| `NET_REDIRECT_REFUSED` | Le serveur a répondu par une redirection (`details.reason` : `REDIRECT`) — aucune n'est suivie — ou le suivi borné des archives du registre ACP a dépassé 3 sauts (`TOO_MANY`). | Corriger l'URL (`baseUrl`, webhook, registre) pour viser directement la bonne adresse. |
+| `IDLE_CLOSE_BLOCKED` | `striart gc` : la fermeture d'une session inactive a été **refusée par une garde** — session du repo principal (`detail` : `MAIN_SESSION`), session changée entre la décision et l'acte (`SESSION_CHANGED`), plus de session vivante (`NO_LIVE_SESSION`), soi-même ou son parent (`SELF`), ou une source de contexte illisible pendant le balayage (`detail` : `HUMAN_REQUESTS_UNREADABLE`, `TICKETS_UNREADABLE`, `ORCHESTRATION_UNREADABLE`, `LOCK_UNREADABLE`, `MERGE_STATE_UNRESOLVED`, `MAIN_SESSION_UNREADABLE`, `IDLE_STATE_UNREADABLE`). Porté par `refused[].code` du rapport, pas levé : la session est **intacte**. | `striart gc --dry-run` ; corriger la source illisible (`striart doctor`), puis relancer. |
+| `IDLE_CLOSE_UNVERIFIED` | `striart gc` : le process visé n'est **pas identifiable**, donc pas touché — session autonome sans superviseur enregistré (`NO_SUPERVISOR_RECORD`), PID recyclé (`IDENTITY`), process d'un autre utilisateur (`DENIED`), ou hôte ACP/terminal dont l'arrêt a été laissé en place. | Arrêter la session soi-même après vérification ; rien n'a été tué à l'aveugle. |
+| `IDLE_CLOSE_NOT_ACKNOWLEDGED` | `striart gc` : le process qui **supervise** la session autonome est vivant mais n'a pas accusé la demande d'arrêt propre dans le délai (5 s) — aucun kill n'est tenté. | Vérifier que ce process (`striart run --autonomous`) répond ; sinon l'arrêter soi-même. |
 
 **Usage (sortie 2)** — rejeté avant toute action :
 
@@ -111,60 +134,68 @@ changera rien :
 | `UNSUPPORTED_OUTPUT_FORMAT`, `UI_REQUIRES_TTY`, `ATTACH_WRONG_CWD` | `--json` sur `mcp`/`api`/`acp`/`attach`/`completion`/`watch --ui`, `watch --ui` sans terminal, `attach` hors du clone. |
 | `MCP_ROOT_INVALID`, `MCP_SCOPE_CONFLICT` | `mcp` : `--root` ne désigne pas un dépôt Striart initialisé / `--agent` contredit le clone du répertoire courant. |
 | `HOOK_TOOL_UNKNOWN`, `HOOK_SCOPE_REQUIRED` | `hook install\|uninstall` : outil inconnu (`claude`, `codex`, `copilot`, `gemini`, `cline`) / ni `--user` ni `--agent` (ou les deux). |
-| `ACP_AGENT_UNKNOWN` | `profiles --import-acp` : identifiant absent du registre ACP. |
 | `PERMISSION_ID_INVALID`, `ELICITATION_CONTENT_INVALID`, `ACP_PROMPT_INVALID` | Réponse humaine mal formée (identifiant, formulaire non conforme au schéma de l'agent) ; message du bus invalide (vide, trop long, caractères de contrôle). |
 | `ACP_PROXY_OPTION_UNKNOWN`, `ACP_PROXY_OPTION_INVALID`, `ACP_PROXY_SESSION_UNKNOWN`, `ACP_PROXY_NOT_INITIALIZED`, `ACP_PROXY_AUTH_METHOD_UNKNOWN`, `ACP_PROXY_METHOD_UNSUPPORTED`, `ACP_PROXY_CWD_OUTSIDE_ROOT` | `striart acp` : requête de l'éditeur mal formée ou hors protocole — option de session inconnue/invalide, session inconnue, `initialize` manquant, méthode d'authentification autre que `striart-local`, méthode non servie (`fs/*`, `terminal/*` ne le sont jamais), dossier hors du dépôt servi (`--root`). |
 | `COLLAB_MESSAGE_INVALID`, `COLLAB_RECIPIENT_UNKNOWN`, `COLLAB_GROUP_AMBIGUOUS`, `COLLAB_ROLE_AMBIGUOUS` | Message de collaboration mal formé / destinataire inconnu / groupe ou rôle à préciser. |
 | `CONTROL_PARSE_ERROR`, `CONTROL_INVALID_REQUEST`, `CONTROL_MESSAGE_TOO_LARGE`, `CONTROL_METHOD_UNKNOWN`, `CONTROL_METHOD_UNAVAILABLE`, `CONTROL_SUBSCRIPTION_UNKNOWN`, `CONTROL_VERSION_UNSUPPORTED` | Control Protocol : message mal formé ou hors contrat (JSON invalide, cadrage `Content-Length` illisible, message de plus de 1 Mo, méthode inconnue ou non servie sur ce transport, abonnement inconnu, version non prise en charge). Corriger la requête. |
+| `SECRET_PATTERN_INVALID` | Un motif de `secretPatterns` n'est pas supporté : négation `!`, commentaire `#`, motif vide ou saut de ligne (corriger `secretPatterns` dans la config). |
 
 **Échec (sortie 1)** — exécution ou environnement, peut être transitoire :
 
 | Code | Signification | Issue |
 |---|---|---|
-| `NOT_A_GIT_REPO` / `NOT_INITIALIZED` / `EMPTY_REPO` | Pas de dépôt, pas de `.striart/`, aucun commit. | `git init`, `striart init`, un premier commit. |
-| `UNKNOWN_BRANCH` | `targetBranch` (ou `mainBranch`) n'existe pas — vérifié avant tout clonage ou appel au LLM. | Corriger la config (`git branch --list`). |
+| `NOT_A_GIT_REPO` / `NOT_INITIALIZED` | Pas de dépôt Git ; pas de `.striart/` **à la racine** du dépôt (`striart mcp` et `striart api` refusent aussi un dépôt non initialisé, avant tout démarrage). | `git init`, `striart init`. |
+| `UNKNOWN_BRANCH` | `targetBranch` (ou `mainBranch`) n'existe pas **ou n'a aucun commit** — vérifié avant tout clonage ou appel au LLM, et par `merge`, `resolve --apply`, `rollback` et `promote` avant toute opération. | Corriger la config (`git branch --list`). |
 | `CONFIG_INVALID` / `LLM_CONFIG_INVALID` | Config refusée (seule la **clé** fautive est citée, jamais sa valeur ; pour un motif de `dashboardAllowedHosts`, l'index de l'entrée ; une clé de premier niveau **inconnue** — faute de frappe — porte `UNKNOWN_KEY` et une suggestion) / provider LLM mal configuré. | `striart doctor`, [Configuration](configuration.md). |
-| `SECRET_PATTERN_INVALID` | Un motif de `secretPatterns` n'est pas supporté : négation `!`, commentaire `#`, motif vide ou saut de ligne. | Corriger `secretPatterns` dans la config. |
-| `USER_CONFIG_INVALID` / `USER_CONFIG_UNSAFE` | La config **utilisateur** (`hooks.trustedRoots`) est invalide (JSON, clé inconnue, racine non absolue) / modifiable par le groupe ou les autres, ou n'appartient pas à l'utilisateur (POSIX). Elle est ignorée : aucune racine n'est de confiance. | Corriger le JSON ; `chmod 600` sur le fichier. |
-| `ROUTER_FAILED` / `LLM_FAILED` / `SEMANTIC_MERGE_FAILED` / `MEMORY_FAILED` / `RACE_JUDGE_FAILED` | Le LLM n'a pas répondu ou a rendu une sortie inexploitable (après retries et backoff ; un disjoncteur ouvert échoue sans attendre). | `striart doctor` (LLM joignable ? clé présente ?) ; relancer — le Router est un filtre, pas une garantie. |
-| `AGENT_UNKNOWN` / `TICKET_UNKNOWN` / `CLONE_NOT_FOUND` / `PROFILE_UNKNOWN` / `AFTER_UNKNOWN` / `PLAN_NOT_FOUND` / `REVIEW_UNKNOWN` | Cible introuvable. | `striart status`, `striart resolve --all`, `striart profiles`, `striart review`. |
+| `USER_CONFIG_INVALID` | La config **utilisateur** est invalide (JSON, clé inconnue dans `hooks`, `env`, `native`, `network` ou `gate`, racine non absolue, variable d'environnement réseau mal formée) : ignorée, aucune confiance accordée et les appels sortants non locaux sont refusés. | Corriger le JSON ou la variable (`striart doctor`). |
+| `ROUTER_FAILED` / `LLM_FAILED` / `SEMANTIC_MERGE_FAILED` / `MEMORY_FAILED` / `RACE_JUDGE_FAILED` | Le LLM n'a pas répondu ou a rendu une sortie inexploitable (après retries et backoff ; un disjoncteur ouvert échoue sans attendre). `error.details.causeCode` donne la cause stable : `TRANSPORT`, `TIMEOUT`, `HTTP_4XX`, `HTTP_5XX`, `TRUNCATED` (sortie coupée), `FILTERED`, `REFUSED`, `INVALID_JSON`, `INVALID_RESPONSE` ; un échec de fusion sémantique d'un merge porte `errorCode` + `errorDetails` (le texte `error` est le français du noyau). | `striart doctor` (LLM joignable ? clé présente ?) ; relancer — le Router est un filtre, pas une garantie. |
+| `AGENT_UNKNOWN` / `TICKET_UNKNOWN` / `CLONE_NOT_FOUND` / `PROFILE_UNKNOWN` / `PLAN_NOT_FOUND` / `REVIEW_UNKNOWN` | Cible introuvable. | `striart status`, `striart resolve --all`, `striart profiles`, `striart review`. |
 | `LOCK_TIMEOUT` | Verrou principal non obtenu dans les 2 min. | Voir « Verrou bloqué ? ». |
 | `LOCK_WAIT_CANCELLED` / `LOCK_IO_FAILED` | Attente du verrou annulée avant toute acquisition (rien n'a démarré) / E/S du verrou ou de sa file impossibles (droits, antivirus, disque). | Relancer ; vérifier les droits de `.striart/`. |
-| `STATE_LOCK_TIMEOUT` / `STATE_LOCK_LOST` / `STATE_LOCK_FAILED` | Verrou d'état (`.striart/state.lock`) : non obtenu / perdu avant l'écriture (rien n'est écrit) / non manipulable. | Voir « Verrou d'état et fichiers d'état ». |
+| `STATE_LOCK_TIMEOUT` / `STATE_LOCK_LOST` / `STATE_LOCK_FAILED` | Verrou d'état (`.striart/state.lock`) : non obtenu / perdu avant l'écriture (rien n'est écrit) / non manipulable (E/S, ou dossier du verrou absent alors que `.striart/` existe). | Voir « Verrou d'état et fichiers d'état ». |
 | `STATE_READ_FAILED` / `STATE_WRITE_FAILED` | Un fichier d'état ne peut être lu / écrit même après nouvelles tentatives (l'état précédent reste intact). | Droits, disque plein, antivirus ; relancer. |
 | `REGISTRY_CORRUPT` / `QUEUE_CORRUPT` / `LOCKS_CORRUPT` / `STATE_CORRUPT` / `MAIN_SESSION_CORRUPT` / `COLLAB_CORRUPT` / `REVIEW_CORRUPT` / `ORCHESTRATION_STATE_CORRUPT` | Fichier d'état illisible (`details.path`, `details.cause`). | Voir « Verrou d'état et fichiers d'état ». |
 | `NATIVE_UNAVAILABLE` / `NATIVE_COMMAND_FAILED` / `NATIVE_PROTOCOL_ERROR` | Binaire natif introuvable pour cette plateforme ou son paquet absent / commande native en échec ou délai / binaire d'une autre version de protocole. | Voir « Composant natif ». |
 | `GATE_ORPHAN_PROCESS` / `JOB_TERMINATE_INCOMPLETE` | Test Gate rouge sans test en échec : un descendant du test vivait encore après sa sortie et `gateOrphanGraceMs` (tué) / le nettoyage du conteneur de process n'a pas abouti (process survivants). | Voir « Test Gate rouge sans test en échec ». |
 | `PTY_HOST_SPAWN_FAILED` / `PTY_ATTACH_LISTEN_FAILED` / `PTY_HOST_UNKNOWN_AGENT` / `PTY_SESSION_NOT_FOUND` | L'hôte de terminal n'a pas pu démarrer ou écouter / agent hors du registre / aucune session de terminal pour cet agent. | `striart doctor` (ligne « hôte de terminal ») ; `striart start <agent> --open`. `details.nativeCode` nomme la cause native, par exemple `PTY_ENDPOINT_TOO_LONG` : sous POSIX le chemin du socket d'attache (`.striart/pty/<agent>/attach.sock`) dépasse la limite de l'OS (104 octets sous macOS, 108 sous Linux) — travailler depuis un chemin de projet plus court. |
+| `PTY_STATE_PATH_TOO_LONG` / `ACP_STATE_PATH_TOO_LONG` | Le chemin naturel du socket d'attache (`.striart/pty/<agent>/attach.sock` ou `.striart/acp/<agent>/host.sock`) dépasse la limite de l'OS, ET le repli vers le dossier temporaire par utilisateur serait LUI AUSSI trop long — observé quand `os.tmpdir()` est déjà long (par exemple `/private/var/folders/<aléatoire>/T` sous macOS). | Fixer `TMPDIR` (POSIX) sur un chemin plus court avant de relancer `striart`. |
 | `PORT_IN_USE` | Le port du dashboard est pris. | `--port <autre>`. |
-| `CONTROL_INSTANCE_NOT_FOUND` / `CONTROL_TOKEN_UNPROTECTED` | `dashboard --link` : aucun dashboard ne tourne pour ce dépôt (ou son fichier de jeton est illisible) / le fichier du jeton ne peut pas être réservé à l'utilisateur (refus : aucun jeton n'est laissé lisible par d'autres). | `striart dashboard --daemon` ; droits du dossier d'état. |
+| `CONTROL_INSTANCE_NOT_FOUND` | `dashboard --link` : aucun dashboard ne tourne pour ce dépôt (ou son fichier de jeton est illisible). | `striart dashboard --daemon`. |
 | `DAEMON_BUSY` | Le verrou du PID file d'un daemon (`.striart/<watch\|dashboard>.pid.lock`) est tenu par une autre commande au-delà de l'attente. | Relancer ; `striart <watch\|dashboard> --status`. Un verrou de plus de 30 s est cassé automatiquement. |
 | `PROFILE_INVALID` | Profil d'agent mal formé (seul le **champ** fautif est cité, jamais l'env du profil). | `striart profiles`. |
-| `COMMITTER_IDENTITY_MISSING` / `STRIART_COMMIT_UNSAFE` | Contrat de commit : aucune identité git pour l'utilisateur dans le principal (`user.name`, `user.email`) / le commit Striart contenait des chemins interdits et a été défait. | Configurer l'identité git ; inspecter le clone. |
 | `ACP_AUTH_METHOD_UNAVAILABLE` | `acp.auth.methodId` n'est pas une méthode du protocole annoncée par l'agent (les méthodes « terminal » ne sont jamais passées à `authenticate`). | Corriger `methodId`. |
 | `ACP_HOST_SPAWN_FAILED` / `ACP_HOST_UNREACHABLE` / `ACP_HOST_LOST` / `ACP_HOST_FAILED` / `ACP_HOST_PROTOCOL` / `ACP_SESSION_NOT_FOUND` | Hôte de session ACP : démarrage impossible / injoignable / disparu sans rapporter de résultat (voir `.striart/logs/acp-host-<agent>.log`) / erreur inattendue / trame inattendue / aucune session ACP vivante pour cet agent (une session argv est *one-shot*). | Journal de l'hôte ; relancer la tâche. |
 | `ACP_PROXY_QUEUE_TOOK_OVER` / `ACP_PROXY_UPSTREAM_ENDED` | `striart acp` : la file a relancé la tâche avant que Striart puisse la reprendre / la session de l'agent amont a fini avant la fin du tour. | `striart queue` ; l'issue est rapportée dans la session. |
-| `ACP_REGISTRY_FETCH_FAILED` / `ACP_REGISTRY_INVALID` / `ACP_IMPORT_PLATFORM_UNSUPPORTED` / `ACP_EXTRACT_FAILED` | `--import-acp` : registre injoignable / document invalide / aucune distribution pour cette plateforme / extraction impossible. | Réseau ; `acpRegistry.url`. |
-| `ACP_IMPORT_ENV_FORBIDDEN` | `--import-acp` : l'agent du registre demande une variable d'environnement non autorisée (`details.variable`). | La lister dans `acpRegistry.allowEnv` si elle est sûre ; jamais possible pour `NODE_OPTIONS`, `PATH`, `LD_*`… |
-| `ACP_SOCKET_DIR_UNSAFE` | POSIX : le dossier privé du socket de l'hôte de session ACP n'est pas un vrai dossier de l'utilisateur en mode `0700` (`details.path`). | L'inspecter, le supprimer (`rm -r <chemin>`), relancer. |
-| `PERMISSION_NOT_PENDING` / `PERMISSION_OPTION_UNKNOWN` / `ELICITATION_INVALID` / `ELICITATION_NOT_PENDING` | Arbitrage : demande qui n'attend plus / option que l'agent n'a pas proposée / schéma de formulaire refusé (non validable) / question qui n'attend plus. | Rafraîchir l'état ; la demande a peut-être expiré (fail closed). |
+| `ACP_REGISTRY_FETCH_FAILED` / `ACP_REGISTRY_INVALID` / `ACP_EXTRACT_FAILED` | `--import-acp` : registre injoignable / document invalide / extraction impossible. | Réseau ; `acpRegistry.url` — si le refus vient de la politique réseau, voir les codes `NET_*`. |
+| `PERMISSION_OPTION_UNKNOWN` / `ELICITATION_INVALID` | Arbitrage : option que l'agent n'a pas proposée / schéma de formulaire refusé (non validable). | Rafraîchir l'état. |
 | `SESSION_LOG_UNAVAILABLE` | Aucun log de session pour cet agent (la session n'a peut-être pas démarré). | `striart status`. |
 | `MCP_OVERLOADED` / `MCP_RESOURCE_UNKNOWN` | Trop de requêtes MCP simultanées / ressource inconnue. | `mcp.maxConcurrentRequests` ; lister les ressources. |
 | `COLLAB_GROUP_UNKNOWN` | Groupe de collaboration inconnu. | `striart status` (champ `orchestration`). |
 | `HOOK_CONFIG_UNREADABLE` | `hook install` : la configuration de l'outil est illisible — laissée intacte. | La réparer, puis relancer. |
-| `SAFE_WRITE_UNSAFE` | Striart refuse d'écrire (mémoire, consignes, boîte de collaboration, exclusion git, config des hooks) parce qu'un composant du chemin est un lien symbolique, une jonction ou un non-dossier dans le clone (`details.reason`, `details.path`) — jamais d'écriture à travers un lien. | Inspecter le chemin dans le clone (un agent l'a peut-être planté), le retirer ; `striart doctor`. |
 | `TERMINAL_LAUNCHER_UNSUPPORTED` / `TERMINAL_CONTEXT_MISSING` / `WARP_NOT_FOUND` | `terminal.launcher` indisponible sur cette plateforme / Warp demandé hors d'un clone d'agent / dossier de données de Warp introuvable (installé pour cet utilisateur ?). | Choisir un autre lanceur dans `terminal.launcher`. |
 | `CLONE_FAILED` / `SECRETS_EXCLUSION_FAILED` / `MERGE_FAILED` / `MERGE_ABORT_FAILED` / `REUSE_FETCH_FAILED` / `REUSE_NO_CLONE` | Échec git (`MERGE_ABORT_FAILED` : le principal reste en état « merging »). | `striart doctor` ; `git merge --abort` à la main pour `MERGE_ABORT_FAILED`. |
-| `MERGE_COMMIT_FAILED` | git a refusé le commit de merge (hook `pre-commit` / `commit-msg`, identité git absente) : le merge est annulé, le principal est propre, rien n'est commité. | Corriger le hook ou `git config user.name` / `user.email`, puis relancer le merge. |
-| `PROMOTION_DISABLED` / `UNSUPPORTED_RESOLUTION_KIND` | `promote` sans `mainBranch` / `--apply` sur un conflit non résolvable fichier par fichier. | Voir [Branches](branches.md#le-pipeline-staging--main) ; `git` à la main puis `resolve --close`. |
+| `MERGE_COMMIT_FAILED` | git a refusé le commit de merge (ou le `revert` d'un `rollback`) pour une raison qui n'est pas un hook : identité git absente, signature impossible : le merge est annulé, le principal est propre, rien n'est commité. | `git config user.name` / `user.email`, ou la signature de commit, puis relancer. |
 | `UNEXPECTED` | Erreur non prévue. | `STRIART_LOG_LEVEL=debug` pour la pile complète. |
+| `TICKETS_UNREADABLE` | Le dossier `.striart/conflicts/` est illisible (droits, fichier à la place du dossier, E/S) — `details.cause` porte la cause système. | `striart doctor` ; corriger les droits. |
+| `TOKEN_ACCOUNTING_FAILED` | `tokens.onAccountingError: 'fail'` : le relevé d'un appel LLM (ou la relecture des cumuls de budget au démarrage d'une session) a échoué — la comptabilité serait aveugle, l'opération est refusée (`details.what` : `usage-ledger-write`, `post-call-budget-evaluation`, `session-budget-baseline`). Avec `'warn'` (défaut) l'échec n'est que journalisé sous ce même code. | Inspecter `.striart/usage/` (droits, disque, antivirus), relancer ; ou repasser à `'warn'`. |
+| `DAEMON_SPAWN_FAILED` | Le process détaché du daemon n'a pas pu être lancé (exécutable introuvable, droits, PID non obtenu). `details.cause` donne la raison ; aucun PID file n'est laissé. | `striart doctor` ; corriger la cause, relancer `--daemon`. |
+| `PTY_SHELL_INVALID` | `pty.shell` désigne un shell inutilisable : chemin relatif, introuvable dans les dossiers absolus du `PATH`, ou non exécutable. Aucun repli sur `auto`. | Corriger `pty.shell` dans la config, ou le remettre à `auto`. |
+| `ACP_AGENT_UNKNOWN` | `profiles --import-acp` : identifiant invalide ou absent du registre ACP. | Choisir un identifiant listé dans `error.details.known` (`--json`). |
+| `NET_URL_INVALID` | URL sortante non analysable ou schéma autre que `http(s)` (`details.reason` : `UNPARSEABLE`, `SCHEME`). | Corriger `llm.baseUrl`, `ollamaHost`, l'URL du webhook ou du registre. |
+| `NET_PROXY_UNSUPPORTED` | Le proxy configuré a un schéma non supporté (`details.reason : SCHEME`) : les proxys SOCKS ne sont pas supportés. | Utiliser une URL de proxy `http://` ou `https://` — voir [Réseau d'entreprise](configuration.md#réseau-dentreprise-network) ; `striart doctor`. |
+| `NET_TLS_UNTRUSTED` | La chaîne de certificats n'aboutit pas à une autorité connue (`details.certCode`). | Ajouter la CA d'entreprise (`NODE_EXTRA_CA_CERTS`, `node --use-system-ca`, `network.caFile`) ; jamais `NODE_TLS_REJECT_UNAUTHORIZED=0`. |
+| `NET_CA_INVALID` | `network.caFile` inutilisable (`details.reason` : code système, `NOT_A_FILE`, `TOO_LARGE`, `NO_CERTIFICATE`, `REJECTED_BY_NODE`). | Un fichier PEM d'au plus 4 Mio contenant « BEGIN CERTIFICATE » ; `striart doctor`. |
+| `COMMIT_HOOK_REJECTED` | Un hook de la cible (`pre-commit`, `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`) ou la signature a **rejeté**, ou **bloqué au-delà de `commitTimeoutMs`** (arbre de process tué), le commit de merge : le merge est annulé, le principal est propre. Un **ticket** `COMMIT_HOOK_REJECTED` garde la sortie du hook (la fin, 16 Kio au plus, secrets caviardés) ; il se ferme de lui-même au prochain merge réussi de l'agent. Le même code peut venir du `revert` d'un `rollback` publié (aucun ticket, `HEAD` inchangé). Un hook n'est jamais contourné, et ce n'est pas un échec du LLM : le compteur du mode manuel n'est pas touché. | Corriger ce que le hook reproche (sortie : ticket ou message), puis relancer le merge. |
+| `DELIVERY_REF_INVALID` | `delivery: 'branch'` : aucune branche de livraison valide ne peut être dérivée (nom d'agent invalide, SHA invalide ; `details.reason`). Levé, ou rapporté dans `delivery.code`. | `striart doctor` ; le merge local reste valide. |
+| `IDLE_CLOSE_FAILED` | `striart gc` : l'arrêt d'une session a échoué (`detail` : `NOT_STOPPED`, `STILL_ALIVE`, ou un code système) — la session peut vivre encore. Sortie 1. | `striart status`, puis relancer `striart gc` ; sinon arrêter la session à la main. |
+| `IDLE_STATE_CORRUPT` | `.striart/idle/state.json` (avertissements du GC) est illisible : tant qu'il l'est, le balayage ne ferme rien (`holds` : `IDLE_STATE_UNREADABLE`). | Le supprimer (il ne perd que les instants d'avertissement : les agents seront avertis de nouveau), puis `striart gc --dry-run`. |
 
 **Avertissements** (champ `warnings` du `--json`, sortie 0 — pas des erreurs) :
 `DEPRECATED_OPTION` (`--force` sans `--reuse`, alias de
 `--allow-historical-secrets` jusqu'en 0.12), `TERMINAL_OPEN_FAILED` (l'onglet
 `--open` ne s'est pas ouvert), `PTY_HOST_STOPPING` / `PTY_HOST_UNTOUCHED`
 (`stop` : l'hôte de terminal s'arrête encore / a été laissé en place),
-`AGENT_ARTIFACT_FAILED` (`stop`/`clean` : l'hôte de session ACP ou la *Tab Config* Warp de l'agent n'a pas pu être libéré — l'arrêt ou la suppression, eux, ont réussi), `ALREADY_INTEGRATED` (`run --autonomous`, modes orchestrés, proxy ACP : le commit de l'agent était déjà dans la cible, rien n'a été mergé, aucun Test Gate rejoué, clone nettoyé), un avertissement portant le code d'une erreur de domaine (`stop` : le dégagement de la file a échoué après l'arrêt — `data.queueError` ; `striart queue --retry`),
+`AGENT_ARTIFACT_FAILED` (`stop`/`clean` : l'hôte de session ACP ou la *Tab Config* Warp de l'agent n'a pas pu être libéré — l'arrêt ou la suppression, eux, ont réussi), `ALREADY_INTEGRATED` (`run --autonomous`, modes orchestrés, proxy ACP : le commit de l'agent était déjà dans la cible, rien n'a été mergé, aucun Test Gate rejoué, clone nettoyé), `SERIALIZATION_RELAXED` (`run --autonomous`, `plan`, modes orchestrés : une tâche que le Router n'a pas su localiser — sentinelle `**` — n'a pas attendu un clone dont la session s'est terminée en échec, sans commit à merger ; `relaxedBlockers` nomme les clones, une collision sur un fichier précis reste bloquante), un avertissement portant le code d'une erreur de domaine (`stop` : le dégagement de la file a échoué après l'arrêt — `data.queueError` ; `striart queue --retry`),
 `ACP_BINARY_DOWNLOADED` (`--import-acp` avec
 `acpRegistry.allowBinaryDownload` : binaire téléchargé, empreinte vérifiée),
 `CONTROL_LINK_PENDING` (`dashboard --daemon` : le daemon n'a pas encore publié
@@ -191,7 +222,9 @@ porte sa raison (`IN_USE`, `SESSION_LIVE`, `PENDING`, `BUSY`) dans `skipped`.
 | proxy `striart acp` | idem, plus `NOTHING_STARTED` ; `keptCode: MERGE_DEFERRED` | Aucune session démarrée / merge laissé à l'humain (`MANUAL`) ou éditeur déconnecté (`DISCONNECTED`, `onDisconnect: 'keep'`). | — |
 | contrat de commit (champ `commit`) | `COMMITTED`, `NOTHING_TO_COMMIT`, `SKIPPED_AGENT_COMMITTED` | Striart a commité `files` / rien de commitable (`excluded` : secrets et fichiers injectés) / `agent-then-striart` et l'agent a commité lui-même. | — |
 
-La `reason` d'un ticket (`ticket.reason`) est l'une de `MERGE_CONFLICT`, `UNMERGEABLE_CONFLICT`, `GATE_FAILED`, `SEMANTIC_MERGE_FAILED`, `SEMANTIC_GATE_FAILED` (la fusion LLM a passé le gate… puis l'a perdu après retentatives), `PROMOTION_GATE_FAILED` ou `PROTECTED_PATHS_CHANGED`.
+La `reason` d'un ticket (`ticket.reason`) est l'une de `MERGE_CONFLICT`, `UNMERGEABLE_CONFLICT`, `GATE_FAILED`, `SEMANTIC_MERGE_FAILED`, `SEMANTIC_GATE_FAILED` (la fusion LLM a passé le gate… puis l'a perdu après retentatives), `PROMOTION_GATE_FAILED`, `COMMIT_HOOK_REJECTED` (un hook de la cible a rejeté le commit de merge) ou `PROTECTED_PATHS_CHANGED`.
+
+**Codes de livraison** (`autoPush`) — rapportés dans `data.delivery.code` et en préfixe de `pushError` (`[PUSH_TIMEOUT] …`), **jamais levés** : le merge local reste valide, l'échec est visible, rien n'est forcé. `PUSH_TIMEOUT` (au-delà de `pushTimeoutMs` : hook `pre-push`, authentification ou réseau bloqué, arbre de process tué), `PUSH_NON_FAST_FORWARD` (`origin` a avancé hors de Striart ; si le remote porte déjà ce SHA, c'est un succès `alreadyDelivered`), `PUSH_REJECTED` (le remote ou un hook `pre-push` refuse : branche protégée, droits), `PUSH_FAILED` (autre échec de `git push`, ou vérification locale impossible), `PUSH_SUPERSEDED` (le SHA n'est plus dans la branche locale — un rollback est passé —, rien n'est publié) ; `DELIVERY_REF_INVALID` figure plus haut. La piste du rapport donne la commande exacte (`git push origin <sha>:refs/heads/<branche>`). Voir [Configuration](configuration.md#livraison-vers-origin--autopush-delivery-délais).
 
 ## Tickets de conflit et mode manuel
 
@@ -373,6 +406,16 @@ un `code` dans le résultat, des cas où le test lui-même n'a pas échoué :
 | `GATE_INTERRUPTED` | Le conteneur natif a reçu un signal d'interruption (Ctrl+C, arrêt du process) pendant le test : exécution abandonnée, rien n'est commité. | Relancer. |
 | `GATE_NATIVE_UNAVAILABLE` | Binaire natif indisponible ou non vérifié, ou rapport du conteneur inexploitable : le gate **n'est pas exécuté** (fail closed). | Voir « Composant natif » ; relâchement explicite : `gateContainer: 'process'` (sans détection d'orphelins). |
 
+**Un test qui échoue « parce qu'une variable manque »** : le gate ne reçoit pas
+tout l'environnement de l'orchestrateur, seulement une liste blanche (voir
+[`gateEnv`](configuration.md#gateenv--lenvironnement-du-test-gate)). Si le dépôt
+demande une variable (`gateEnv: ['MON_APP_*']`) que la config utilisateur
+n'autorise pas (`gate.envAllow`), le journal du gate s'ouvre sur « gateEnv :
+variables demandées par le dépôt mais non autorisées par la config utilisateur
+(gate.envAllow), non transmises : … » (noms seulement) et `striart doctor` le
+signale (ligne « Environnement du Test Gate »). Les clés d'API (`*_API_KEY`) et
+les URL de webhook ne sont **jamais** transmises, quoi qu'on demande.
+
 ## Dashboard : connexion refusée
 
 - **401 « connexion requise »** sur l'URL nue : normal, le dashboard exige un
@@ -401,6 +444,13 @@ un `code` dans le résultat, des cas où le test lui-même n'a pas échoué :
   d'affichage sont appliquées. Pour en admettre d'autres, `env.allow` dans la
   [configuration utilisateur](configuration.md#configuration-utilisateur-hors-du-dépôt) ;
   `NODE_*`, `LD_*`, `PATH*`, `STRIART_NATIVE_BIN`… ne le seront jamais.
+- **Bandeau « Hors ligne » / « Flux interrompu »** : le flux temps réel est
+  coupé (le dashboard a été arrêté, la machine s'est mise en veille, un proxy a
+  fermé la connexion). Les données restent affichées, **datées** (« dernière
+  mise à jour à … ») et signalées comme potentiellement obsolètes ; la
+  reconnexion est automatique et rejoue l'état complet. Si le message devient
+  « Session absente ou expirée », relancer `striart dashboard --link` et ouvrir
+  le nouveau lien.
 
 ## Repo principal réservé (`MAIN_SESSION_LIVE`)
 
@@ -451,11 +501,67 @@ piste, qui désigne le shell à surveiller (`--pid $PID` sous PowerShell,
 - **Profil `ollama`** : c'est désormais Aider sur un modèle Ollama local ;
   `aider` doit être installé (`striart profiles --detect`).
 
+## GC d'inactivité : pourquoi cet agent n'est-il pas fermé ?
+
+`striart gc --dry-run` (ou `--json`) explique chaque décision, agent par agent :
+
+- **`reasons`** (agent *actif*) : `SIGNAL_FRESH:<signal>` (au moins un signal plus
+  récent que `idle.warnAfterMs`), `SIGNAL_UNKNOWN:<signal>` (signal illisible :
+  fail closed, l'agent est réputé actif), `CLOCK_SKEW` (horodatage dans le futur),
+  `NO_SIGNAL`.
+- **`blockers`** (agent *protégé*, jamais touché) : `HUMAN_REQUEST` (permission ou
+  question en attente), `OPEN_TICKET`, `ORCHESTRATED` (plan, groupe ou
+  collaboration), `MERGE_IN_PROGRESS`, `MAIN_SESSION`, `REMOVING`, `EXCLUDED`
+  (`idle.excludeAgents` / `excludeProfiles`).
+- **`closeBlockedBy`** (agent inactif mais non fermable) : `NO_LIVE_SESSION`
+  (rien à fermer : session terminée ou jamais lancée), `ACTION_REPORT` /
+  `ACTION_WARN` (`idle.action` ne va pas jusqu'à `close`), `NOT_WARNED` (premier
+  balayage : l'avertissement part d'abord), `GRACE_RUNNING` (la grâce court,
+  `closeNotBefore` donne l'heure), `BELOW_CLOSE_THRESHOLD` (inactif depuis moins
+  de `idle.closeAfterMs`), `NOT_AUTHORIZED` (le dépôt n'est pas dans
+  `idle.closeRoots` de la config utilisateur, ou elle est illisible —
+  `striart doctor`), `PTY_OUTPUT_UNOBSERVABLE` (terminal dont la dernière sortie
+  n'est pas publiée : `idle.closePty: true`, ou un hôte natif reconstruit qui
+  publie `host.output`).
+- **`holds`** (au niveau du balayage) : une source de contexte est illisible, donc
+  aucune fermeture n'est permise (voir `IDLE_CLOSE_BLOCKED`).
+
+Un balayage `striart watch` neutralisé par une reprise de veille ne décide rien
+pendant ce tour. Pour désactiver : `idle.enabled: false` (relâchement affiché par
+`doctor`).
+
+## Router : tâche sérialisée, collisions manquées
+
+- **« Ma tâche attend pour rien »** : `striart queue` dit ce qui la bloque ; le
+  champ `routing` de `striart run --json` et de l'agent dans `striart status --json`
+  (`serialized`, affiché aussi par `striart run`) dit pourquoi le Router l'a
+  sérialisée derrière tout le monde — `vague` (portée `broad`, confiance
+  basse, prédiction vide…, avec ses `reasons`), `budget` (`TOKEN_BUDGET_EXCEEDED` /
+  `TOKEN_PRICE_MISSING`) ou `tree-truncated` (plus de `tokens.router.tree.maxFiles`
+  fichiers suivis). Un autre préréglage (`tokens.router.preset`) ou un seuil
+  (`vague.minConfidence`) ajuste le compromis ; voir
+  [Configuration](configuration.md#tokensrouter--la-fiabilité-du-router).
+- **Un clone en échec ne retient pas la sentinelle** : avertissement
+  `SERIALIZATION_RELAXED` et événement `task:serialization-relaxed` ; `relaxedBlockers`
+  liste les clones en échec (`SESSION_FAILED`, statut). Une collision sur un fichier
+  précis, elle, bloque toujours.
+- **Deux agents se sont chevauchés sans que le Router l'annonce** : normal, il ne
+  voit pas tout (voir [ce que valent le Router et la fusion](architecture.md#ce-que-valent-le-router-et-la-fusion-sémantique--mesures-du-2026-10-26)).
+  Le filet à l'exécution le signale (événement `overlap:observed`, champ
+  `overlaps` de `striart status`) ; le Merger et le Test Gate font le reste.
+- **`doctor` : « performance » en avertissement** : latence du verrou d'état
+  au-dessus de 100 ms, `git status` du principal au-dessus de 2 s, ou verrou tenu
+  depuis plus de 5 min. Exclure `.striart/` de l'antivirus et de l'indexation ;
+  `striart lock` / `striart status` pour le détenteur.
+
+## Modes orchestrés, relectures, collaboration
 ## Modes orchestrés, relectures, collaboration
 
 - `striart orchestrate` / `plan` v2 s'arrête en `REVIEW_REJECTED`,
   `REVIEW_EXHAUSTED`, `VERDICT_INVALID`, `READ_ONLY_VIOLATION`,
-  `SCOPE_VIOLATION`, `TEAM_COMMIT_FORBIDDEN`, `RACE_NO_WINNER`, `WAIT_TIMEOUT`
+  `SCOPE_VIOLATION`, `TEAM_COMMIT_FORBIDDEN`, `RACE_NO_WINNER`, `JUDGE_FAILED`
+  (le juge d'une course `pick: judge` a échoué et `race.judgeFallback` vaut
+  `fail` : sortie 1, un échec d'exécution, pas un refus), `WAIT_TIMEOUT`
   ou `SKIPPED` : ce sont des **statuts** du nœud (pas des erreurs), lisibles
   dans `striart status` (`orchestration`) et le document `--json`.
 - Une relecture humaine qui attend : `striart review` (liste) puis
@@ -497,6 +603,37 @@ sur `GIT_SSH_COMMAND` ou `GIT_ASKPASS` échoue (`pushError`, merge local
 conservé). Configurer l'authentification dans git lui-même : credential
 helper en HTTPS, `~/.ssh/config` et agent SSH en SSH — voir
 [Branches et pipeline](branches.md#autopush-et-le-remote).
+
+Depuis la livraison hors verrou, un push ne peut en outre **ni demander de
+saisie** (`GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`) **ni durer
+indéfiniment** (`pushTimeoutMs`, arbre de process tué) : une authentification qui
+exigeait une invite échoue tout de suite (`PUSH_FAILED`, `PUSH_REJECTED`) au lieu
+de geler ; un hook `pre-push` ou un réseau bloqué donne `PUSH_TIMEOUT`. Les codes
+et leurs pistes : voir « Codes de livraison » plus haut.
+
+## Réseau d'entreprise : appels refusés (`NET_*`)
+
+Derrière un proxy ou un pare-feu d'entreprise, un appel sortant (LLM, webhook,
+registre ACP) peut être refusé par la politique réseau de Striart — c'est voulu
+(fail closed). Démarche : `striart doctor`, ligne « Réseau » (politique effective,
+proxy actif ou inactif, CA, TLS) ; puis le code :
+
+- `NET_PROXY_UNSUPPORTED` : l'URL du proxy a un schéma non supporté — utiliser
+  `http://` ou `https://` ; les proxys SOCKS et `ALL_PROXY` ne sont pas
+  supportés ;
+- `NET_TLS_UNTRUSTED` : un proxy qui inspecte le TLS présente sa propre CA —
+  l'ajouter (`NODE_EXTRA_CA_CERTS`, `node --use-system-ca`, `network.caFile`),
+  jamais couper la vérification ;
+- `NET_HOST_NOT_ALLOWED` / `NET_OFFLINE` : liste blanche ou mode hors ligne
+  posés par l'utilisateur lui-même (config utilisateur ou variables du shell) ;
+- `NET_INSECURE_TRANSPORT` : un `http://` distant, y compris un Ollama sur une
+  autre machine — `https://` ou `network.allowInsecureHosts` (config
+  utilisateur seulement ; `llm.allowInsecureTransport` du dépôt ne suffit plus) ;
+- ces réglages ne se posent **jamais** depuis un dépôt : le `.env` les ignore
+  (variables nommées sur stderr) et la config du dépôt n'a pas de clé `network`
+  (clé inconnue, `CONFIG_INVALID`).
+
+Détail et limites : [Réseau d'entreprise](configuration.md#réseau-dentreprise-network).
 
 ## Le watcher
 

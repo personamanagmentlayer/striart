@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { en } from '../../src/cli/i18n/en.ts';
 import { fr } from '../../src/cli/i18n/fr.ts';
 import { parsePlan, validatePlan } from '../../src/plan.ts';
-import { validateConfig } from '../../src/config.js';
+import { validateConfig } from '../../src/config.ts';
 
 /**
  * Le catalogue anglais remplace le message du domaine (français) par code.

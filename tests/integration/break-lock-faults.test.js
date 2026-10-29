@@ -30,7 +30,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 });
 
 const { withStateLock } = await import('../../src/state-lock.ts');
-const { logger } = await import('../../src/logger.js');
+const { logger } = await import('../../src/logger.ts');
 
 async function deadPid() {
   return (await execa('node', ['-e', 'process.exit(0)'])).pid;

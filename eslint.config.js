@@ -20,7 +20,7 @@ import tseslint from 'typescript-eslint';
 export default tseslint.config(
   // .claude/workflows : scripts du runtime Workflow de Claude Code (return de
   // premier niveau, globals injectés) — pas des modules ESM du projet.
-  { ignores: ['node_modules/', 'coverage/', '.striart/', '.claude/workflows/'] },
+  { ignores: ['node_modules/', 'coverage/', '.striart/', '.claude/workflows/', 'extensions/'] },
   // Config JS de base — cantonnée aux fichiers JS pour ne pas parasiter le TS.
   { files: ['**/*.js', '**/*.cjs', '**/*.mjs'], ...js.configs.recommended },
   // Config TS — parser typescript-eslint sur les .ts uniquement.
@@ -74,6 +74,15 @@ export default tseslint.config(
         })),
       ],
     },
+  },
+  {
+    // Client navigateur du dashboard : il manipule des documents du protocole et
+    // des nœuds DOM non typés (contenu NON FIABLE, échappé à l'insertion) ; sa
+    // source est embarquée telle quelle dans la page (voir dashboard-client.ts).
+    // Suite de bout en bout : messages JSON des process de test, sondes du DOM.
+    files: ['src/dashboard-client.ts', 'tests/e2e/**/*.ts'],
+    languageOptions: { globals: { ...globals.browser } },
+    rules: { '@typescript-eslint/no-explicit-any': 'off' },
   },
   {
     // Le helper de test CJS a ses propres globals.

@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { DEFAULT_CONFIG } from '../../src/config.js';
-import { llmGenerate } from '../../src/llm.js';
+import { DEFAULT_CONFIG } from '../../src/config.ts';
+import { llmGenerate } from '../../src/llm.ts';
 import { resetUsageIndex } from '../../src/tokens/ledger.ts';
 import { resetRootCache } from '../../src/tokens/call.ts';
 

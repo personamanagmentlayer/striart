@@ -2,13 +2,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
+import { initStriart } from '../../src/init.ts';
 import {
   createConflictTicket,
   readResolutionInputs,
   readTicketDetail,
   safeFileName,
-} from '../../src/conflicts.js';
+} from '../../src/conflicts.ts';
 
 /** S-M6 : deux chemins distincts ne partagent jamais leurs fichiers de résolution. */
 describe('ticket — nommage injectif des fichiers (S-M6)', () => {

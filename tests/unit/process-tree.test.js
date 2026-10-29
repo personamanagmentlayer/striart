@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { isProcessAlive, killProcessTree, normalizeExitCode } from '../../src/process-tree.js';
+import { isProcessAlive, killProcessTree, normalizeExitCode } from '../../src/process-tree.ts';
 
 describe('normalizeExitCode', () => {
   it('replie le wrap non signé de Windows en entier signé', () => {

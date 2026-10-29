@@ -3,10 +3,10 @@ import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { simpleGit } from 'simple-git';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { createAgent, listAgents, updateAgentMeta } from '../../src/clone.js';
-import { mergeAgentCommit, syncAgentWithMain, syncAllAgents } from '../../src/orchestrator.js';
-import { checkAgentsBehind } from '../../src/sync.js';
+import { initStriart } from '../../src/init.ts';
+import { createAgent, listAgents, updateAgentMeta } from '../../src/clone.ts';
+import { mergeAgentCommit, syncAgentWithMain, syncAllAgents } from '../../src/orchestrator.ts';
+import { checkAgentsBehind } from '../../src/sync.ts';
 
 const GATE_OK = 'node -e "process.exit(0)"';
 

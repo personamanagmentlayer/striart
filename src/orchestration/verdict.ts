@@ -9,7 +9,7 @@
  * soumis au Test Gate.
  */
 import { randomBytes } from 'node:crypto';
-import { isSafeProjectPath, normalizeFilePath } from '../router.js';
+import { isSafeProjectPath, normalizeFilePath } from '../router.ts';
 import { sanitizeAgentText } from '../collab/message.ts';
 import type { ReviewComment, ReviewQuorum, ReviewVerdict, ReviewVerdictValue } from '../types.js';
 

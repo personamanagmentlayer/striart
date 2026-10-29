@@ -10,10 +10,10 @@ import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { simpleGit } from 'simple-git';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { createAgent } from '../../src/clone.js';
-import { mergeAgentCommit, runTask } from '../../src/orchestrator.js';
-import { readState } from '../../src/state.js';
+import { initStriart } from '../../src/init.ts';
+import { createAgent } from '../../src/clone.ts';
+import { mergeAgentCommit, runTask } from '../../src/orchestrator.ts';
+import { readState } from '../../src/state.ts';
 import { readRecords, resetUsageIndex } from '../../src/tokens/ledger.ts';
 import { resetRootCache } from '../../src/tokens/call.ts';
 

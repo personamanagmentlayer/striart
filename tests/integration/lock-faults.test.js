@@ -44,9 +44,9 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 });
 
 const { createTempRepo } = await import('../helpers/temp-repo.js');
-const { initStriart } = await import('../../src/init.js');
-const { underBreakLock, withMainLock } = await import('../../src/lock.js');
-const { logger } = await import('../../src/logger.js');
+const { initStriart } = await import('../../src/init.ts');
+const { underBreakLock, withMainLock } = await import('../../src/lock.ts');
+const { logger } = await import('../../src/logger.ts');
 
 async function deadPid() {
   return (await execa('node', ['-e', 'process.exit(0)'])).pid;

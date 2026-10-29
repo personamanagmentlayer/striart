@@ -7,7 +7,7 @@ import {
   warpTabConfigName,
 } from '../../src/terminal/warp.ts';
 import { DEFAULT_WARP_SETTINGS } from '../../src/terminal/config.ts';
-import { StriartError } from '../../src/errors.js';
+import { StriartError } from '../../src/errors.ts';
 
 /**
  * Lecteur TOML minimal des seules formes que Striart écrit (clé = "chaîne"

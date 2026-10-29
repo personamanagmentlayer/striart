@@ -24,7 +24,7 @@ import {
 } from '../permissions.ts';
 import type { ElicitationRequest, HumanRequest, PermissionRequest } from '../permissions.ts';
 import { selectPermissionOption } from '../acp/protocol.ts';
-import { logger } from '../logger.js';
+import { logger } from '../logger.ts';
 import type { RpcPeer } from './rpc.ts';
 
 const PERMISSION_KINDS = new Set(['allow_once', 'allow_always', 'reject_once', 'reject_always']);

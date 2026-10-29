@@ -1,0 +1,12 @@
+**
+!dist/extension.cjs
+!package.json
+!package.nls.json
+!package.nls.fr.json
+!l10n/bundle.l10n.fr.json
+!media/icon.png
+!media/activity.svg
+!README.md
+!README.fr.md
+!CHANGELOG.md
+!LICENSE

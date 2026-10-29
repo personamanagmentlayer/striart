@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { validateAgentName } from '../../src/clone.js';
-import { StriartError } from '../../src/errors.js';
+import { validateAgentName } from '../../src/clone.ts';
+import { StriartError } from '../../src/errors.ts';
 
 describe('validateAgentName', () => {
   it.each(['agent-a', 'billing', 'ui_2', 'A1'])('accepte "%s"', (name) => {

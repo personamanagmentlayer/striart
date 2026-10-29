@@ -17,12 +17,13 @@
  *    tout le registre à chaque fois coûterait plus que l'appel. Seuls les
  *    octets ajoutés depuis la dernière lecture sont analysés.
  */
-import { appendFile, mkdir, open, readFile, readdir, rm, stat } from 'node:fs/promises';
+import { appendFile, open, readFile, readdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { UsageRecord, UsageRole, UsageSource } from '../types.js';
-import { striartDir } from '../paths.js';
-import { withTransientRetry } from '../json-file.js';
-import { logger } from '../logger.js';
+import { striartDir } from '../paths.ts';
+import { withTransientRetry } from '../json-file.ts';
+import { logger } from '../logger.ts';
+import { mkdirPrivate } from '../private-fs.ts';
 
 export function usageDir(root: string): string {
   return path.join(striartDir(root), 'usage');
@@ -134,7 +135,7 @@ export async function appendUsage(root: string, record: UsageRecord): Promise<vo
   const next = previous
     .catch(() => undefined)
     .then(async () => {
-      await mkdir(dir, { recursive: true });
+      await mkdirPrivate(dir);
       await withTransientRetry(() => appendFile(file, line, { encoding: 'utf8', mode: 0o600 }));
     });
   writeChains.set(file, next);

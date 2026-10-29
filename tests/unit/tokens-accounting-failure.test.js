@@ -13,12 +13,12 @@ vi.mock('../../src/tokens/ledger.ts', async (importOriginal) => ({
   }),
 }));
 
-const { logger } = await import('../../src/logger.js');
+const { logger } = await import('../../src/logger.ts');
 const { recordRefusal } = await import('../../src/tokens/call.ts');
 const { SessionMeter } = await import('../../src/tokens/session-meter.ts');
 const { DEFAULT_TOKENS_SETTINGS, isValidTokensSettings, resolveTokensSettings } =
   await import('../../src/tokens/settings.ts');
-const { StriartError, ERROR_KINDS } = await import('../../src/errors.js');
+const { StriartError, ERROR_KINDS } = await import('../../src/errors.ts');
 
 const scopeWith = (tokens) => ({
   root: '/repo',

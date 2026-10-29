@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFile, rm, stat, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import path from 'node:path';
-import { isProcessAlive } from '../../src/process-tree.js';
+import { isProcessAlive } from '../../src/process-tree.ts';
 import { attachSocketPath, connectAttachClient } from '../../src/pty-attach.ts';
 import { resetNativeBinaryCache } from '../../src/native.ts';
 import {

@@ -3,8 +3,9 @@ import { spawn } from 'node:child_process';
 import { stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { isProcessAlive } from '../../src/process-tree.js';
+import { initStriart } from '../../src/init.ts';
+import { isProcessAlive } from '../../src/process-tree.ts';
+import { ptyHostPidFilePath } from '../../src/pty-host-state.ts';
 
 // Lecture d'identité en panne (PowerShell bloqué, WMI cassé…) : le verdict
 // est `unverified`. Il suffit pour s'abstenir, jamais pour tuer.
@@ -13,7 +14,7 @@ vi.mock('../../src/process-info.ts', async (importOriginal) => ({
   checkProcessInstance: async () => 'unverified',
 }));
 
-const { stopDaemon, daemonStatus } = await import('../../src/daemon.js');
+const { stopDaemon, daemonStatus } = await import('../../src/daemon.ts');
 const { stopPtyHost } = await import('../../src/pty-host.ts');
 
 describe('PID vivant mais non identifiable : jamais tué', () => {
@@ -55,7 +56,12 @@ describe('PID vivant mais non identifiable : jamais tué', () => {
   });
 
   it('hôte de pty : laissé en place et signalé (untouched), jamais tué', async () => {
-    const pidFile = path.join(repo.root, '.striart', 'pty', 'agent-a', 'host.pid');
+    // Pas forcément `.striart/pty/<agent>/` : `ptyHostStateDir` bascule sur un
+    // dossier de repli (hors du dépôt) quand ce chemin naturel dépasse la
+    // limite des sockets Unix — déterministe sur les runners macOS de CI.
+    // Publier au chemin que `stopPtyHost` lit RÉELLEMENT, jamais un chemin
+    // naturel codé en dur.
+    const pidFile = ptyHostPidFilePath(repo.root, 'agent-a');
     const { mkdir } = await import('node:fs/promises');
     await mkdir(path.dirname(pidFile), { recursive: true });
     await writeFile(

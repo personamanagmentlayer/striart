@@ -3,9 +3,11 @@
 > [Documentation](../README.md) · [Integrations](README.md) · VS Code and Cursor
 > 🇫🇷 [Français](../../fr/integrations/vscode-cursor.md)
 
-Until the Striart extension ships (VS Code Marketplace and Open VSX, in
-preparation, no announced date), Striart is used in VS Code and Cursor as a
-stdio MCP server declared in an `mcp.json` file.
+Striart is used in VS Code and Cursor in two ways: as a **stdio MCP server**
+declared in an `mcp.json` file (agent plane, below), and through the **VS Code
+extension** (human plane, [further down](#vs-code-extension)), delivered in the
+repository but **not yet published** (neither VS Code Marketplace nor Open VSX,
+no announced date).
 
 ## VS Code
 
@@ -140,6 +142,42 @@ currently documented.
 - On Windows, when an administrator enables "MCP Network Controls", sandboxed
   stdio servers do not start: a "No sandbox" entry is required (Cursor docs).
 
+## VS Code extension
+
+The extension (`extensions/vscode/`, version `0.1.0`, `private`) is a **thin
+client of the Striart Control Protocol v1** — the human plane: it launches
+`striart api --stdio` and contains no business logic; everything it shows comes
+from `state.get` / `state.changed`, and every action is a protocol method, with
+the same guards, locks and Test Gate as the CLI.
+
+- **Striart view** in the activity bar: agents grouped as "Needs attention"
+  (conflict tickets, permission requests and questions, agents ready to merge,
+  broken clones), "Running" and "Idle", plus the queue; a status bar with an
+  explicit offline state.
+- **Command Palette** (`Striart:` prefix): merge, synchronize, stop, new task,
+  open an agent's terminal, resolve a ticket, show an agent's diff, open the
+  dashboard (one-time link), `doctor`, roll back the last merge, retry the queue,
+  reconnect.
+- **Actionable notifications** for agent permission requests and questions;
+  closing a notification never answers (fail closed).
+- English and French, automatic reconnection (exponential backoff with jitter).
+
+**Security**: in an untrusted workspace (Workspace Trust) the extension is inert
+— **no process is started** — because `striart api` loads the repository config,
+which is code. The binary is resolved from **user** settings only
+(`striart.binaryPath`, `striart.nodePath`), as `argv` with `shell: false`.
+Launched from an agent session (`STRIART_SESSION=1`), the CLI refuses the
+protocol. Details, settings and limits:
+[`extensions/vscode/README.md`](../../../extensions/vscode/README.md).
+
+**Delivery status.** The code, its unit, integration (against the real
+`striart api`) and end-to-end (real VS Code, outside the extension's `npm test`) tests are in the repository. The
+extension is **not published**: to try it, `cd extensions/vscode && npm install
+&& npm run package` produces `striart-vscode.vsix`, to install by hand.
+Publishing to the Marketplace and Open VSX is a separate manual step, not done.
+The JetBrains plugin and the read-only cloud agents are **not delivered**.
+
+## Sources (checked on 2026-10-24)
 ## Sources (checked on 2026-10-24)
 
 - VS Code, "MCP configuration reference" —

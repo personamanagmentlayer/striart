@@ -12,7 +12,7 @@ import { createTempRepo } from '../helpers/temp-repo.js';
 const race = vi.hoisted(() => ({ registryFile: '', republishPid: 0, armed: false }));
 
 vi.mock('../../src/process-tree.js', async (original) => {
-  const actual = /** @type {typeof import('../../src/process-tree.js')} */ (await original());
+  const actual = /** @type {typeof import('../../src/process-tree.ts')} */ (await original());
   return {
     ...actual,
     isProcessAlive: (pid) => {
@@ -32,10 +32,10 @@ vi.mock('../../src/process-tree.js', async (original) => {
 });
 
 const DEAD_PID = 0x7fffffff;
-const { initStriart } = await import('../../src/init.js');
-const { readRegistry } = await import('../../src/clone.js');
-const { reconcile } = await import('../../src/orchestrator.js');
-const { createAgent } = await import('../../src/clone.js');
+const { initStriart } = await import('../../src/init.ts');
+const { readRegistry } = await import('../../src/clone.ts');
+const { reconcile } = await import('../../src/orchestrator.ts');
+const { createAgent } = await import('../../src/clone.ts');
 
 describe('reconcile — fichiers d’état', () => {
   let repo;

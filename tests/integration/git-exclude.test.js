@@ -8,7 +8,7 @@ import {
   ensureCloneExcludes,
   removeCloneExcludes,
 } from '../../src/git-exclude.ts';
-import * as memory from '../../src/memory.js';
+import * as memory from '../../src/memory.ts';
 
 // Intégration : vrai fichier .git/info/exclude sur disque.
 let clone;

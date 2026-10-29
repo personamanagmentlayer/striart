@@ -1,0 +1,377 @@
+{
+  "name": "striart-vscode",
+  "displayName": "%extension.displayName%",
+  "description": "%extension.description%",
+  "version": "0.1.0",
+  "publisher": "jumsay",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/personamanagmentlayer/striart.git",
+    "directory": "extensions/vscode"
+  },
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "SCM Providers",
+    "Other"
+  ],
+  "keywords": [
+    "striart",
+    "git",
+    "multi-agent",
+    "orchestrator",
+    "ai-agents"
+  ],
+  "icon": "media/icon.png",
+  "main": "./dist/extension.cjs",
+  "l10n": "./l10n",
+  "activationEvents": [
+    "workspaceContains:.striart/agents.json"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "%capabilities.virtual%"
+    },
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "%capabilities.untrusted%",
+      "restrictedConfigurations": [
+        "striart.root"
+      ]
+    }
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "striart",
+          "title": "%views.container.title%",
+          "icon": "media/activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "striart": [
+        {
+          "id": "striart.agents",
+          "name": "%views.agents.name%",
+          "contextualTitle": "%views.agents.title%"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "striart.agents",
+        "contents": "%welcome.untrusted%",
+        "when": "!isWorkspaceTrusted"
+      },
+      {
+        "view": "striart.agents",
+        "contents": "%welcome.connecting%",
+        "when": "isWorkspaceTrusted && (striart.connection == 'connecting' || striart.connection == 'idle' || !striart.connection)"
+      },
+      {
+        "view": "striart.agents",
+        "contents": "%welcome.notInitialized%",
+        "when": "isWorkspaceTrusted && striart.connection == 'not-initialized'"
+      },
+      {
+        "view": "striart.agents",
+        "contents": "%welcome.binaryMissing%",
+        "when": "isWorkspaceTrusted && striart.connection == 'binary-missing'"
+      },
+      {
+        "view": "striart.agents",
+        "contents": "%welcome.blocked%",
+        "when": "isWorkspaceTrusted && striart.connection == 'blocked'"
+      },
+      {
+        "view": "striart.agents",
+        "contents": "%welcome.offline%",
+        "when": "isWorkspaceTrusted && striart.connection == 'offline'"
+      },
+      {
+        "view": "striart.agents",
+        "contents": "%welcome.empty%",
+        "when": "isWorkspaceTrusted && striart.connection == 'connected' && striart.empty"
+      }
+    ],
+    "commands": [
+      {
+        "command": "striart.refresh",
+        "title": "%cmd.refresh%",
+        "category": "Striart",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "striart.reconnect",
+        "title": "%cmd.reconnect%",
+        "category": "Striart",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "striart.showOutput",
+        "title": "%cmd.showOutput%",
+        "category": "Striart"
+      },
+      {
+        "command": "striart.merge",
+        "title": "%cmd.merge%",
+        "category": "Striart",
+        "icon": "$(git-merge)"
+      },
+      {
+        "command": "striart.sync",
+        "title": "%cmd.sync%",
+        "category": "Striart",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "striart.stop",
+        "title": "%cmd.stop%",
+        "category": "Striart",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "striart.newTask",
+        "title": "%cmd.newTask%",
+        "category": "Striart",
+        "icon": "$(add)"
+      },
+      {
+        "command": "striart.openTerminal",
+        "title": "%cmd.openTerminal%",
+        "category": "Striart",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "striart.resolveTicket",
+        "title": "%cmd.resolveTicket%",
+        "category": "Striart",
+        "icon": "$(git-pull-request-draft)"
+      },
+      {
+        "command": "striart.showDiff",
+        "title": "%cmd.showDiff%",
+        "category": "Striart",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "striart.openDashboard",
+        "title": "%cmd.openDashboard%",
+        "category": "Striart",
+        "icon": "$(link-external)"
+      },
+      {
+        "command": "striart.doctor",
+        "title": "%cmd.doctor%",
+        "category": "Striart",
+        "icon": "$(pulse)"
+      },
+      {
+        "command": "striart.rollbackMerge",
+        "title": "%cmd.rollbackMerge%",
+        "category": "Striart",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "striart.retryQueue",
+        "title": "%cmd.retryQueue%",
+        "category": "Striart"
+      },
+      {
+        "command": "striart.answerRequest",
+        "title": "%cmd.answerRequest%",
+        "category": "Striart",
+        "icon": "$(comment-discussion)"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "striart.answerRequest",
+          "when": "false"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "striart.newTask",
+          "when": "view == striart.agents && striart.connection == 'connected'",
+          "group": "navigation@1"
+        },
+        {
+          "command": "striart.refresh",
+          "when": "view == striart.agents",
+          "group": "navigation@2"
+        },
+        {
+          "command": "striart.reconnect",
+          "when": "view == striart.agents && striart.connection != 'connected'",
+          "group": "navigation@3"
+        },
+        {
+          "command": "striart.doctor",
+          "when": "view == striart.agents && striart.connection == 'connected'",
+          "group": "overflow@1"
+        },
+        {
+          "command": "striart.openDashboard",
+          "when": "view == striart.agents && striart.connection == 'connected'",
+          "group": "overflow@2"
+        },
+        {
+          "command": "striart.rollbackMerge",
+          "when": "view == striart.agents && striart.connection == 'connected'",
+          "group": "overflow@3"
+        },
+        {
+          "command": "striart.showOutput",
+          "when": "view == striart.agents",
+          "group": "overflow@4"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "striart.merge",
+          "when": "view == striart.agents && viewItem =~ /striart\\.agent\\.mergeable/",
+          "group": "inline@1"
+        },
+        {
+          "command": "striart.sync",
+          "when": "view == striart.agents && viewItem =~ /striart\\.agent/",
+          "group": "inline@2"
+        },
+        {
+          "command": "striart.openTerminal",
+          "when": "view == striart.agents && viewItem =~ /striart\\.agent/",
+          "group": "inline@3"
+        },
+        {
+          "command": "striart.showDiff",
+          "when": "view == striart.agents && viewItem =~ /striart\\.agent\\.mergeable/",
+          "group": "navigation@1"
+        },
+        {
+          "command": "striart.stop",
+          "when": "view == striart.agents && viewItem =~ /striart\\.agent/",
+          "group": "9_stop@1"
+        },
+        {
+          "command": "striart.resolveTicket",
+          "when": "view == striart.agents && viewItem == striart.ticket",
+          "group": "inline@1"
+        },
+        {
+          "command": "striart.answerRequest",
+          "when": "view == striart.agents && viewItem == striart.request",
+          "group": "inline@1"
+        },
+        {
+          "command": "striart.retryQueue",
+          "when": "view == striart.agents && viewItem == striart.queueTask",
+          "group": "navigation@1"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Striart",
+      "properties": {
+        "striart.binaryPath": {
+          "type": "string",
+          "default": "striart",
+          "scope": "machine",
+          "markdownDescription": "%config.binaryPath%"
+        },
+        "striart.nodePath": {
+          "type": "string",
+          "default": "node",
+          "scope": "machine",
+          "markdownDescription": "%config.nodePath%"
+        },
+        "striart.root": {
+          "type": "string",
+          "default": "",
+          "scope": "window",
+          "markdownDescription": "%config.root%"
+        },
+        "striart.requestTimeoutSeconds": {
+          "type": "integer",
+          "default": 30,
+          "minimum": 1,
+          "maximum": 600,
+          "scope": "machine",
+          "markdownDescription": "%config.requestTimeout%"
+        },
+        "striart.actionTimeoutSeconds": {
+          "type": "integer",
+          "default": 3600,
+          "minimum": 30,
+          "maximum": 14400,
+          "scope": "machine",
+          "markdownDescription": "%config.actionTimeout%"
+        },
+        "striart.reconnect.initialDelaySeconds": {
+          "type": "number",
+          "default": 1,
+          "minimum": 0.2,
+          "maximum": 60,
+          "scope": "machine",
+          "markdownDescription": "%config.reconnectInitial%"
+        },
+        "striart.reconnect.maxDelaySeconds": {
+          "type": "number",
+          "default": 30,
+          "minimum": 1,
+          "maximum": 600,
+          "scope": "machine",
+          "markdownDescription": "%config.reconnectMax%"
+        },
+        "striart.reconnect.maxAttempts": {
+          "type": "integer",
+          "default": 8,
+          "minimum": 0,
+          "maximum": 100,
+          "scope": "machine",
+          "markdownDescription": "%config.reconnectAttempts%"
+        },
+        "striart.notifications.requests": {
+          "type": "boolean",
+          "default": true,
+          "scope": "machine",
+          "markdownDescription": "%config.notifyRequests%"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "node esbuild.mjs",
+    "format": "prettier --write .",
+    "lint": "prettier --check . && tsc --noEmit",
+    "test:unit": "node --test \"tests/unit/*.test.ts\"",
+    "test:integration": "node --test --test-timeout=420000 \"tests/integration/*.test.ts\"",
+    "test:e2e": "node scripts/run-e2e.mjs",
+    "test": "npm run test:unit && npm run test:integration",
+    "package": "npm run build && vsce package --no-dependencies --out striart-vscode.vsix"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@types/vscode": "1.96.0",
+    "@vscode/test-electron": "3.1.0",
+    "@vscode/vsce": "3.9.2",
+    "esbuild": "0.28.2",
+    "prettier": "3.9.10",
+    "typescript": "6.0.3"
+  },
+  "overrides": {
+    "@azure/msal-node": "7.1.0"
+  }
+}

@@ -27,7 +27,7 @@
 import process from 'node:process';
 import { parse as parseYaml } from 'yaml';
 import type { SimpleGit } from 'simple-git';
-import { StriartError } from './errors.js';
+import { StriartError } from './errors.ts';
 import { compileGlob, globPatternProblem } from './glob-lite.ts';
 import type { ProtectedPathChange, StriartConfig } from './types.js';
 

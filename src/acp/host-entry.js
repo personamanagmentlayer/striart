@@ -30,7 +30,7 @@ async function readSpec() {
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
 
-const { logger } = await import('../logger.js');
+const { logger } = await import('../logger.ts');
 try {
   const agentIndex = process.argv.indexOf('--agent');
   const spec = await readSpec();

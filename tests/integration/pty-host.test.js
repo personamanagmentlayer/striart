@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { isProcessAlive } from '../../src/process-tree.js';
+import { isProcessAlive } from '../../src/process-tree.ts';
 import { ensurePtyHost, ptyHostStatus, stopPtyHost } from '../../src/pty-host.ts';
 import {
   REAL_PTY_WAIT_MS,

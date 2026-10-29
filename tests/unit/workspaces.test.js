@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { detectWorkspaceLinks, fileToPackage, loadWorkspaces } from '../../src/workspaces.js';
+import { detectWorkspaceLinks, fileToPackage, loadWorkspaces } from '../../src/workspaces.ts';
 
 async function writeJson(file, data) {
   await mkdir(path.dirname(file), { recursive: true });

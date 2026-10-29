@@ -24,7 +24,7 @@ vi.mock('node:fs/promises', async (original) => {
 });
 
 const { writeJsonAtomic, withTransientRetry, isTransientFsError } =
-  await import('../../src/json-file.js');
+  await import('../../src/json-file.ts');
 
 const realPlatform = process.platform;
 function setPlatform(value) {

@@ -26,9 +26,9 @@ import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { simpleGit } from 'simple-git';
 import type { SimpleGit } from 'simple-git';
-import { cloneGit } from './clone.js';
-import { DEFAULT_CONFIG } from './config.js';
-import { StriartError } from './errors.js';
+import { cloneGit } from './clone.ts';
+import { DEFAULT_CONFIG } from './config.ts';
+import { StriartError } from './errors.ts';
 import { parseMergeSubject, parseRevertSubject } from './merge-subject.ts';
 import type { AgentProfile, CommitPolicy, StriartCommitResult, StriartConfig } from './types.js';
 

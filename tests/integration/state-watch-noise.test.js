@@ -2,11 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
+import { initStriart } from '../../src/init.ts';
 import { ControlHub } from '../../src/control/hub.ts';
 import { createChangeFeed } from '../../src/mcp/change-feed.ts';
 import { withStateLock } from '../../src/state-lock.ts';
-import { striartDir } from '../../src/paths.js';
+import { striartDir } from '../../src/paths.ts';
 
 const settle = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 

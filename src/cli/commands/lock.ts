@@ -1,7 +1,7 @@
-import { assertInitialized } from '../../clone.js';
-import { StriartError } from '../../errors.js';
-import { reserveMainSession } from '../../lock.js';
-import { readMainSessionStatus, stopMainSession } from '../../main-session.js';
+import { assertInitialized } from '../../clone.ts';
+import { StriartError } from '../../errors.ts';
+import { reserveMainSession } from '../../lock.ts';
+import { readMainSessionStatus, stopMainSession } from '../../main-session.ts';
 import type { CommandModule } from '../context.ts';
 
 export interface LockInput {

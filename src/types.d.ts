@@ -20,6 +20,16 @@ export interface StriartConfig {
   testCommand: string;
   targetBranch: string;
   autoPush: boolean;
+  /**
+   * Livraison vers `origin` (exige autoPush) : 'push' = SHA testé vers la branche
+   * cible ; 'branch' = vers `striart/<agent>/<tâche>`, la forge reste l'autorité
+   * d'approbation. Toujours hors verrou, jamais forcée.
+   */
+  delivery: 'push' | 'branch';
+  /** Délai dur du push (ms) ; au-delà : arbre de process tué, PUSH_TIMEOUT. */
+  pushTimeoutMs: number;
+  /** Délai dur du commit de merge (hooks de la cible, signature) ; au-delà : COMMIT_HOOK_REJECTED. */
+  commitTimeoutMs: number;
   autoRebase: boolean;
   autoStash: boolean;
   semanticMerge: boolean;
@@ -86,6 +96,15 @@ export interface StriartConfig {
   gateMaxOutputBytes: number;
   /** 'native' : conteneur de process natif ; 'process' : relâchement explicite (sans détection d'orphelins). */
   gateContainer: 'native' | 'process';
+  /**
+   * Environnement du Test Gate : null = liste blanche minimale sans clé d'API ni
+   * webhook ; tableau de noms/motifs = variables DEMANDÉES en plus (valables si
+   * la config utilisateur `gate.envAllow` les autorise) ; 'inherit' = tout
+   * l'environnement (relâchement explicite).
+   */
+  gateEnv: null | 'inherit' | string[];
+  /** Données locales de `.striart/` réservées à l'utilisateur (false = relâchement explicite). */
+  privateStateDir: boolean;
   fetchIntervalMs: number;
   ollamaModel: string;
   ollamaHost: string;
@@ -157,6 +176,10 @@ export interface StriartConfig {
   tokens?: import('./tokens/settings.ts').TokensConfigInput;
   /** Résilience des appels LLM (backoff, disjoncteur) — objet PARTIEL, fusionné par resolveLlmResilience. */
   llmResilience?: import('./llm-resilience.ts').LlmResilienceInput;
+  /** Filet à l'exécution (chevauchement observé, rattrapage) — objet PARTIEL, fusionné par resolveOverlapSettings. */
+  overlap?: import('./overlap.ts').OverlapSettingsInput;
+  /** GC d'agents et de sessions inactifs (src/idle/) — objet PARTIEL, fusionné par resolveIdleSettings. */
+  idle?: import('./idle/settings.ts').IdleSettingsInput;
   /** Chemin du fichier de config trouvé. */
   configPath?: string | null;
 }
@@ -198,6 +221,23 @@ export interface AgentMeta {
   sessionPid?: number | null;
   sessionStartedAt?: string | null;
   /**
+   * PID du process qui SUPERVISE la session autonome (argv) : celui qui tient le handle de l'agent.
+   * Publié avec `sessionPid` (qui désigne l'agent) ; le GC d'inactivité lui adresse la demande de
+   * fermeture propre. Absent = session non supervisée identifiable (jamais fermée par kill).
+   */
+  sessionOwnerPid?: number | null;
+  /**
+   * Fin de session autonome EN ÉCHEC (écrit par `concludeAutonomousSession`, effacé par une fin
+   * réussie). Preuve, avec `hasCommits: false`, que le clone conservé n'a rien à merger : la
+   * sentinelle WHOLE_REPO du Router ne l'attend plus (voir session-failure.ts). Absent = aucune.
+   */
+  sessionFailure?: {
+    status: string;
+    at: string;
+    hasCommits: boolean;
+    sessionStartedAt: string | null;
+  } | null;
+  /**
    * Suppression du clone entamée (`removeClone`, clone.js) et pas encore
    * terminée : le `rm` a échoué ou a été interrompu. La réconciliation la
    * termine (`resumeCloneRemovals`). Absent = pas de suppression en cours.
@@ -206,6 +246,8 @@ export interface AgentMeta {
   removingSince?: string;
   /** Collaboration orchestrée portée par ce clone (lot O) — absent hors mode orchestré. */
   collab?: AgentCollabInfo | null;
+  /** Détail du Router au lancement (informatif, additif) — voir src/router-details.ts. */
+  routing?: import('./router-details.ts').PublicRouterDetails | null;
 }
 
 export type AgentRegistry = Record<string, AgentMeta>;
@@ -465,8 +507,57 @@ export type StriartEvent = { message?: string } & (
       after?: string | null;
     }
   | { type: 'task:started'; agent: string; taskId: string; branch: string }
+  | {
+      type: 'task:serialization-relaxed';
+      agent: string;
+      taskId: string | null;
+      relaxedBlockers: RelaxedBlocker[];
+    }
   | { type: 'router:semantic-link'; agent: string; other: string }
   | { type: 'router:workspace-link'; agent: string; other: string }
+  /**
+   * Filet à l'exécution (src/overlap.ts) : deux agents (`agents`) ou un agent et la
+   * branche cible (`target`) ont RÉELLEMENT modifié les mêmes fichiers, hors prédiction du
+   * Router. `files` : les 10 premiers ; `fileCount` : le total.
+   */
+  | {
+      type: 'overlap:observed';
+      kind: 'agents' | 'target';
+      agents: string[];
+      files: string[];
+      fileCount: number;
+    }
+  /** Rebase anticipé tenté (ou refusé) pour un agent dont la cible a avancé sur ses fichiers. */
+  | { type: 'overlap:catch-up'; agent: string; status: string }
+  /**
+   * GC d'inactivité (src/idle/) : un agent a franchi `idle.warnAfterMs` sans aucun signal d'activité
+   * (rapport seulement, l'événement n'est émis qu'une fois par période d'inactivité).
+   */
+  | {
+      type: 'idle:detected';
+      agent: string;
+      idleMs: number;
+      session: 'live' | 'ended' | 'none';
+      host: 'acp' | 'pty' | 'process' | 'none';
+    }
+  /** Avertissement avant fermeture : la session de `agent` sera fermable à `closeNotBefore` (ISO) sans activité. */
+  | {
+      type: 'idle:warned';
+      agent: string;
+      idleMs: number;
+      closeNotBefore: string | null;
+      willClose: boolean;
+    }
+  /** Session fermée proprement (`CLOSED`) ou en cours de fermeture (`CLOSING`) ; le clone et son travail sont conservés. */
+  | { type: 'idle:closed'; agent: string; host: 'acp' | 'pty' | 'process'; code: string }
+  /** Fermeture REFUSÉE par une garde (code IDLE_CLOSE_*) : la session reste vivante, intacte. */
+  | {
+      type: 'idle:close-refused';
+      agent: string;
+      host: 'acp' | 'pty' | 'process';
+      code: string;
+      detail: string | null;
+    }
   /**
    * La liste de fichiers soumise au Router a été coupée (`tokens.router.tree.maxFiles`) :
    * `kept` fichiers lus sur `total` suivis par git. `policy` : ce que le Router en a fait
@@ -503,6 +594,25 @@ export type StriartEvent = { message?: string } & (
   | { type: 'merge:semantic-failed'; agent: string; ticketId: string; files: string[] }
   | { type: 'merge:gate-red'; agent: string; ticketId: string; exitCode: number | null }
   | { type: 'merge:rename-hazard'; agent: string; source: string; ours: string; theirs: string }
+  | { type: 'merge:commit-rejected'; agent: string; ticketId: string | null; timedOut: boolean }
+  | { type: 'delivery:failed'; sha: string; ref: string | null; code: string }
+  /**
+   * Un appelant a dû ATTENDRE le verrou principal (L8). Mesure pure : le bus informe, il ne décide
+   * jamais. Aucun contenu, aucun chemin, aucun identifiant d'agent ou de ticket : seulement le
+   * VERBE de l'opération (`merge`, `resolve-apply`…) — le nom d'un agent peut dériver d'un prompt.
+   */
+  | {
+      type: 'lock:contention';
+      /** Opération en attente (verbe seul). */
+      operation: string;
+      /** Durée d'attente jusqu'à l'acquisition (horloge monotone). */
+      waitedMs: number;
+      /** Opération détentrice au moment de l'arrivée, et depuis combien de temps (null : inconnue). */
+      holder: { operation: string | null; ageMs: number | null } | null;
+      /** Opérations en file à l'arrivée, la nôtre comprise. */
+      queued: number;
+    }
+  | { type: 'delivery:branch'; sha: string; ref: string }
   | { type: 'merge:manual-mode' }
   | { type: 'merge:manual-resolution'; agent: string; ticketId: string; files: string[] }
   | { type: 'sync:rebase-conflict'; agent: string }
@@ -667,6 +777,24 @@ export type GateFailureCode =
   | 'GATE_INTERRUPTED'
   | 'GATE_NATIVE_UNAVAILABLE';
 
+/** Issue d'une livraison vers `origin` (push du SHA testé), rapportée dans le résultat et en --json. */
+export interface DeliveryReport {
+  mode: 'push' | 'branch';
+  remote: 'origin';
+  /** Branche distante (sans `refs/heads/`) ; null si aucun nom valide n'a pu être dérivé. */
+  ref: string | null;
+  /** SHA EXACT testé qui a été (ou aurait été) poussé. */
+  sha: string;
+  pushed: boolean;
+  /** Le remote portait déjà ce SHA (push concurrent) : succès sans nouveau push. */
+  alreadyDelivered: boolean;
+  /** PUSH_TIMEOUT | PUSH_NON_FAST_FORWARD | PUSH_REJECTED | PUSH_FAILED | PUSH_SUPERSEDED | DELIVERY_REF_INVALID ; null si livré. */
+  code: string | null;
+  message: string | null;
+  hint: string | null;
+  durationMs: number;
+}
+
 export type TicketReason =
   | 'MERGE_CONFLICT'
   | 'UNMERGEABLE_CONFLICT'
@@ -674,6 +802,8 @@ export type TicketReason =
   | 'SEMANTIC_MERGE_FAILED'
   | 'SEMANTIC_GATE_FAILED'
   | 'PROMOTION_GATE_FAILED'
+  /** Un hook de la cible (pre-commit, commit-msg…) ou la signature a rejeté / bloqué le commit de merge. */
+  | 'COMMIT_HOOK_REJECTED'
   /** Garde I2 : l'agent change un chemin protégé — résolution humaine, fichier par fichier. */
   | 'PROTECTED_PATHS_CHANGED';
 
@@ -784,6 +914,8 @@ export interface QueueTask {
    * démarre pas tant que ce travail est actif. Absent/null = aucune.
    */
   after?: string | null;
+  /** Détail du Router à la mise en file (informatif, additif) : pourquoi la tâche attend. */
+  routing?: import('./router-details.ts').PublicRouterDetails | null;
   /** Au dégagement de la file : réhabiliter l'archive au lieu de cloner. */
   reuse?: boolean;
   /**
@@ -821,7 +953,7 @@ export type AgentSession =
   | { state: 'idle'; via: null; pid: null };
 
 /** Résultat de mergeAgentCommit — union discriminée sur `status`. */
-export type MergeResult =
+export type MergeResult = (
   | {
       status: 'UP_TO_DATE';
       agent: string;
@@ -844,6 +976,8 @@ export type MergeResult =
       mergeSha: string;
       gate: GateResult;
       pushError: string | null;
+      /** Livraison vers origin (push différé hors verrou) ; absent si autoPush est désactivé. */
+      delivery?: DeliveryReport;
       semantic: boolean;
       resolvedFiles: string[];
       /** Retentatives du Merger après un gate rouge (0 = fusion passée du premier coup). */
@@ -870,7 +1004,12 @@ export type MergeResult =
       protectedChanges?: ProtectedPathChange[];
       ticket: Ticket;
       manualMode: boolean;
+      /** Texte français du noyau (compat) ; le contrat stable est `errorCode`. */
       error?: string;
+      /** Code stable de l'échec de fusion sémantique (ex. `SEMANTIC_MERGE_FAILED`, `TOKEN_BUDGET_EXCEEDED`). */
+      errorCode?: string;
+      /** Détails publics (identifiants seulement) de l'échec : `causeCode`, `provider`, `status`… */
+      errorDetails?: Record<string, unknown>;
       rebase: SyncResult | null;
     }
   | {
@@ -882,7 +1021,11 @@ export type MergeResult =
       semantic: boolean;
       manualMode: boolean;
       rebase: SyncResult | null;
-    };
+    }
+) & {
+  /** Durées par phase de l'opération (L8) — ajout additif, absent des résultats construits hors orchestrateur. */
+  timings?: import('./timings.ts').Timings;
+};
 
 /** Résolution préparée pour un fichier en conflit (voir conflicts.js). */
 export type ResolutionInput =
@@ -891,7 +1034,7 @@ export type ResolutionInput =
   | { path: string; kind: 'missing' };
 
 /** Résultat de applyTicketResolution — union discriminée sur `status`. */
-export type ManualResolutionResult =
+export type ManualResolutionResult = (
   | { status: 'ALREADY_CLEAN'; ticketId: string; agent: string; sha: string }
   | { status: 'GATE_FAILED'; ticketId: string; agent: string; sha: string; gate: GateResult }
   | {
@@ -904,11 +1047,14 @@ export type ManualResolutionResult =
       mergeSha: string;
       gate: GateResult;
       pushError: string | null;
+      /** Livraison vers origin (push différé hors verrou) ; absent si autoPush est désactivé. */
+      delivery?: DeliveryReport;
       memory: { updated: boolean; entry?: string; error?: string } | null;
       resolvedFiles: string[];
       /** [ticketId, ...doublons du même conflit fermés au passage]. */
       closedTickets: string[];
-    };
+    }
+) & { timings?: import('./timings.ts').Timings };
 
 /**
  * Issue d'un cycle autonome complet : session → merge → Test Gate → nettoyage.
@@ -956,6 +1102,8 @@ export interface AutonomousResult {
   keptCode: AutonomousKeptCode | null;
   /** Avertissements non bloquants du cycle (succès « bruyant »). */
   warnings?: AutonomousWarningCode[];
+  /** Clones en échec que la sérialisation prudente du Router n'a pas attendus (additif). */
+  relaxedBlockers?: RelaxedBlocker[];
   /** Détail machine du keptCode (statut de session/merge, motif de nettoyage, code d'erreur). */
   keptDetail: string | null;
   clonePath: string | null;
@@ -986,9 +1134,11 @@ export type AutonomousKeptCode =
 /**
  * Avertissement d'un cycle réussi :
  *  - ALREADY_INTEGRATED : le commit de l'agent était DÉJÀ dans la cible (arrivé par un
- *    autre chemin) — rien n'a été mergé, le Test Gate n'a pas été rejoué, clone nettoyé.
+ *    autre chemin) — rien n'a été mergé, le Test Gate n'a pas été rejoué, clone nettoyé ;
+ *  - SERIALIZATION_RELAXED : la sentinelle WHOLE_REPO n'a pas attendu un clone en échec
+ *    (détail dans `relaxedBlockers`).
  */
-export type AutonomousWarningCode = 'ALREADY_INTEGRATED';
+export type AutonomousWarningCode = 'ALREADY_INTEGRATED' | 'SERIALIZATION_RELAXED';
 
 /**
  * Issue d'une session IDE du proxy ACP `striart acp` (lot I10) : le même
@@ -1234,6 +1384,8 @@ export interface OrchestrationNodeResult {
   verdicts: ReviewVerdictRecord[];
   /** Tâche supervisée démarrée : de quoi ouvrir sa session. */
   info?: (AgentMeta & { name: string }) | null;
+  /** Clones en échec que la sentinelle WHOLE_REPO du Router n'a pas attendus (additif). */
+  relaxedBlockers?: RelaxedBlocker[];
 }
 
 export type CollabMessageKind = 'note' | 'question' | 'answer' | 'handoff' | 'verdict' | 'done';
@@ -1429,8 +1581,18 @@ export interface LlmRoles {
   judge: LlmSpec | null;
 }
 
+/**
+ * Clone que la sentinelle WHOLE_REPO du Router n'attend pas : session terminée en échec, clone
+ * conservé sans commit à merger (voir src/session-failure.ts). Visible, jamais silencieux.
+ */
+export interface RelaxedBlocker {
+  agent: string;
+  reason: 'SESSION_FAILED';
+  status: string;
+}
+
 /** Résultat de runTask. */
-export type RunResult =
+export type RunResult = (
   | {
       status: 'STARTED';
       info: AgentMeta & { name: string };
@@ -1438,8 +1600,19 @@ export type RunResult =
       collisions: [];
       semanticWarnings: SemanticWarning[];
       workspaceWarnings: WorkspaceWarning[];
+      routing?: import('./router-details.ts').PublicRouterDetails | null;
+      /** Clones en échec que la sentinelle WHOLE_REPO n'a pas attendus (additif, absent si aucun). */
+      relaxedBlockers?: RelaxedBlocker[];
     }
-  | { status: 'QUEUED'; task: QueueTask; predictedFiles: string[]; collisions: Collision[] };
+  | {
+      status: 'QUEUED';
+      task: QueueTask;
+      predictedFiles: string[];
+      collisions: Collision[];
+      routing?: import('./router-details.ts').PublicRouterDetails | null;
+      relaxedBlockers?: RelaxedBlocker[];
+    }
+) & { timings?: import('./timings.ts').Timings };
 
 /** Résultat de rollbackLastMerge. */
 export interface RollbackResult {
@@ -1454,10 +1627,19 @@ export interface RollbackResult {
 }
 
 /** Résultat de promoteStaging — union discriminée sur `status`. */
-export type PromoteResult =
+export type PromoteResult = (
   | { status: 'UP_TO_DATE'; sha: string }
-  | { status: 'PROMOTED'; sha: string; commits: number; gate: GateResult; pushError: string | null }
-  | { status: 'GATE_FAILED'; sha: string; gate: GateResult; ticket: Ticket; rolledBack: boolean };
+  | {
+      status: 'PROMOTED';
+      sha: string;
+      commits: number;
+      gate: GateResult;
+      pushError: string | null;
+      /** Livraison vers origin (push différé hors verrou) ; absent si autoPush est désactivé. */
+      delivery?: DeliveryReport;
+    }
+  | { status: 'GATE_FAILED'; sha: string; gate: GateResult; ticket: Ticket; rolledBack: boolean }
+) & { timings?: import('./timings.ts').Timings };
 
 export interface StriartState {
   semanticFailureStreak: number;

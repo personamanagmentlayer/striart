@@ -6,7 +6,7 @@ import {
   lineOverlap,
   semanticMerge,
   stripCodeFences,
-} from '../../src/merger.js';
+} from '../../src/merger.ts';
 
 const CONFIG = { ollamaHost: 'http://localhost:11434', ollamaModel: 'llama3.1:8b' };
 

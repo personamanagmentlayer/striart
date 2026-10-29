@@ -3,10 +3,10 @@ import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { createAgent } from '../../src/clone.js';
-import { runAgentSession } from '../../src/session.js';
-import { applyPlan, runAutonomousTask } from '../../src/orchestrator.js';
+import { initStriart } from '../../src/init.ts';
+import { createAgent } from '../../src/clone.ts';
+import { runAgentSession } from '../../src/session.ts';
+import { applyPlan, runAutonomousTask } from '../../src/orchestrator.ts';
 
 const FAKE_AGENT = fileURLToPath(new URL('../helpers/fake-agent.cjs', import.meta.url));
 
@@ -109,7 +109,7 @@ tasks:
       code: 'PROFILE_UNKNOWN',
     });
     // Et à l'application : aucune tâche ne part (validation avant effet de bord).
-    const { readRegistry } = await import('../../src/clone.js');
+    const { readRegistry } = await import('../../src/clone.ts');
     await expect(applyPlan({ root: repo.root, planText })).rejects.toMatchObject({
       code: 'PROFILE_UNKNOWN',
     });

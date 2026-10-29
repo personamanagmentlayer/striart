@@ -48,18 +48,19 @@
  *  - l'événement `session:striart-commit` n'est émis que si `announce` (un tour
  *    d'orchestration publie ses propres événements `collab:turn`).
  */
-import { cleanClones, cloneGit, updateAgentMeta } from './clone.js';
+import { cleanClones, cloneGit, readRegistry, updateAgentMeta } from './clone.ts';
 import {
   commitSessionLeftovers,
   resolveCommitPolicy,
   striartShouldCommit,
 } from './commit-policy.ts';
 import type { LeftoverCommitOutcome } from './commit-policy.ts';
-import { loadConfig } from './config.js';
-import { StriartError } from './errors.js';
-import { emitStriartEvent } from './events.js';
-import { logger } from './logger.js';
-import { mergeAgentCommit } from './orchestrator.js';
+import { loadConfig } from './config.ts';
+import { StriartError } from './errors.ts';
+import { emitStriartEvent } from './events.ts';
+import { logger } from './logger.ts';
+import { mergeAgentCommit } from './orchestrator.ts';
+import { isFailedSessionStatus, sessionFailureMarker } from './session-failure.ts';
 import type {
   AcpProxyResult,
   AgentMeta,
@@ -448,9 +449,30 @@ export async function concludeAutonomousSession(spec: ConcludeSessionSpec): Prom
   // fenêtre où un sync de watch stasherait/rebaserait le worktree pendant qu'on en
   // lit le statut et qu'on l'indexe. Sinon : dépublication immédiate.
   const commitStep = session.status === 'COMPLETED' && policy !== 'agent' && policy !== 'human';
-  await updateAgentMeta(root, name, { sessionPid: commitStep ? process.pid : null }).catch(
-    warnPidWrite(name, 'Remplacement du PID de session par celui de ce process impossible'),
-  );
+  // Marqueur d'échec (session-failure.ts), écrit dans la MÊME mise à jour que la dépublication du
+  // PID : aucune fenêtre où le clone est « sans session » sans que l'on sache qu'elle a échoué.
+  // Un doute sur les commits (lecture de la branche impossible) vaut « il y en a » : fail closed.
+  let sessionFailure: AgentMeta['sessionFailure'] = null;
+  if (isFailedSessionStatus(session.status)) {
+    const hasCommits = await branchTip(meta).then(
+      (tip) => tip !== meta.baseCommit,
+      () => true,
+    );
+    // `meta` date de la création du clone : le départ de session est celui du REGISTRE.
+    const current = ((await readRegistry(root).catch(() => ({}))) as Record<string, AgentMeta>)[
+      name
+    ];
+    sessionFailure = sessionFailureMarker(
+      { sessionStartedAt: current?.sessionStartedAt ?? null },
+      session.status,
+      hasCommits,
+    );
+  }
+  await updateAgentMeta(root, name, {
+    sessionPid: commitStep ? process.pid : null,
+    sessionOwnerPid: null,
+    sessionFailure,
+  }).catch(warnPidWrite(name, 'Remplacement du PID de session par celui de ce process impossible'));
 
   if (session.status !== 'COMPLETED') {
     // Un arrêt demandé (Ctrl+C) est voulu : pas d'alerte « session échouée »
@@ -507,7 +529,7 @@ export async function concludeAutonomousSession(spec: ConcludeSessionSpec): Prom
       base.commit = contract.commit;
     } finally {
       // Dépublié AVANT le merge : sa garde SESSION_LIVE verrait ce process vivant.
-      await updateAgentMeta(root, name, { sessionPid: null }).catch(
+      await updateAgentMeta(root, name, { sessionPid: null, sessionOwnerPid: null }).catch(
         warnPidWrite(name, 'Dépublication du PID de session impossible'),
       );
     }
@@ -593,7 +615,7 @@ export async function concludeUnstartedClone(spec: {
     clonePath: meta.path,
     warnings: [] as AutonomousWarningCode[],
   };
-  await updateAgentMeta(root, meta.name, { sessionPid: null }).catch(
+  await updateAgentMeta(root, meta.name, { sessionPid: null, sessionOwnerPid: null }).catch(
     warnPidWrite(meta.name, 'Dépublication du PID de session impossible'),
   );
   const { removed, skippedReason } = await cleanupClone(root, meta.name);

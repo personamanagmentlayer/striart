@@ -14,8 +14,8 @@
  *
  * Module sans dépendance lourde : main.ts l'importe à chaque démarrage.
  */
-import { StriartError, publicErrorDetails } from '../errors.js';
-import type { ErrorKind } from '../errors.js';
+import { StriartError, publicErrorDetails } from '../errors.ts';
+import type { ErrorKind } from '../errors.ts';
 import type { Outcome } from '../cli/exit.ts';
 
 /** Version du contrat des documents machine (`--json` et protocole). */

@@ -2,14 +2,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readdir, stat, utimes } from 'node:fs/promises';
 import path from 'node:path';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { createAgent, removeAgentFromRegistry } from '../../src/clone.js';
+import { initStriart } from '../../src/init.ts';
+import { createAgent, removeAgentFromRegistry } from '../../src/clone.ts';
 import {
   closeConflictTicket,
   createConflictTicket,
   listConflictTickets,
-} from '../../src/conflicts.js';
-import { pruneWorkspace } from '../../src/prune.js';
+} from '../../src/conflicts.ts';
+import { pruneWorkspace } from '../../src/prune.ts';
 
 /** Vieillit récursivement tout un dossier (mtime) pour simuler l'inactivité. */
 async function ageDirectory(dir, date) {

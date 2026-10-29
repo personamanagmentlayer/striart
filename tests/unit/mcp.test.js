@@ -29,12 +29,12 @@ vi.mock('../../src/config.js', async (importOriginal) => ({
   loadConfig: vi.fn(async () => ({})),
 }));
 
-const orchestrator = await import('../../src/orchestrator.js');
-const conflicts = await import('../../src/conflicts.js');
+const orchestrator = await import('../../src/orchestrator.ts');
+const conflicts = await import('../../src/conflicts.ts');
 const status = await import('../../src/status.ts');
 const channel = await import('../../src/collab/channel.ts');
-const configModule = await import('../../src/config.js');
-const { handleMcpRequest, startMcpServer, McpConnection } = await import('../../src/mcp.js');
+const configModule = await import('../../src/config.ts');
+const { handleMcpRequest, startMcpServer, McpConnection } = await import('../../src/mcp.ts');
 const { AGENT_NAME_RE } = await import('../../src/agent-name.ts');
 const { AGENT_PATTERN } = await import('../../src/mcp/tools.ts');
 const { TICKET_VIEW_BLOCKS, TICKET_VIEW_CSP, TICKET_VIEW_HTML } =
@@ -336,7 +336,7 @@ describe('MCP — outils : annotations, schémas, contenu structuré', () => {
   it('un échec métier revient en résultat isError avec code stable, pas en erreur protocole', async () => {
     vi.mocked(status.collectStatus).mockRejectedValue(
       Object.assign(
-        new (await import('../../src/errors.js')).StriartError('boom', {
+        new (await import('../../src/errors.ts')).StriartError('boom', {
           code: 'NOT_INITIALIZED',
           hint: 'striart init',
         }),
@@ -1031,7 +1031,7 @@ describe('MCP — boucle stdio (flux injectés)', () => {
 
 describe('MCP — configuration (config.mcp)', () => {
   it('valide positivement : clés connues, bornes, scope énuméré ; fusion partielle avec les défauts', async () => {
-    const { validateConfig } = await import('../../src/config.js');
+    const { validateConfig } = await import('../../src/config.ts');
     expect(() => validateConfig({ mcp: { scope: 'orchestrator', apps: false } })).not.toThrow();
     for (const bad of [
       { scope: 'admin' },
@@ -1121,7 +1121,7 @@ describe('Identifiant de ticket — source unique', () => {
   });
 });
 
-const { StriartError: LockError } = await import('../../src/errors.js');
+const { StriartError: LockError } = await import('../../src/errors.ts');
 
 describe('MCP — annulation réelle des outils longs (signal transmis aux primitives)', () => {
   const flushed = () => new Promise((resolve) => setImmediate(resolve));
@@ -1425,7 +1425,7 @@ describe('MCP — canal de collaboration (striart_collab_post / striart_collab_r
   });
 
   it('post verdict : même outil, la garde « relecteur pendant son tour » reste celle du canal (code stable remonté)', async () => {
-    const { StriartError } = await import('../../src/errors.js');
+    const { StriartError } = await import('../../src/errors.ts');
     vi.mocked(channel.postAgentMessage).mockRejectedValue(
       new StriartError('Message kind "verdict" refused.', {
         code: 'COLLAB_KIND_FORBIDDEN',
@@ -1478,7 +1478,7 @@ describe('MCP — canal de collaboration (striart_collab_post / striart_collab_r
 
   it('post : canal désactivé → le code COLLAB_DISABLED du canal remonte tel quel', async () => {
     vi.mocked(configModule.loadConfig).mockResolvedValue({ collab: { enabled: false } });
-    const { StriartError } = await import('../../src/errors.js');
+    const { StriartError } = await import('../../src/errors.ts');
     vi.mocked(channel.postAgentMessage).mockRejectedValue(
       new StriartError('disabled', { code: 'COLLAB_DISABLED' }),
     );

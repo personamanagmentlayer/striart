@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { renderLiveSection } from '../../src/memory.js';
+import { renderLiveSection } from '../../src/memory.ts';
 
 const registry = {
   'agent-a': {

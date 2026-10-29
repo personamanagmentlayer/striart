@@ -13,7 +13,7 @@ import {
   stopAcpHost,
 } from '../../src/acp/host.ts';
 import { routeAgentMessage } from '../../src/watch-ui.ts';
-import { isProcessAlive } from '../../src/process-tree.js';
+import { isProcessAlive } from '../../src/process-tree.ts';
 
 /**
  * Hôte de session ACP persistant (lot I6) et Phase E du bus `@agent` : une

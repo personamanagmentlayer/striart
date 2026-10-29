@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compactMemoryDiff, integrateMemoryEntry } from '../../src/memory.js';
+import { compactMemoryDiff, integrateMemoryEntry } from '../../src/memory.ts';
 
 const DIFF = [
   'diff --git a/src/auth.js b/src/auth.js',

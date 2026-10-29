@@ -1,4 +1,4 @@
-import { cleanClones } from '../../clone.js';
+import { cleanClones } from '../../clone.ts';
 import type { CommandModule } from '../context.ts';
 
 export interface CleanInput {

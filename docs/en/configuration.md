@@ -47,7 +47,10 @@ export default {
   // even for a millisecond.
   mainBranch: null,               // e.g. 'main' (null = promotion disabled)
   promoteTestCommand: null,       // global integration gate (null → testCommand)
-  autoPush: false,                // true → push origin after every green merge
+  autoPush: false,                // true → delivery to origin after every green merge
+  delivery: 'push',               // 'push' (tested SHA → targetBranch) | 'branch' (→ striart/<agent>/<task>); 'branch' requires autoPush
+  pushTimeoutMs: 120000,          // hard push timeout (process tree killed beyond it), 1000 to 2147483647
+  commitTimeoutMs: 300000,        // hard merge-commit timeout (target hooks, signing), 1000 to 2147483647
   autoRebase: true,               // rebase agents onto the target branch before merge
   autoStash: true,                // auto-stash during the rebase if work in progress
                                   // is disjoint from the incoming commits (verified)
@@ -65,6 +68,8 @@ export default {
   gateOrphanGraceMs: 2000,        // delay for the test's descendants to finish by themselves (0 to 600000)
   gateMaxOutputBytes: 104857600,  // cap of the kept gate log (1 KiB to 1 GiB): the tail is kept
   gateContainer: 'native',        // 'native' (process container, fail closed) | 'process' (relaxation)
+  gateEnv: null,                  // Test Gate environment: null (allow-list) | ['MY_APP_*'] (request) | 'inherit' (relaxation)
+  privateStateDir: true,          // .striart/ reserved to the user (0700/0600, Windows ACL); false = relaxation
   fetchIntervalMs: 20000,         // silent fetch of watch (0 = disabled, otherwise ≥ 1000)
   cloneFilter: null,              // 'blob:none': partial clone for very large histories
   pruneDays: 14,                  // striart prune retention (integer ≥ 0)
@@ -118,6 +123,14 @@ export default {
   // Orchestration modes and collaboration between agents:
   orchestration: { /* see "orchestration and collab" */ },
   collab: { /* see "orchestration and collab" */ },
+
+  // Runtime overlap net and idle GC:
+  overlap: { enabled: true, autoSync: true, maxGitCalls: 64,
+             maxFilesPerAgent: 5000, maxFilesPerOverlap: 50 },
+  idle: { enabled: true, action: 'report',   // 'report' | 'warn' | 'close'
+          warnAfterMs: 1800000, closeAfterMs: 7200000, graceMs: 300000,
+          sweepIntervalMs: 300000, maxClosuresPerSweep: 4, closePty: false,
+          excludeAgents: [], excludeProfiles: [] },
 };
 ```
 
@@ -130,8 +143,8 @@ a security setting would leave the intended protection at its default with
 nobody noticing. Only `$schema` is admitted without a validator.
 `unknownConfigKeys: 'warn'` is the explicit relaxation: the key is ignored,
 logged at every load, and `striart doctor` lists it among the relaxed
-protections. The validator does not check the value of `unknownConfigKeys`
-itself: anything other than `'warn'` behaves as `'error'`.
+protections. Any value other than `'error'` or `'warn'` is itself refused
+(`CONFIG_INVALID`, key `unknownConfigKeys`).
 
 ## `secretPatterns` — secrets in clones
 
@@ -155,8 +168,9 @@ through the provider layer `src/llm.js`. **Local Ollama is the default**
 
 ```js
 llm: { provider: 'ollama' | 'openai' | 'anthropic' | 'azure', model, baseUrl?, apiKeyEnv?, apiVersion? }
-// llm: { provider: 'openai', model: 'gpt-4o-mini' },                       // key via OPENAI_API_KEY
-// llm: { provider: 'anthropic', model: 'claude-haiku-4-5-20251001' },      // key via ANTHROPIC_API_KEY
+// llm: { provider: 'openai', model: 'gpt-5.4-mini' },                      // key via OPENAI_API_KEY
+// llm: { provider: 'anthropic', model: 'claude-haiku-5-5' },               // key via ANTHROPIC_API_KEY
+// llm: { provider: 'openai', model: 'openai/gpt-oss-120b', baseUrl: 'https://api.groq.com/openai/v1', apiKeyEnv: 'GROQ_API_KEY' },
 // llm: { provider: 'azure', model: '<deployment>', baseUrl: 'https://<resource>.openai.azure.com' },
 // llm: { provider: 'openai', model: 'x', baseUrl: 'http://localhost:1234/v1' }, // LM Studio, vLLM, llama.cpp...
 ```
@@ -193,6 +207,23 @@ is exempt). Refusal: `LLM_CONFIG_INVALID`. Two explicit relaxations, shown by
 `doctor`: `llm.allowAnyApiKeyEnv: true` and `llm.allowInsecureTransport:
 true`. A host that is not the provider's is logged once (legitimate proxy or
 hijack).
+
+**`llm.allowInsecureTransport` is no longer enough for a remote host over
+HTTP.** Every outgoing call now goes through the
+[network layer](#enterprise-network-network): it requires HTTPS outside the
+loopback, with or without an API key, and lifts that requirement only for the
+hosts declared in `network.allowInsecureHosts` of the **user configuration**
+(never in the repository). A remote `ollamaHost` in `http://` is therefore
+refused (`NET_INSECURE_TRANSPORT`) until its host is listed there;
+`http://localhost:11434` (the default) stays free.
+
+**JSON output wrapped in a markdown block.** Providers without a native JSON
+mode (Anthropic) readily wrap their answer in a code block (`json` tag). For
+every call that expects JSON (the Router and the judge of a `race`), Striart
+unwraps the block **before** `transform` (the role's own validation), and
+**only** if it covers the whole answer — a single block, nothing around it
+(`unwrapJsonResponse`, `src/llm.js`); any other shape is rejected as before.
+The unwrapping also applies to answers read back from the result cache.
 
 ### `llmRoles` — one LLM per role
 
@@ -272,12 +303,24 @@ tokens: {
     callInputTokens: 150000, taskTokens: 20000000, dayTokens: 100000000,   // null = disabled
   },
 
-  router: {
+  router: {                        // see "tokens.router" below
     onBudgetExceeded: 'serialize',  // ceiling reached: 'serialize' (cautious) | 'fail'
-    onTreeTruncated: 'serialize',   // more than maxFiles files: 'serialize' | 'predict' (relaxation)
-    tree: { maxFiles: 50000, mode: 'auto',        // 'auto' | 'full' | 'compact'
+    onTreeTruncated: 'serialize',   // more than tree.maxFiles files: 'serialize' | 'predict' (relaxation)
+    tree: { maxFiles: 50000, mode: 'auto',        // 'auto' | 'full' | 'compact'; maxFiles: 100 to 10,000,000
             maxTreeTokens: 6000, importExpansion: true,
             exclude: [ /* node_modules, dist, build, coverage, vendor, *.min.js, *.map, images, archives… */ ] },
+    preset: 'balanced',             // 'balanced' (default) | 'recall' | 'legacy'
+    prompt: 'v3',                   // 'v3' | 'legacy'
+    map: { mode: 'candidates', candidates: 40 },          // 'candidates' | 'off'; 1 to 500
+    retrieval: { enabled: true, bilingual: true },
+    expansion: { imports: 'off', depth: 1, tests: true, siblings: false,
+                 contracts: false, coChange: false, maxAdded: 6 },   // imports: 'off' | 'importees' | 'importers' | 'both'; maxAdded: 0 to 50
+    minFileConfidence: 0.5,         // 0 to 1 — LLM files below this are dropped (0 = keep all)
+    maxFiles: 6,                    // 1 to 50 — files kept from the LLM's answer
+    vague: { enabled: true, minConfidence: 0.3, maxFiles: null, verbs: false },
+    sharedFiles: { mode: 'exclude', patterns: [ /* CHANGELOG*, README*, CONTRIBUTING*, docs/**, roadmap/**, package.json, lockfiles… */ ] },
+    history: { limit: 400 },        // 10 to 5000 commits re-read (co-change)
+    maxScanFiles: 5000,             // 100 to 1,000,000 — above this, file contents are not read
   },
   merger: { mode: 'auto',          // 'auto' (by region above the threshold) | 'full' | 'hunk'
             hunkThresholdChars: 16000, contextLines: 5, maxWindowTokens: 30000 },
@@ -314,7 +357,8 @@ tokens: {
   log.
 - **Relaxations** — `accounting: false`, `enforcement: 'alert-only'` with a
   ceiling set, `'merger'` in `cache.roles`, `router.onTreeTruncated:
-  'predict'`, `llmResilience.breaker.enabled: false` — are shown by `doctor`.
+  'predict'`, an explicitly set `router.sharedFiles.mode: 'exclude'`,
+  `llmResilience.breaker.enabled: false` — are shown by `doctor`.
   Tightening (setting a ceiling, `compact`) is not a relaxation.
 - **Optimizations**: the Merger submits only the **conflicting regions** with
   their context when a file exceeds `hunkThresholdChars`, and refuses
@@ -331,6 +375,188 @@ tokens: {
   guard protects (a merge that changes it is refused). Setting the ceiling in
   the *user config* is not yet possible (see the roadmap).
 
+### `tokens.router` — Router reliability
+
+The Router is a **coarse filter, not a guarantee**: it predicts the files a task
+will touch so as to serialize agents that would overlap, but a wrong prediction is
+caught later by the semantic merge and the Test Gate (see
+[Architecture](architecture.md#what-the-router-and-the-semantic-merge-are-worth--measurements-of-2026-10-26)).
+The eleven keys added by the reliability batch (`preset`, `prompt`, `map`,
+`retrieval`, `expansion`, `minFileConfidence`, `maxFiles`, `vague`, `sharedFiles`,
+`history`, `maxScanFiles`) join `onBudgetExceeded`, `onTreeTruncated` and `tree`.
+Each is validated (bounds above) and **measured** by `npm run bench:router`; an
+unknown key is refused.
+
+**What the Router does, in order.** (1) It receives the tree of tracked files
+(filtered, ranked, compacted according to `tree`); (2) a **deterministic lexical
+retrieval** (BM25 over paths, symbols and the first doc line, with a French →
+English bridge when `retrieval.bilingual`) ranks the files closest to the request;
+the **map** of the best `map.candidates` (symbols and doc line) is added to the
+prompt; (3) the LLM answers, with the `v3` template, a **confidence per file**, a
+scope (`narrow`/`broad`) and an overall confidence; (4) files below
+`minFileConfidence` are dropped, at most `maxFiles` are kept; (5) a **vague-task
+detection** (`vague`) can replace the whole prediction with the `**` sentinel; (6)
+a **deterministic expansion** (`expansion`) adds, from repository facts and never
+from a second LLM opinion, the tests, importers, twins and co-changed files; (7)
+**bookkeeping files** (`sharedFiles`) are removed from collision detection. A
+failure stays a failure (`ROUTER_FAILED`): never a misleading empty array.
+
+**Presets.** `preset` sets a coherent bundle; explicit keys win over it. `legacy`
+reproduces the behaviour from before the batch exactly (historical prompt, no map
+or retrieval, `maxFiles: 50`, no vague-task detection, bookkeeping files kept).
+`recall` pushes recall (no confidence threshold, expansion through importers,
+twins, contracts and co-change, `vague.minConfidence: 0.4`, `vague.maxFiles: 10`).
+`balanced` (default) matches the values in the reference above.
+
+**Trade-off table.** The maintainer's survey of **2026-10-26** from
+`npm run bench:router` (held-out **test** set, **34 tasks** taken from this
+repository's history, task = a vague request generated from the diff, bootstrap
+95 % CI in brackets; **not replayed by the documentation pass, and earlier than the
+last tweaks to the settings** — replay before relying on it):
+
+| `claude-haiku-5-5` | Recall (code files) | Code overlaps detected | Needless alerts | Serialized tasks (`**`) | Tokens per task (in + out) |
+|---|---|---|---|---|---|
+| `legacy` | 30 % [21–39] | 39 % [23–55] | 8 % [2–18] | 0 % | 1.6k + 375 |
+| `balanced` | 51 % [43–60] | 78 % [62–90] | 33 % [14–56] | 9 % | 3.7k + 790 |
+| `recall` | 72 % [60–84] | 100 % [97–100] | 64 % [46–83] | 29 % | 3.7k + 790 |
+
+| `gpt-5.4-mini` | Recall (code files) | Code overlaps detected | Needless alerts | Serialized tasks (`**`) | Tokens per task (in + out) |
+|---|---|---|---|---|---|
+| `legacy` | 26 % [19–34] | 54 % [31–75] | 13 % [4–25] | 0 % | 0.9k + 33 |
+| `balanced` | 47 % [38–57] | 84 % [69–95] | 34 % [17–56] | 9 % | 2.1k + 149 |
+| `recall` | 70 % [53–88] | 99 % [94–100] | 88 % [76–100] | 50 % | 2.1k + 149 |
+
+Reading: raising recall costs waiting. A "needless alert" is a pair of tasks with
+no real overlap that the Router serializes anyway; a missed overlap is the
+dangerous case (the Merger catches it later, at a cost). The `recall` preset
+serializes one task in three to one in two: it is only reasonable if conflicts
+cost more than waiting. The median latency of a call goes, for
+`claude-haiku-5-5`, from about 2.5 s (`legacy`) to about 3.9 s (`balanced`). The
+bench's prices are assumptions and are not reproduced here.
+
+- **`vague`**: a gambling prediction is worse than none, because it makes the task
+  look isolated. When the LLM announces a `broad` scope, an overall confidence
+  below `minConfidence`, an empty prediction, more than `maxFiles` files (off by
+  default) or, with `verbs: true`, a sweeping verb (refactor, rename, migrate,
+  everywhere…), the prediction becomes the **`**` sentinel** (`WHOLE_REPO`): the
+  task waits for the active agents — the cautious serialization that is also the
+  fallback when the budget is exhausted or the tree truncated. A prediction
+  reduced to bookkeeping files is treated the same way (`only-shared-files`).
+- **`sharedFiles`**: almost every task touches the changelog, the README, the docs
+  or a manifest; leaving them in the prediction would wrongly serialize nearly all
+  agents over trivial conflicts the Merger resolves. In `exclude` mode (default),
+  these files (`patterns`, case-insensitive globs, 200 at most) are removed from
+  collision detection — in the Router as in the runtime net
+  ([`overlap`](#overlap--the-runtime-overlap-net)) — but kept in `details.shared`.
+  Setting `mode: 'exclude'` explicitly is listed by `doctor`: two agents really
+  editing those files are no longer signalled. `'keep'` restores the historical
+  behaviour.
+- **`details`**: `predictFilesDetailed().details`, exposed in an agent's `routing`
+  field (`--json`, Control Protocol), gives each file's confidence, source (`llm`,
+  `expansion`, `policy`) and reason, the `shared` list, the `expansion` (reason:
+  `test`, `tested-code`, `importer`, `importee`, `sibling`, `contract`,
+  `co-change`), the `tree` (mode, files shown) and, when the task was serialized,
+  `serialized` (`kind`: `vague`, `budget` or `tree-truncated`, with its reasons).
+  An allow-list of fields, bounded: never the raw LLM output, nor the map
+  excerpts.
+- **`maxScanFiles`**: above it, file contents are not read (no map, symbols or
+  import graph); lexical retrieval stays available on paths alone. A file matching
+  `secretPatterns` is never read.
+- **Tree truncation** (`tree.maxFiles`): declared (`router:tree-truncated` event,
+  log, prompt), never silent; `onTreeTruncated` chooses between serializing and
+  predicting on the partial view.
+
+**A failed clone does not hold up cautious serialization.** An autonomous clone
+whose session ended in failure (anything but `COMPLETED` or `CANCELLED`), with no
+commit to merge, waits for a human: it no longer works. Letting it hold back a task
+the Router could not locate (the `**` sentinel) would block that task until the
+wait timeout for nothing. The `sessionFailure` marker written to the registry by
+the end of the cycle (status, instant, commits, session start) therefore lets the
+sentinel **not wait for it** — never silently: `task:serialization-relaxed` event,
+`SERIALIZATION_RELAXED` warning in the result and `relaxedBlockers` list
+(`{agent, reason: 'SESSION_FAILED', status}`). The proof is fail closed: a live
+session, a more recent session, a commit or a supervised agent make it
+inoperative, and a collision on a specific file on both sides stays blocking in
+every case.
+
+## `overlap` — the runtime overlap net
+
+The Router predicts; `overlap` **observes**. In `striart watch` (at start-up, on
+every agent-branch commit and at the silent-fetch cadence, `fetchIntervalMs`;
+queued on the `watch` chain) and in the state view (`striart status`, Control
+Protocol state: `overlaps` field), Striart reads from the clones' git history the
+files each agent has **really** modified since its base (`git diff` between
+commits, never the index or the worktree) and signals:
+
+- two agents that both touched a file the Router had not predicted on both sides
+  (`overlap:observed` event, `kind: 'agents'`);
+- an agent and the target branch, which advanced on files it also touches
+  (`kind: 'target'`).
+
+The only automatic gesture: an **early rebase** of the agent concerned through the
+existing primitive (`overlap:catch-up`), refused on a live session
+(`SKIPPED_SESSION`), cancelled on conflict, with no effect under
+`watch --no-merge`. Never a merge. Bounded, reported cost (`cost`: git calls, cache
+hits).
+
+```js
+overlap: {
+  enabled: true,            // false = relaxation (shown by doctor): the Router alone judges
+  autoSync: true,           // early rebase of an agent whose target moved (autoRebase must stay true)
+  maxGitCalls: 64,          // 4 to 1024 git calls per cycle; the rest is deferred and declared (`deferred`)
+  maxFilesPerAgent: 5000,   // 10 to 100,000 files kept per agent (above: `truncated`)
+  maxFilesPerOverlap: 50,   // 1 to 500 files listed per overlap (the total stays in `fileCount`)
+}
+```
+
+Declared limits: an agent's **uncommitted** changes are not seen (reading them
+would require walking the worktree); a file the agent already merged then touched
+again may produce an "agent ↔ target" signal with no real conflict (the early
+rebase clears it). An unknown key is refused.
+
+## `idle` — the GC of idle agents and sessions
+
+Detection of forgotten agents and, optionally, closing **their session** (never
+their clone): see [`striart gc`](commands.md#striart-gc-agent---close---dry-run)
+for the signals, the guards and the closing paths. A partial object merged into
+the defaults; an unknown key is refused (a typo on `closeAfterMS` does not slip by
+silently).
+
+```js
+idle: {
+  enabled: true,              // false = relaxation: nothing is detected any more (shown by doctor)
+  action: 'report',           // 'report' (detects) | 'warn' (+ warns) | 'close' (+ closes after the grace)
+  warnAfterMs: 1800000,       // 60,000 to 30 d — inactivity (all signals) that makes an agent "idle"
+  closeAfterMs: 7200000,      // 120,000 ms to 90 d, >= warnAfterMs — minimum inactivity to close
+  graceMs: 300000,            // 10,000 ms to 1 d — delay between the warning and the closing
+  sweepIntervalMs: 300000,    // 15,000 ms to 1 h — period of the `striart watch` sweep
+  maxClosuresPerSweep: 4,     // 1 to 64 closures per sweep
+  closePty: false,            // true = relaxation: close a terminal whose output is not observed
+  excludeAgents: [],          // 128 at most: exact names or a "name*" prefix — never touched
+  excludeProfiles: [],        // 128 at most: profiles (agentProfiles) whose agents are never touched
+}
+```
+
+- **`action` is a policy, the authorization is the user's decision.** Even with
+  `action: 'close'`, nothing is closed until this repository is listed in
+  `idle.closeRoots` of the
+  [user configuration](#user-configuration-outside-the-repository): a hostile
+  repository must not be able, through a committed file, to get processes
+  terminated on the machine of whoever opens it. Without authorization (or if the
+  user configuration is unreadable), `close` degrades to a warning and the report
+  says so (`closeAuthorized: false`); `striart doctor` shows it.
+- **Never before the warning or the grace**: a closure requires a warning at least
+  `graceMs` old placed *since the last activity*, an inactivity of at least
+  `closeAfterMs` and no guard. Any activity resets the counter.
+- **`closePty`**: the native pty host publishes the time of its last output in
+  `host.output` (at most one write per second, bound to its PID). An older host, or
+  a program still silent, does not publish it: the terminal's output is then
+  *unobservable* and, by default, the terminal is not closed. The native binary's
+  source publishes this file; a binary built or signed before that change does not
+  and must be rebuilt then re-signed. `closePty: true` accepts judging "idle" on
+  the other signals alone. It is an explicit relaxation.
+- **Exclusions**: `excludeAgents` accepts `agent-a` or `ci-*`; a bare `*` is refused
+  (excluding everything would amount to disabling — that is `enabled: false`).
 ## Agent profiles (`agentProfiles`)
 
 How to launch each tool WITHOUT human interaction (autonomous mode). By
@@ -467,7 +693,8 @@ tools that read it, like Codex); `'non-file'` touches nothing next to
 `{{targetBranch}}`, `{{testCommand}}`, `{{commitRules}}`,
 `{{commitConvention}}`, `{{mcpRules}}`, `{{protectedPaths}}`, `{{extra}}`.
 `tokens.instructions.mode: 'compact'` divides the default template's token
-cost by roughly three. The instructions are *advisory*: the safeguards (Test
+estimated cost by about 3.6 (1,400 → 385 estimated tokens with the
+default template, `npm run bench:tokens` run on 2026-10-26). The instructions are *advisory*: the safeguards (Test
 Gate, protected paths, MCP guard) decide, and an injection failure is a
 warning, not a refusal.
 
@@ -614,7 +841,7 @@ the file is then removed by hand.
 ```js
 pty: {
   replayBytes: 65536,        // recent output replayed to an attaching client (1 KiB to 16 MiB)
-  clientQueueBytes: 4194304, // a client's queue beyond which it is evicted (16 KiB to 256 MiB, ≥ replayBytes)
+  clientQueueBytes: 4194304, // a client's queue beyond which it is evicted (32 KiB to 256 MiB, and at least ⌈replayBytes×4/3⌉ + 64 + two output frames: the replay is sent as one base64 frame)
   killGraceMs: 1000,         // time left to the shell and its descendants on close (0 to 60,000)
   shell: 'auto',             // 'auto' | bare name (absolute PATH only) | absolute path
   shellArgs: [],             // ≤ 64 arguments, each ≤ 4096 bytes, no newline nor NUL
@@ -751,6 +978,55 @@ wildcards, a public IP, IPv6, a scheme, a path, credentials. This setting
 `Sec-Fetch-Site`, `Origin` and anti-CSRF remain required. It is logged at
 every dashboard start and shown by `doctor`.
 
+## Delivery to `origin`: `autoPush`, `delivery`, timeouts
+
+`autoPush: true` delivers every green merge (and every promotion) to the
+`origin` remote; `delivery` chooses **where**:
+
+- `'push'` (default): the tested SHA goes to `targetBranch` (to `mainBranch`
+  for a promotion);
+- `'branch'`: it goes to a branch **awaiting approval** —
+  `striart/<agent>/<task>` (`<task>`: the task identifier if it uses a safe
+  character set, otherwise a UTC timestamp), `striart/promote/<date>-<sha8>`
+  for a promotion. The remote target branch **never** advances because of
+  Striart: the forge stays the approval authority (PR/MR created elsewhere).
+  `delivery: 'branch'` without `autoPush: true` is refused at load time
+  (`CONFIG_INVALID`, sub-code `DELIVERY_REQUIRES_AUTOPUSH`): it would suggest a
+  delivery that does not happen.
+
+In both modes the delivery is a **deferred** effect, run **after the main lock
+is released**, and covers the **exact SHA** that passed the Test Gate — never
+`HEAD`. It is **never forced** and cannot open an interactive prompt
+(`GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`, no inherited `GIT_*`
+variable). A failure does not undo the local merge: it is reported in
+`result.delivery` (typed report: mode, branch, SHA, `pushed`, `code`, hint) and
+in `pushError`, prefixed with the code (`[PUSH_TIMEOUT] …`), with a
+`delivery:failed` event (webhook); in `branch` mode the `delivery:branch` event
+announces the delivered branch. Remote URL tokens are redacted
+(`https://***@forge/`). Reported codes: `PUSH_TIMEOUT`,
+`PUSH_NON_FAST_FORWARD`, `PUSH_REJECTED`, `PUSH_FAILED`, `PUSH_SUPERSEDED`,
+`DELIVERY_REF_INVALID` — see [Troubleshooting](troubleshooting.md#error-codes).
+
+- `pushTimeoutMs` (120,000, 1,000 to 2,147,483,647): hard push timeout. Beyond
+  it the **process tree** is killed (`pre-push` hook, authentication or network
+  blocked): `PUSH_TIMEOUT`.
+- `commitTimeoutMs` (300,000, 1,000 to 2,147,483,647): same guard for the
+  **merge commit**, which runs the target's hooks (`pre-commit`,
+  `pre-merge-commit`, `prepare-commit-msg`, `commit-msg`) and signing. A hook is
+  **never bypassed** (no `--no-verify`): a rejection or a timeout cancels the
+  merge and opens a `COMMIT_HOOK_REJECTED` ticket (hook output bounded to
+  16 KiB, the tail kept). This timeout also bounds the `revert` commit of a
+  published `rollback`.
+
+Deliveries are serialized per repository **within one process**; between two
+processes (a `watch` and a command), a push refused because the other one has
+just published that same SHA is recognised as already delivered
+(`alreadyDelivered`). **Accepted residual window**: a `rollback` run by
+*another* process during an in-flight push is not prevented; when the
+divergence is detected it is reported (`PUSH_SUPERSEDED` if the SHA is no
+longer in the local branch, `PUSH_NON_FAST_FORWARD` if the remote moved),
+never silently. `striart doctor` does not show `delivery` or these timeouts.
+
 ## Test Gate: process container
 
 The Test Gate (`testCommand`, `promoteTestCommand`) runs by default in the
@@ -776,13 +1052,68 @@ Windows, group + subreaper on Linux).
 The gate is also red if the container cleanup is incomplete
 (`JOB_TERMINATE_INCOMPLETE`).
 
+### `gateEnv` — the Test Gate environment
+
+`testCommand` runs tests that **the agent may have written or modified**:
+handing them the whole orchestrator environment (LLM API keys, webhook URLs,
+tokens) would offer it to untrusted code. The gate therefore receives an
+**allow-list** (paths, temp directories, locale, proxy and certificate
+authorities for `npm install`, `NODE_*`, `npm_config_*`, `XDG_*`, `STRIART_*`,
+toolchain locations…), **without** anything whose name looks like a secret, and
+**always without** API keys (`*_API_KEY`), webhook URLs, the variables the config
+names to carry them (`llm.apiKeyEnv`, `llmRoles.*.apiKeyEnv`,
+`notifiers[].urlEnv`) and `STRIART_SESSION`.
+
+- `gateEnv: null` (default): that allow-list only.
+- `gateEnv: ['MY_APP_*', 'DATABASE_URL']`: the repository **requests** extra
+  variables (up to 64: a name, `PREFIX_*` or `*_SUFFIX`; a request aimed at an
+  API key or a webhook is refused at load time). They pass only if the **user
+  configuration** allows them (`gate.envAllow`, below): the repository cannot
+  widen beyond what the user permits. An unauthorized request is dropped — never
+  silently accepted: the gate log opens with a line naming the dropped
+  variables ("gateEnv : variables demandées par le dépôt mais non autorisées par
+  la config utilisateur (gate.envAllow), non transmises : …" — names only, the
+  line itself is in French) and `striart doctor` (line "Test Gate environment") flags it.
+- `gateEnv: 'inherit'`: the whole orchestrator environment, API keys included.
+  **Explicit relaxation**, logged and shown by `doctor`.
+
+The gate log is also **redacted** before being kept or returned (see
+[SECURITY.md](../../SECURITY.md#confidentialité-des-données-locales)): keys
+recognised by their shape, and the exact values of the environment's secrets.
+
 ## Logs
 
 `logMaxBytes` (10 MiB by default, 64 KiB to 1 GiB) and `logGenerations` (5,
 from 1 to 100) tune the size-based rotation of the long logs (`watch.log`,
 `dashboard.log`, `watch-ui.log`): beyond it, the log becomes `<name>.log.1`,
 then `.log.2`… the oldest generation being deleted. `STRIART_LOG_LEVEL` sets
-the verbosity of CLI logs (stderr).
+the verbosity of CLI logs (stderr). Session, Test Gate and ticket logs are
+**redacted** before being written (known secret patterns and the exact values
+of the environment): see
+[SECURITY.md](../../SECURITY.md#confidentialité-des-données-locales).
+
+## Local data: `privateStateDir`
+
+`.striart/` holds source code (the base/ours/theirs versions of tickets), tool
+output (session and gate logs), the queue's prompts and the Control Protocol
+tokens. `privateStateDir: true` (default) reserves it to the current user:
+directories `0700` and files `0600` (POSIX, checked with `stat`), a **protected
+ACL** without inheritance, limited to the user's SID, set by `icacls` and
+verified in SDDL (Windows). The protection is set by `striart init` (which also
+tightens a pre-existing `.striart/`, idempotently) and before any operation
+under the main lock — **before** taking it, never under it — once per root and
+per process, and only if `.striart/` exists. Agent clones (`agents/`) and clones
+being removed (`removing/`) are **never walked**: they are working trees whose git
+objects are hardlinks shared with the main repository — changing their ACL would
+change the main repository's too.
+
+A tightening that cannot be done (file system without permissions, foreign
+owner, failing `icacls`) is a **refusal**: `STATE_UNPROTECTED` (exit 3), never a
+silent fallback. `privateStateDir: false` is the **explicit relaxation** for a
+file system that carries no permissions (FAT, exFAT, some network shares): one
+warning per process, and `striart doctor` shows it (the "Local data
+(.striart/)" and "Relaxed protections" lines). An unreadable config never
+disables the protection.
 
 ## Notifications
 
@@ -795,6 +1126,95 @@ orchestration):
   `{text}`, `discord` → `{content}`, `generic` → `{message}`). The URL comes
   from `url` or `urlEnv` (name of an env variable — preferable: a webhook URL
   is a secret), never both.
+
+## Enterprise network (`network`)
+
+**Every outgoing Striart call goes through a single entry point**
+(`src/net.ts`, enforced by a test that fails if another module calls `fetch()`
+or `http(s).request()`): LLM calls (Ollama, OpenAI-compatible, Anthropic,
+Azure), notification webhooks, the Ollama probe of `init`/`doctor`, the ACP
+registry and the download of its archives. For every **non-local** call the
+layer enforces, in this order: a valid `http(s)` URL (`NET_URL_INVALID`);
+offline mode (`NET_OFFLINE`); the host allow-list (`NET_HOST_NOT_ALLOWED`);
+**HTTPS required, with or without an API key** (`NET_INSECURE_TRANSPORT`,
+reason `PLAIN_HTTP`); TLS verification never switched off
+(`NODE_TLS_REJECT_UNAUTHORIZED=0` is refused, reason
+`TLS_VERIFICATION_DISABLED`); **no redirect followed** (`NET_REDIRECT_REFUSED`)
+— except the **bounded** following (3 hops) of ACP registry archives, where
+every hop goes through all these checks again. The loopback (`localhost`,
+`127.x`, `[::1]`) is neither proxied nor subject to these rules, and does not
+even read the user configuration: a local Ollama never depends on it.
+
+**Network settings are the user's decision, never the repository's**: they live
+in the shell and in the [user configuration](#user-configuration-outside-the-repository),
+out of reach of a hostile repository (which could otherwise redirect traffic
+to its own proxy, add its own certificate authority or reopen an allow-list).
+The root `.env` filter refuses each of these variables (`*_PROXY`, `NODE_*`,
+`STRIART_OFFLINE`, `STRIART_ALLOWED_HOSTS`, `STRIART_TLS_MIN_VERSION`,
+`STRIART_PROXY_AUTH`…).
+
+The `network` block of the user configuration (every key is optional; an
+unknown key is refused, `USER_CONFIG_INVALID`):
+
+| Key | Default | Role |
+|---|---|---|
+| `proxy` | `null` | `http://` or `https://` URL of the corporate proxy, **without credentials** (those go in `STRIART_PROXY_AUTH`). |
+| `noProxy` | `null` | Hosts reached without the proxy, comma-separated (`NO_PROXY` semantics: `*`, exact host, `.suffix`). |
+| `caFile` | `null` | **Absolute** path of a PEM file (≤ 4 MiB, at least one certificate), **added** to the default authorities. |
+| `allowedHosts` | `[]` | Allow-list (128 at most): `example.com` or `*.example.com` (subdomains only, never the apex; no scheme, no port, no bare `*`). Empty = no restriction. |
+| `allowInsecureHosts` | `[]` | Hosts reachable over **plain** HTTP (128 at most, same patterns): a logged relaxation (once per host), shown by `doctor`. |
+| `offline` | `false` | `true`: every non-local call is refused (`NET_OFFLINE`). |
+| `tlsMinVersion` | `null` | `'TLSv1.2'` or `'TLSv1.3'`; `null` = Node's minimum. |
+
+Matching **shell** environment variables:
+
+| Variable | Effect |
+|---|---|
+| `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` (lowercase accepted) | Corporate proxy, when `network.proxy` is absent (`network.proxy` wins). |
+| `STRIART_PROXY_AUTH` | The proxy's `user:password`, applied to the proxy URL if it carries none. Never in config, never passed to agent sessions. |
+| `STRIART_OFFLINE` | `1`/`true`/`yes`/`on` (or `0`/`false`/`no`/`off`): offline mode. Any other value is refused (`USER_CONFIG_INVALID`). |
+| `STRIART_ALLOWED_HOSTS` | Comma-separated allow-list (same patterns as `allowedHosts`). |
+| `STRIART_TLS_MIN_VERSION` | `TLSv1.2` or `TLSv1.3`. |
+| `NODE_EXTRA_CA_CERTS`, `NODE_USE_SYSTEM_CA=1` / `--use-system-ca` | Certificate authorities added by Node itself, **at startup** (not read by Striart; `doctor` shows them). |
+
+**The two sources are combined, always on the restrictive side**: offline mode
+is on if either asks for it; the allow-list is the **intersection** (a host must
+appear in every defined list); for TLS the **strictest** wins.
+
+**The proxy, independent of Node version.** Striart builds its own `undici`
+dispatcher (`ProxyAgent`) for every outgoing request — `network.proxy` and
+`STRIART_PROXY_AUTH` work on any supported Node version. Decision of
+2026-10-28: Node's native mechanism (`http.setGlobalProxyFromEnv` /
+`NODE_USE_ENV_PROXY`) tunnels EVERY request via CONNECT, including `http://`
+targets — broken for a standard forward proxy on Node 22/24/25 as of this
+date, so it is never used. Only a proxy scheme other than `http:`/`https:`
+(SOCKS included) is refused (`NET_PROXY_UNSUPPORTED`, reason `SCHEME`).
+
+**Not supported**: `ALL_PROXY` (not read) and SOCKS proxies.
+
+**Corporate CA and agent sessions.** `network.caFile` is read on first use and
+added to Node's authorities; an unreadable file or one without a certificate
+gives `NET_CA_INVALID`. A chain that does not end at a known authority gives
+`NET_TLS_UNTRUSTED`: the way out is to add the corporate CA, **never** to switch
+verification off. For an agent's tool (often a Node program) to trust the same
+authority, a session receives `NODE_EXTRA_CA_CERTS=<network.caFile>` — unless the
+shell already set another one (a single value is possible: **the shell wins**,
+and the fact is logged). The `env` of an agent profile (repository config) comes
+after, like any profile variable. `STRIART_PROXY_AUTH` is never passed on;
+ordinary proxy variables stay inherited as they are — a `network.proxy` from the
+user configuration is **not** converted into `HTTP(S)_PROXY` for sessions (not
+decided: the agent tool must get its proxy from the shell).
+
+`striart doctor` (the "Network" line) shows the effective policy: offline and
+allow-list, proxy active or inactive and its mechanism, minimum TLS, corporate
+CA (certificate count), `NODE_EXTRA_CA_CERTS`, and, as a warning, relaxed
+protections (`network.allowInsecureHosts`, `NODE_TLS_REJECT_UNAUTHORIZED=0`).
+
+**Accepted limits**: the layer checks the **host name**, not the resolved IP
+address — an allowed host whose DNS is hijacked (DNS rebinding) is not
+detected; the `network.caFile` → agent sessions path is not tested against a
+real HTTPS proxy (tests cover the policy, the environment proxy and the TLS
+chain separately).
 
 ## User configuration (outside the repository)
 
@@ -811,7 +1231,10 @@ file, plain data (never executed), at:
 {
   "hooks":  { "trustedRoots": ["/absolute/path/to/repo"] },
   "env":    { "allow": ["MY_PROVIDER_*", "*_SECRET_ID"] },
-  "native": { "trustedKeyIds": ["0123456789ABCDEF"] }
+  "native": { "trustedKeyIds": ["0123456789ABCDEF"] },
+  "network": { "proxy": "http://proxy.example.com:3128", "allowedHosts": ["api.anthropic.com", "*.openai.azure.com"] },
+  "gate":   { "envAllow": ["MY_APP_*", "DATABASE_URL"] },
+  "idle":   { "closeRoots": ["/absolute/path/to/repo"] }
 }
 ```
 
@@ -834,9 +1257,27 @@ roots.
   `doctor`) accepted **in addition to** the key pinned in the code to verify
   the native binary — for an organization that re-signs its own archives.
 
-The three blocks widen code execution or trust, which is why they live outside
-the repository. `doctor` lists `env.allow` and `hooks.trustedRoots` among the
-relaxations.
+- `network`: the corporate network policy, detailed in
+  [Enterprise network](#enterprise-network-network) (proxy, `noProxy`,
+  `caFile`, `allowedHosts`, `allowInsecureHosts`, `offline`, `tlsMinVersion`).
+- `gate.envAllow` (128 patterns at most): the **ceiling** of the variables the
+  repository's `gateEnv` key may request for the Test Gate, on top of the
+  built-in allow-list. Shape: a name, `PREFIX_*` or `*_SUFFIX`; a pattern aimed
+  at an API key or a webhook is refused (those variables are always removed from
+  the gate). A repository request this ceiling does not cover is dropped and
+  announced (see [`gateEnv`](#gateenv--the-test-gate-environment)).
+
+- `idle.closeRoots` (256 roots at most, absolute paths, never the filesystem
+  root): the repositories for which the
+  [idle GC](commands.md#striart-gc-agent---close---dry-run) is **authorized to
+  close a session** left unused. The repository config chooses the policy
+  (`idle.action: 'close'`); terminating a process on this machine is the user's
+  decision. Empty or unreadable: no automatic closing (fail closed).
+
+These blocks widen code execution or trust, which is why they live outside the
+repository. `doctor` lists `env.allow`, `gate.envAllow`, `hooks.trustedRoots`
+and `network.allowInsecureHosts` among the relaxations, and the state of
+`idle.closeRoots` in its "Idle GC" check.
 
 ## Environment variables
 
@@ -845,6 +1286,7 @@ relaxations.
 | `STRIART_LANG`, `STRIART_THEME`, `NO_COLOR`, `STRIART_ASCII`… | CLI display — see [Commands](commands.md#language-colors-terminal). |
 | `STRIART_LOG_LEVEL` | Log verbosity (stderr). |
 | `STRIART_CONFIG_HOME` | Directory of the user configuration (absolute path). |
+| `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `STRIART_PROXY_AUTH`, `STRIART_OFFLINE`, `STRIART_ALLOWED_HOSTS`, `STRIART_TLS_MIN_VERSION`, `NODE_EXTRA_CA_CERTS`, `NODE_USE_ENV_PROXY` | Enterprise network, **shell only** (never a repository's `.env`) — see [Enterprise network](#enterprise-network-network). |
 | `STRIART_NATIVE_BIN` | **Absolute** path of a hand-built native binary. A conscious choice: its integrity is **not** verified, `doctor` flags it. |
 | `STRIART_HOOK_BIN_DIR` | Space-free directory where `hook install` writes the Windows `.cmd` launcher. |
 | `STRIART_SESSION=1` | Set by Striart in autonomous sessions: MCP depth guard, Control Protocol refusal. Not overridable by a profile. |

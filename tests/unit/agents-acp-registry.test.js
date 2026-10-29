@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   acpAgentDir,
   importAcpAgent,
@@ -260,5 +260,39 @@ describe('registre ACP — import (D8)', () => {
     expect(registryPlatformKey('win32', 'x64')).toBe('windows-x86_64');
     expect(registryPlatformKey('darwin', 'arm64')).toBe('darwin-aarch64');
     expect(registryPlatformKey('linux', 'ia32')).toBeNull();
+  });
+});
+
+describe('registre ACP — couche réseau (src/net.ts)', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('mode offline : le registre n’est pas téléchargé (NET_OFFLINE), même avec un transport injecté', async () => {
+    vi.stubEnv('STRIART_OFFLINE', '1');
+    const fetchImpl = registryFetch();
+    await expect(
+      importAcpAgent({ root: '/x', id: 'codex-acp', settings: settings(), fetchImpl }),
+    ).rejects.toMatchObject({ code: 'NET_OFFLINE' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('liste blanche : un registre hors liste est refusé (NET_HOST_NOT_ALLOWED)', async () => {
+    vi.stubEnv('STRIART_ALLOWED_HOSTS', 'registry.corp.example');
+    const fetchImpl = registryFetch();
+    await expect(
+      importAcpAgent({ root: '/x', id: 'codex-acp', settings: settings(), fetchImpl }),
+    ).rejects.toMatchObject({ code: 'NET_HOST_NOT_ALLOWED' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('le registre est demandé sans suivi de redirection (redirect: error)', async () => {
+    const fetchImpl = registryFetch();
+    await importAcpAgent({
+      root: '/x',
+      id: 'codex-acp',
+      settings: settings(),
+      fetchImpl,
+      platform: 'linux-x86_64',
+    });
+    expect(fetchImpl.mock.calls[0][1].redirect).toBe('error');
   });
 });

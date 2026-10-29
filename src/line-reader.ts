@@ -1,4 +1,4 @@
-import { StriartError } from './errors.js';
+import { StriartError } from './errors.ts';
 
 /**
  * Découpeur de lignes BORNÉ pour les flux d'octets non fiables (stdin du

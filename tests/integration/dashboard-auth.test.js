@@ -5,11 +5,11 @@ import path from 'node:path';
 import { readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { execa } from 'execa';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { createAgent } from '../../src/clone.js';
-import { createConflictTicket } from '../../src/conflicts.js';
-import { enqueueTask } from '../../src/queue.js';
-import { startDashboard } from '../../src/dashboard.js';
+import { initStriart } from '../../src/init.ts';
+import { createAgent } from '../../src/clone.ts';
+import { createConflictTicket } from '../../src/conflicts.ts';
+import { enqueueTask } from '../../src/queue.ts';
+import { startDashboard } from '../../src/dashboard.ts';
 import { readTokenFile, tokenFilePath } from '../../src/control/auth.ts';
 import {
   baseUrl,

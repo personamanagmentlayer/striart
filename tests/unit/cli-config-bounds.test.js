@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_CONFIG, listUnknownConfigKeys } from '../../src/config.js';
+import { DEFAULT_CONFIG, listUnknownConfigKeys } from '../../src/config.ts';
 
 /**
  * C-M5 (doctor) : la liste des clés de premier niveau inconnues qu'affiche

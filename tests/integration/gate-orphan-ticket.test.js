@@ -9,11 +9,11 @@ import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { execa } from 'execa';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { createAgent } from '../../src/clone.js';
-import { mergeAgentCommit } from '../../src/orchestrator.js';
-import { readTicketDetail } from '../../src/conflicts.js';
-import { isProcessAlive } from '../../src/process-tree.js';
+import { initStriart } from '../../src/init.ts';
+import { createAgent } from '../../src/clone.ts';
+import { mergeAgentCommit } from '../../src/orchestrator.ts';
+import { readTicketDetail } from '../../src/conflicts.ts';
+import { isProcessAlive } from '../../src/process-tree.ts';
 import { nativeDiagnostic } from '../../src/native.ts';
 
 const git = (cwd, ...args) => execa('git', ['-C', cwd, ...args]).then((r) => r.stdout.trim());

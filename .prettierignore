@@ -6,3 +6,5 @@ node_modules/
 coverage/
 .striart/
 package-lock.json
+# Extensions d IDE : paquets autonomes avec leurs propres scripts (extensions/*/package.json)
+extensions/

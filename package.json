@@ -36,7 +36,7 @@
   },
   "author": "jumsay",
   "engines": {
-    "node": ">=22.18"
+    "node": ">=22.21.0"
   },
   "scripts": {
     "dev": "node --watch-path=src src/cli.js",
@@ -44,14 +44,19 @@
     "test:unit": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
     "test:pack": "vitest run --project pack",
+    "test:e2e": "playwright test",
     "test:watch": "vitest",
     "test:ci": "tsc && vitest run --coverage --project unit --project integration && vitest run --project pack",
     "typecheck": "tsc",
     "lint": "eslint . && prettier --check .",
     "format": "prettier --write .",
     "pack:release": "node scripts/pack.ts",
+    "release:check": "node scripts/release-check.ts",
     "bench:startup": "node scripts/bench-startup.ts",
     "bench:tokens": "node scripts/bench-tokens.ts",
+    "bench:router": "node scripts/bench-router.ts",
+    "bench:merger": "node scripts/bench-merger.ts",
+    "bench:merge": "node scripts/bench-merge.ts",
     "native:build": "cd native && cargo build --release --locked --bins --examples",
     "native:test": "cd native && cargo test --locked",
     "native:lint": "cd native && cargo fmt --all --check && cargo clippy --locked --all-targets -- -D warnings",
@@ -71,19 +76,24 @@
     "pino-pretty": "^11.0.0",
     "react": "^19.2.8",
     "simple-git": "^4.0.2",
+    "undici": "^8.12.3",
     "yaml": "^2.9.0"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "1.64.0",
     "@types/node": "^26.1.2",
     "@typescript/native": "npm:typescript@^7.0.2",
-    "@vitest/coverage-v8": "^4.1.11",
+    "@vitest/coverage-v8": "^4.1.12",
+    "@xterm/xterm": "6.0.0",
+    "axe-core": "4.13.0",
     "eslint": "^10.8.1",
     "eslint-config-prettier": "^10.1.8",
     "globals": "^17.9.0",
     "prettier": "^3.9.6",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
     "typescript-eslint": "^8.67.0",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   }
 }

@@ -1,6 +1,6 @@
 import { lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
-import { StriartError } from '../errors.js';
+import { StriartError } from '../errors.ts';
 import type { AgentProfile } from '../types.js';
 
 /**

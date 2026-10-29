@@ -21,7 +21,7 @@
 import { access, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { withMainLock } from '../../src/lock.js';
+import { withMainLock } from '../../src/lock.ts';
 
 const [root, holdMs = '10000', label = 'child-holder', mode = 'hold', modeArg = ''] =
   process.argv.slice(2);

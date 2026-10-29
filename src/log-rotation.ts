@@ -75,7 +75,7 @@ export async function rotateLogFileIfNeeded(
   if (!stats || stats.size < maxBytes) return false;
   // Chargé à la demande : logger.js importe ce module, json-file importe
   // logger.js — un import statique créerait un cycle au démarrage.
-  const { withTransientRetry } = await import('./json-file.js');
+  const { withTransientRetry } = await import('./json-file.ts');
   await rm(generationPath(file, generations), { force: true });
   for (let generation = generations - 1; generation >= 1; generation -= 1) {
     await withTransientRetry(() =>
@@ -112,7 +112,7 @@ export function createRotatingFileSink(
   { maxBytes, generations }: LogRotation,
 ): { write: (chunk: string | Uint8Array) => void; close: () => void } {
   // null : descripteur fermé, réouverture à retenter.
-  let fd: number | null = openSync(file, 'a');
+  let fd: number | null = openSync(file, 'a', 0o600);
   let size = fstatSync(fd).size;
   let nextRotationAt = maxBytes;
 
@@ -125,7 +125,7 @@ export function createRotatingFileSink(
   /** Réouvre le journal ; false (et `fd` reste null) si l'ouverture échoue. */
   const reopen = () => {
     try {
-      fd = openSync(file, 'a');
+      fd = openSync(file, 'a', 0o600);
       size = fstatSync(fd).size;
       return true;
     } catch (error) {

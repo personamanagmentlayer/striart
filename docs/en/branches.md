@@ -109,10 +109,16 @@ export default {
 
 Agent clones have **no remote**: only the orchestrator pushes (golden rule
 #1). By default `autoPush: false` — the human approves the push. With
-`autoPush: true`, every green merge is followed by
-`git push origin <targetBranch>`; a push failure is logged but does not undo
-the local merge (`pushError` in the result). Same rule for pushing
-`mainBranch` after a promotion.
+`autoPush: true`, every green merge is delivered to `origin`: by default
+(`delivery: 'push'`) the tested SHA goes to `<targetBranch>`; with
+`delivery: 'branch'` it goes to a branch awaiting approval
+(`striart/<agent>/<task>`) and the remote `<targetBranch>` never advances
+because of Striart — the forge (PR/MR) stays the approval authority. Delivery
+happens **outside the main lock**, never forced, with no interactive prompt and
+under a hard timeout (`pushTimeoutMs`); a failure does not undo the local merge:
+it is reported (`delivery` and `pushError` in the result, prefixed with its
+`PUSH_*` code). Same rule for `mainBranch` after a promotion. Details:
+[Configuration](configuration.md#delivery-to-origin-autopush-delivery-timeouts).
 
 **Push authentication**: since 0.11 (simple-git 4), no `GIT_*` variable
 inherited from the environment reaches the git commands Striart runs —
@@ -120,11 +126,13 @@ inherited from the environment reaches the git commands Striart runs —
 authenticates through git's own configuration: a credential helper
 (`git config credential.helper …`) over HTTPS, or `~/.ssh/config` and the SSH
 agent over SSH. A push that worked thanks to one of those variables now fails
-(logged, local merge kept).
+(reported, local merge kept).
 
 `striart rollback` accounts for the push: merge not pushed → local reset
 (recoverable via reflog); merge already pushed → revert (published history is
-preserved).
+preserved). In `delivery: 'branch'` mode the remote target branch has not
+advanced, so the merge counts as unpublished: local reset; Striart never
+deletes a delivery branch that was already pushed.
 
 ## See also
 

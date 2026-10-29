@@ -16,7 +16,7 @@
  * est écarté et signalé à l'IDE (`-32600`), jamais accumulé.
  */
 import { boundedLines } from '../line-reader.ts';
-import { logger } from '../logger.js';
+import { logger } from '../logger.ts';
 
 export const RPC = Object.freeze({
   PARSE_ERROR: -32700,

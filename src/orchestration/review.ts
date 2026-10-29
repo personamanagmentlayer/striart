@@ -11,8 +11,8 @@
  * `.striart/reviews/` (`striart review`), délai fail closed.
  */
 import { collabRulesInSessionInstructions } from '../agents/instructions.ts';
-import { cloneGit } from '../clone.js';
-import { DEFAULT_PROFILE, resolveAgentProfile } from '../session.js';
+import { cloneGit } from '../clone.ts';
+import { DEFAULT_PROFILE, resolveAgentProfile } from '../session.ts';
 import {
   closeCollabGroup,
   createCollabGroup,

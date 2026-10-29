@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { lstat, mkdir, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { StriartError } from '../errors.js';
+import { StriartError } from '../errors.ts';
 import { AGENT_NAME_RE } from '../agent-name.ts';
 import type { WarpSettings, WarpShell } from './config.ts';
 import { writePrivateFileAtomic } from './private-file.ts';

@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { createAgent } from '../../src/clone.js';
-import { sessionLogPath } from '../../src/session.js';
+import { initStriart } from '../../src/init.ts';
+import { createAgent } from '../../src/clone.ts';
+import { sessionLogPath } from '../../src/session.ts';
 import { SESSION_LOG_TAIL, HANDLERS } from '../../src/control/methods.ts';
 
 describe('session.log — queue bornée en OCTETS, lue sans charger tout le fichier', () => {

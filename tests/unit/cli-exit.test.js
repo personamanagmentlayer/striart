@@ -15,7 +15,7 @@ import {
 } from '../../src/cli/exit.ts';
 import { fr } from '../../src/cli/i18n/fr.ts';
 import { agentNameParser, integerParser, ticketIdParser } from '../../src/cli/parse.ts';
-import { StriartError, errorKindOf } from '../../src/errors.js';
+import { StriartError, errorKindOf } from '../../src/errors.ts';
 
 describe('codes de sortie', () => {
   it('barème par nature : 0 ok, 1 échec, 2 usage, 3 refus', () => {
@@ -125,11 +125,14 @@ describe('nature des erreurs : cohérence des familles de codes', () => {
       'AGENT_UNKNOWN',
       'REVIEW_UNKNOWN',
       'PROFILE_UNKNOWN',
-      'HOOK_TOOL_UNKNOWN',
       'ACP_AGENT_UNKNOWN',
     ]) {
       expect(errorKindOf(code), code).toBe('failure');
     }
+  });
+
+  it('un outil de hook inconnu est un ensemble fermé de la CLI : usage, sortie 2 (comme les autres valeurs invalides)', () => {
+    expect(errorKindOf('HOOK_TOOL_UNKNOWN')).toBe('usage');
   });
 
   it('--after : la file refuse la dépendance, qu’elle soit inconnue ou cyclique', () => {
@@ -168,7 +171,7 @@ describe('analyseurs d’arguments (validation stricte, sortie 2)', () => {
 
 describe('détails d’erreur publics (--json) — caviardage défensif', () => {
   it('le NOM d’un profil (chaîne) est un identifiant public ; sa définition (objet) reste masquée', async () => {
-    const { publicErrorDetails } = await import('../../src/errors.js');
+    const { publicErrorDetails } = await import('../../src/errors.ts');
     expect(publicErrorDetails({ reason: 'ACP_OPTION_INVALID', profile: 'claude-acp' })).toEqual({
       reason: 'ACP_OPTION_INVALID',
       profile: 'claude-acp',
@@ -182,7 +185,7 @@ describe('détails d’erreur publics (--json) — caviardage défensif', () => 
   });
 
   it('masque récursivement env, value, url, profile et tout champ de type secret', async () => {
-    const { publicErrorDetails } = await import('../../src/errors.js');
+    const { publicErrorDetails } = await import('../../src/errors.ts');
     const details = publicErrorDetails({
       key: 'agentProfiles',
       agent: 'agent-a',

@@ -20,11 +20,14 @@
  * ne les remplacent pas.
  */
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { chmod, mkdir, open, readFile, rename, rm, stat } from 'node:fs/promises';
+import { chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
-import { execa } from 'execa';
-import { StriartError } from '../errors.js';
-import { striartDir } from '../paths.js';
+import { StriartError } from '../errors.ts';
+import { striartDir } from '../paths.ts';
+import {
+  assertPrivate as assertFilePrivate,
+  restrictToCurrentUser as restrictFileToCurrentUser,
+} from '../private-fs.ts';
 
 export const TOKEN_BYTES = 32;
 /** Borne haute absolue d'un lien, quelle que soit la config (validateur de dashboardLinkTtlMs). */
@@ -206,115 +209,32 @@ function unprotected(file: string, reason: string, cause?: unknown): StriartErro
   );
 }
 
-const windowsTool = (name: string) =>
-  path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', name);
-
-let cachedSid: string | null = null;
-
-/** SID de l'utilisateur courant (`whoami /user`, sortie CSV indépendante de la langue). */
-async function currentUserSid(): Promise<string> {
-  if (cachedSid) return cachedSid;
-  const { stdout } = await execa(windowsTool('whoami.exe'), ['/user', '/fo', 'csv', '/nh'], {
-    windowsHide: true,
-  });
-  const sid = /"(S-1-[0-9-]+)"/.exec(stdout)?.[1];
-  if (!sid) throw new Error('whoami returned no SID');
-  cachedSid = sid;
-  return sid;
-}
-
 /**
- * DACL d'un fichier en SDDL (`icacls /save`, indépendant de la langue de
- * l'OS — les noms de comptes affichés par `icacls <fichier>` sont traduits).
+ * Mécanisme de restriction à l'utilisateur courant : une seule implémentation,
+ * `src/private-fs.ts` (réutilisée pour tout `.striart/`). Ici, seule l'erreur est
+ * propre au jeton du dashboard (`CONTROL_TOKEN_UNPROTECTED`, contrat publié).
  */
-async function readSddl(file: string): Promise<string> {
-  const dump = `${file}.acl-${randomBytes(6).toString('hex')}`;
+export { sddlRestrictedTo } from '../private-fs.ts';
+
+async function asTokenError<T>(file: string, operation: () => Promise<T>): Promise<T> {
   try {
-    await execa(windowsTool('icacls.exe'), [file, '/save', dump], { windowsHide: true });
-    const raw = await readFile(dump);
-    // icacls écrit en UTF-16LE (avec ou sans BOM).
-    const text =
-      raw[0] === 0xff && raw[1] === 0xfe
-        ? raw.subarray(2).toString('utf16le')
-        : raw.toString('utf16le');
-    const sddl = /D:[^\r\n]*/.exec(text)?.[0];
-    if (!sddl) throw new Error('no DACL in icacls output');
-    return sddl;
-  } finally {
-    await rm(dump, { force: true });
+    return await operation();
+  } catch (error) {
+    if (error instanceof StriartError && error.code === 'STATE_UNPROTECTED') {
+      throw unprotected(file, String(error.details.reason ?? 'unknown'), error.cause ?? error);
+    }
+    throw error;
   }
-}
-
-/**
- * La DACL n'accorde-t-elle des droits QU'À `sid`, sans héritage ? (drapeau
- * P = protégée ; chaque ACE « (type;…;sid) » d'autorisation vise `sid`).
- */
-export function sddlRestrictedTo(sddl: string, sid: string): boolean {
-  const match = /^D:([A-Z]*)(\(.*\))?$/.exec(sddl.trim());
-  if (!match || !match[1].includes('P')) return false;
-  const aces = [...(match[2] ?? '').matchAll(/\(([^)]*)\)/g)].map((m) => m[1].split(';'));
-  if (aces.length === 0) return false;
-  const principals = sddlPrincipals(sid);
-  return aces.every((ace) => ace.length >= 6 && (ace[0] !== 'A' || principals.includes(ace[5])));
-}
-
-/**
- * Écritures SDDL d'un même compte : son SID, et l'alias que le formateur de
- * Windows lui substitue — administrateur local (RID 500, ex. `runneradmin`) →
- * `LA`, SYSTEM → `SY`. Sans cela, l'Administrateur intégré voyait sa propre
- * DACL, pourtant restreinte à lui seul, refusée comme « accordée à d'autres ».
- * L'alias ne vaut que pour SON SID : jamais un blanc-seing.
- */
-function sddlPrincipals(sid: string): string[] {
-  if (sid === 'S-1-5-18') return [sid, 'SY'];
-  if (/^S-1-5-21-\d+-\d+-\d+-500$/.test(sid)) return [sid, 'LA'];
-  return [sid];
 }
 
 /** Restreint `file` à l'utilisateur courant, puis le VÉRIFIE (fail closed). */
-export async function restrictToCurrentUser(file: string): Promise<void> {
-  if (process.platform === 'win32') {
-    try {
-      const sid = await currentUserSid();
-      // /reset d'abord : le DACL par défaut du jeton d'une session élevée donne au
-      // fichier des ACE EXPLICITES (SYSTEM, Administrateurs…) que ni
-      // `/inheritance:r` (héritage seulement) ni `/grant:r` (le compte visé
-      // seulement) ne retirent. /reset les efface ; l'héritage est ensuite coupé
-      // et le seul droit accordé est celui de l'utilisateur.
-      await execa(windowsTool('icacls.exe'), [file, '/reset'], { windowsHide: true });
-      await execa(windowsTool('icacls.exe'), [file, '/inheritance:r', '/grant:r', `*${sid}:(F)`], {
-        windowsHide: true,
-      });
-      const sddl = await readSddl(file);
-      // La DACL (SDDL : SID et droits, aucun secret) accompagne le refus : sans elle,
-      // un compte dont l'écriture SDDL est inattendue est indiagnostiquable.
-      if (!sddlRestrictedTo(sddl, sid))
-        throw new Error(`ACL still grants other accounts (${sddl})`);
-    } catch (error) {
-      throw unprotected(file, 'icacls', error);
-    }
-    return;
-  }
-  await chmod(file, 0o600);
-  await assertPrivate(file);
+export function restrictToCurrentUser(file: string): Promise<void> {
+  return asTokenError(file, () => restrictFileToCurrentUser(file));
 }
 
 /** Le fichier n'est-il lisible que par son propriétaire, l'utilisateur courant ? */
-export async function assertPrivate(file: string): Promise<void> {
-  if (process.platform === 'win32') {
-    let ok = false;
-    try {
-      ok = sddlRestrictedTo(await readSddl(file), await currentUserSid());
-    } catch (error) {
-      throw unprotected(file, 'icacls', error);
-    }
-    if (!ok) throw unprotected(file, 'acl-open');
-    return;
-  }
-  const info = await stat(file);
-  if ((info.mode & 0o077) !== 0) throw unprotected(file, 'mode-open');
-  if (typeof process.getuid === 'function' && info.uid !== process.getuid())
-    throw unprotected(file, 'foreign-owner');
+export function assertPrivate(file: string): Promise<void> {
+  return asTokenError(file, () => assertFilePrivate(file));
 }
 
 export interface TokenFile {

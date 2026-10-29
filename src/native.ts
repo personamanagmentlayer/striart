@@ -51,7 +51,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
 import type { ResultPromise } from 'execa';
-import { StriartError } from './errors.js';
+import { StriartError } from './errors.ts';
 import { getSignatureScheme, publicKeyPath, signatureSchemeNames } from './native-signature.ts';
 import {
   PTY_MIN_CLIENT_QUEUE_BYTES,
@@ -1113,6 +1113,11 @@ export interface NativeJobOptions {
   /** Délai total ; au-delà, tout le conteneur est tué. */
   timeoutMs?: number;
   env?: NodeJS.ProcessEnv;
+  /**
+   * `false` : `env` EST l'environnement complet du programme (rien n'est
+   * hérité du process Striart). Défaut `true` (execa fusionne `process.env`).
+   */
+  extendEnv?: boolean;
   /** Windows : arguments transmis sans requotage (`cmd.exe /d /s /c "…"`). */
   windowsVerbatimArguments?: boolean;
   /** Entrelace stdout et stderr dans `all` (journal du Test Gate). */
@@ -1169,6 +1174,7 @@ export async function startNativeJob(options: NativeJobOptions): Promise<NativeJ
   const subprocess = execa(binary.path, args, {
     cwd,
     env,
+    extendEnv: options.extendEnv ?? true,
     reject: false,
     all: options.all ?? false,
     buffer: options.buffer ?? true,

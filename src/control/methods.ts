@@ -14,18 +14,18 @@
  * ouvert…) reste celle du domaine.
  */
 import { open } from 'node:fs/promises';
-import { cleanClones, readRegistry, validateAgentName } from '../clone.js';
+import { cleanClones, readRegistry, validateAgentName } from '../clone.ts';
 import {
   closeConflictTicket,
   prepareResolutionScaffold,
   readResolutionInputs,
   readTicketDetail,
-} from '../conflicts.js';
-import { loadConfig } from '../config.js';
-import { runDoctor } from '../doctor.js';
-import { StriartError, agentUnknownError } from '../errors.js';
-import { logger } from '../logger.js';
-import { readMainSessionStatus, stopMainSession } from '../main-session.js';
+} from '../conflicts.ts';
+import { loadConfig } from '../config.ts';
+import { runDoctor } from '../doctor.ts';
+import { StriartError, agentUnknownError } from '../errors.ts';
+import { logger } from '../logger.ts';
+import { readMainSessionStatus, stopMainSession } from '../main-session.ts';
 import {
   applyTicketResolution,
   mergeAgentCommit,
@@ -36,15 +36,16 @@ import {
   runAutonomousTask,
   runTask,
   stopAgent,
-} from '../orchestrator.js';
+} from '../orchestrator.ts';
 import { answerElicitationRequest, answerPermissionRequest } from '../permissions.ts';
 import { answerHumanReview, listHumanReviews } from '../orchestration/human-review.ts';
 import { listOrchestrationState } from '../orchestration/store.ts';
 import { presentReview } from './state.ts';
-import { pruneWorkspace } from '../prune.js';
-import { DEFAULT_PROFILE, resolveAgentProfile, sessionLogPath } from '../session.js';
-import { resetManualMode } from '../state.js';
-import { syncAgentWithMain, syncAllAgents } from '../sync.js';
+import { pruneWorkspace } from '../prune.ts';
+import { sweepIdle } from '../idle/sweep.ts';
+import { DEFAULT_PROFILE, resolveAgentProfile, sessionLogPath } from '../session.ts';
+import { resetManualMode } from '../state.ts';
+import { syncAgentWithMain, syncAllAgents } from '../sync.ts';
 import {
   manualResolutionOutcome,
   mergeOutcome,
@@ -422,6 +423,21 @@ export const HANDLERS: Record<string, Handler> = {
     const result = await cleanClones({ root: ctx.root, agent, all: false, force: false });
     const refused = agent !== null && result.removed.length === 0 && result.skipped.length > 0;
     return { data: result, outcome: refused ? 'refused' : 'ok' };
+  },
+
+  async 'workspace.gc'(ctx, params) {
+    const agent = nullableAgent(params.agent);
+    const report = await sweepIdle({
+      root: ctx.root,
+      agent,
+      close: params.close === true,
+      dryRun: params.dryRun === true,
+    });
+    const failed = report.refused.some((r) => r.code === 'IDLE_CLOSE_FAILED');
+    return {
+      data: report,
+      outcome: failed ? 'failed' : report.refused.length > 0 ? 'refused' : 'ok',
+    };
   },
 
   async 'workspace.prune'(ctx, params) {

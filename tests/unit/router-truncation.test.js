@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { WHOLE_REPO, detectCollisions, predictFiles } from '../../src/router.js';
+import { WHOLE_REPO, detectCollisions, predictFiles } from '../../src/router.ts';
 import { isValidTokensSettings, resolveTokensSettings } from '../../src/tokens/settings.ts';
 
 const CONFIG = { ollamaHost: 'http://localhost:11434', ollamaModel: 'llama3.1:8b' };

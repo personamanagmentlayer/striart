@@ -1,10 +1,12 @@
 import { execa } from 'execa';
 import { createHash } from 'node:crypto';
-import { lstat, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
+import { lstat, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { StriartError } from '../errors.js';
-import { logger } from '../logger.js';
-import { striartDir } from '../paths.js';
+import { StriartError } from '../errors.ts';
+import { logger } from '../logger.ts';
+import { netFetch } from '../net.ts';
+import { striartDir } from '../paths.ts';
+import { mkdirPrivate } from '../private-fs.ts';
 import type { AcpRegistryConfig, AgentProfile } from '../types.js';
 import { isForbiddenRegistryEnvName } from './profile-schema.ts';
 
@@ -170,17 +172,24 @@ export function parseRegistry(document: unknown): AcpRegistryAgent[] {
 /** Télécharge le registre (https, borné en taille et en temps). */
 export async function fetchRegistry(
   settings: AcpRegistryConfig,
-  { fetchImpl = fetch }: { fetchImpl?: typeof fetch } = {},
+  { fetchImpl }: { fetchImpl?: typeof fetch } = {},
 ): Promise<AcpRegistryAgent[]> {
   if (!/^https:\/\//.test(settings.url)) throw registryError('URL_NOT_HTTPS');
   let response: Response;
   try {
-    response = await fetchImpl(settings.url, {
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      redirect: 'error',
-      headers: { accept: 'application/json' },
-    });
+    // Couche réseau (src/net.ts) : proxy/CA d'entreprise, liste blanche, offline ; aucune redirection.
+    response = await netFetch(
+      settings.url,
+      {
+        purpose: 'acp-registry',
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        headers: { accept: 'application/json' },
+      },
+      { transport: fetchImpl },
+    );
   } catch (error) {
+    // Refus de politique réseau (hors ligne, hôte non autorisé, CA…) : déjà typé et actionnable.
+    if (error instanceof StriartError) throw error;
     throw new StriartError(`Registre ACP injoignable : ${(error as Error).message}`, {
       code: 'ACP_REGISTRY_FETCH_FAILED',
       hint: 'striart profiles --import-acp <id>',
@@ -426,7 +435,7 @@ export async function downloadBinaryAgent({
   agent,
   result,
   platform = registryPlatformKey(),
-  fetchImpl = fetch,
+  fetchImpl,
 }: {
   root: string;
   agent: AcpRegistryAgent;
@@ -461,10 +470,20 @@ export async function downloadBinaryAgent({
   );
   let response: Response;
   try {
-    response = await fetchImpl(target.archive, {
-      signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
-    });
+    // Les archives sont souvent servies derrière une redirection (CDN de releases) : suivi
+    // BORNÉ, chaque saut revérifié par la politique réseau (HTTPS, liste blanche, offline) ;
+    // l'empreinte sha256 publiée est de toute façon vérifiée ensuite.
+    response = await netFetch(
+      target.archive,
+      {
+        purpose: 'acp-download',
+        signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+        maxRedirects: 3,
+      },
+      { transport: fetchImpl },
+    );
   } catch (error) {
+    if (error instanceof StriartError) throw error;
     throw new StriartError(
       `Téléchargement de l'agent ACP impossible : ${(error as Error).message}`,
       {
@@ -496,7 +515,7 @@ export async function downloadBinaryAgent({
   }
 
   await rm(dest, { recursive: true, force: true });
-  await mkdir(dest, { recursive: true });
+  await mkdirPrivate(dest);
   const archiveName = (
     path.posix.basename(new URL(target.archive).pathname).replace(/[^A-Za-z0-9._-]/g, '_') ||
     'archive'
@@ -545,7 +564,7 @@ export async function downloadBinaryAgent({
     } else {
       // Binaire nu : l'archive EST l'exécutable désigné par `cmd`.
       const exe = path.join(dest, ...cmd.split('/'));
-      await mkdir(path.dirname(exe), { recursive: true });
+      await mkdirPrivate(path.dirname(exe));
       await writeFile(exe, bytes, { mode: 0o755 });
     }
     await assertSafeTree(dest);
@@ -573,7 +592,7 @@ export async function importAcpAgent({
   root,
   id,
   settings,
-  fetchImpl = fetch,
+  fetchImpl,
   platform = registryPlatformKey(),
 }: {
   root: string;

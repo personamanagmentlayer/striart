@@ -55,6 +55,10 @@ const FR_ERRORS: Record<string, (d: Record<string, unknown>) => string | null> =
     `le verrou d'état (${frStr(d.lockFile)}) n'a pas pu être ${typeof d.operation === 'string' ? `manipulé (${d.operation}, ${frStr(d.cause)})` : `créé (${frStr(d.cause)})`} : vérifie les droits sur .striart/.`,
   PTY_HOST_ALREADY_RUNNING: (d) =>
     `un hôte de terminal tient déjà l'agent "${frStr(d.agent)}" : attache-toi à lui au lieu d'en lancer un second.`,
+  PTY_STATE_PATH_TOO_LONG: (d) =>
+    `impossible de construire un chemin de socket d'attache assez court pour "${frStr(d.agent)}" : le dossier temporaire lui-même ("${frStr(d.tmpDirBytes)}" octets) est trop long. Fixe TMPDIR (POSIX) sur un chemin plus court avant de relancer.`,
+  ACP_STATE_PATH_TOO_LONG: (d) =>
+    `impossible de construire un chemin de socket ACP assez court pour "${frStr(d.agent)}" : le dossier temporaire lui-même ("${frStr(d.tmpDirBytes)}" octets) est trop long. Fixe TMPDIR (POSIX) sur un chemin plus court avant de relancer.`,
   PTY_HOST_SPAWN_FAILED: (d) => {
     const log = d.logFile ? ` (journal : ${frStr(d.logFile)})` : '';
     if (d.reason === 'TIMEOUT')
@@ -484,6 +488,16 @@ export const fr = {
       days: 'période de rétention en jours (défaut : pruneDays de la config, 14)',
       dryRun: 'affiche ce qui serait supprimé, sans rien supprimer',
     },
+    gc: {
+      summary: 'GC : détecte les agents inactifs et ferme proprement leurs sessions oubliées',
+      description:
+        "Détecte les agents sans aucune activité (worktree, commits, sortie, messages) et, selon idle.action, les signale, les avertit puis ferme leur SESSION après un délai de grâce. Le clone et le travail non commité sont toujours conservés ; aucun merge, aucune suppression. Une demande humaine en attente, un ticket ouvert, un plan d'orchestration ou la session du principal protègent un agent.",
+      examples: ['striart gc', 'striart gc --dry-run', 'striart gc agent-a --close'],
+      agent: 'limiter le balayage à cet agent',
+      close:
+        "demande de fermer les sessions inactives (remplace idle.action et l'autorisation ; l'avertissement et la grâce restent obligatoires)",
+      dryRun: 'affiche ce qui serait fait, sans rien écrire ni fermer',
+    },
     promote: {
       summary: 'Promotion staging → main derrière un Test Gate global',
       description:
@@ -612,6 +626,8 @@ export const fr = {
     autonomousKept: (reason: string) => `merge réussi ; clone conservé : ${reason}`,
     alreadyIntegratedWarning: (agent: string) =>
       `${agent} : son commit était déjà dans la branche cible — rien n'a été mergé par ce cycle et le Test Gate n'a pas été rejoué ; clone nettoyé.`,
+    serializationRelaxedWarning: (agent: string, blockers: string) =>
+      `${agent} : tâche vague ou globale, mais elle n'a pas attendu ${blockers} — session terminée en échec, clone conservé sans commit à merger. Une collision sur fichier précis reste bloquante.`,
     autonomousStatus: (status: string, reason: string) => `${status} : ${reason}`,
     cloneKept: (dir: string) => `clone conservé : ${dir}`,
     striartCommitted: (sha: string, n: number, author: string) =>
@@ -649,6 +665,9 @@ export const fr = {
     waitsFor: (after: string) => `attend la fin de ${after}.`,
     queued: (agent: string, taskId: string) => `tâche ${taskId} (${agent}) mise en file d'attente.`,
     predicted: (files: string) => `fichiers prédits : ${files}`,
+    serialized: (reason: string) => `le Router a sérialisé la tâche (tout le dépôt) : ${reason}.`,
+    sharedIgnored: (files: string) =>
+      `tenue de livre écartée de la détection de collisions : ${files}.`,
     importLink: (by: string, file: string) => `${by} importe ${file}`,
     dependsOn: (a: string, b: string) => `${a} dépend de ${b}`,
     semanticLink: (agent: string, links: string) =>
@@ -694,6 +713,8 @@ export const fr = {
       turn: (agent: string, role: string, round: number) =>
         `${agent} : tour de ${role} (tour ${round})`,
       turnDone: (agent: string, role: string, status: string) => `${agent} : ${role} → ${status}`,
+      serializationRelaxed: (name: string, blockers: string) =>
+        `${name} n'attend pas ${blockers} (session en échec, clone sans commit à merger)`,
       waiting: (name: string, reason: string, ref: string) =>
         `${name} attend ${
           (
@@ -708,6 +729,12 @@ export const fr = {
       verdict: (reviewer: string, round: number, verdict: string) =>
         `relecture : ${reviewer} (tour ${round}) → ${verdict}`,
     },
+  },
+
+  completion: {
+    /** Première ligne (commentaire) de chaque script de complétion. */
+    header: (shell: string, install: string) =>
+      `# striart — complétion ${shell}. Installation : ${install}`,
   },
 
   api: {
@@ -801,6 +828,7 @@ export const fr = {
         : status === 'REMOVING'
           ? 'suppression du clone en cours'
           : 'clone illisible par git',
+    stateTicket: 'TICKET',
     attention: 'À traiter',
     missing: (agent: string) => `le clone de ${agent} a disparu du disque.`,
     tickets: (n: number) =>
@@ -817,8 +845,19 @@ export const fr = {
       `${n} ${plural(n, 'relecture humaine attend', 'relectures humaines attendent')} un verdict.`,
     orchestrations: (n: number) =>
       `${n} ${plural(n, 'orchestration en cours', 'orchestrations en cours')} (plan v2 / orchestrate).`,
+    idleSessions: (n: number, names: string) =>
+      `${n} ${plural(n, 'session vivante inactive', 'sessions vivantes inactives')} : ${names} (aucune activité, aucun signal frais).`,
     orphanRuns: (n: number) =>
       `${n} ${plural(n, 'orchestration interrompue', 'orchestrations interrompues')} : son process s’est arrêté avant la fin.`,
+    overlapAgents: (a: string, b: string, files: string, n: number) =>
+      `${a} et ${b} ont tous deux modifié ${files}${n > 0 ? ` (+${n})` : ''} (non prévu par le Router) : conflit probable au merge.`,
+    overlapTarget: (agent: string, files: string, n: number, branch: string) =>
+      `${agent} a modifié ${files}${n > 0 ? ` (+${n})` : ''} que ${branch} a aussi fait avancer : conflit probable à son merge.`,
+    overlapDeferred: (agents: string) =>
+      `chevauchements non observés pour ${agents} (budget d’appels git du cycle atteint : overlap.maxGitCalls).`,
+    overlapUnavailable: (reason: string) => `chevauchements non observables (${reason}).`,
+    overlapScope:
+      'les chevauchements ne couvrent que le travail COMMITÉ des agents (pas les modifications en cours).',
   },
 
   queue: {
@@ -908,6 +947,8 @@ export const fr = {
     renameHazard: (source: string, ours: string, theirs: string) =>
       `${source} supprimé des deux côtés, contenu retrouvé sous deux noms (main : ${ours}, agent : ${theirs}) : probable double renommage, vérifie le doublon.`,
     pushFailed: (error: string) => `push échoué (le merge local reste valide) : ${error}`,
+    deliveredBranch: (ref: string, sha: string) =>
+      `livré sur origin/${ref} (${sha}) : à approuver depuis la forge (PR/MR), la branche cible n'a pas été poussée.`,
     memoryFailed: (error: string) => `mémoire partagée non mise à jour : ${error}`,
     conflict: (agent: string, files: string) =>
       `conflit de merge avec ${agent} sur ${files} : merge annulé.`,
@@ -1042,6 +1083,47 @@ export const fr = {
       }.`,
     nothing: 'aucun clone à nettoyer.',
     total: (size: string) => `total libéré : ${size}.`,
+  },
+
+  gc: {
+    running: 'Balayage des sessions inactives',
+    disabled: "GC d'inactivité désactivé (idle.enabled: false) : rien n'est détecté.",
+    nothing: 'aucun agent enregistré.',
+    stage: {
+      active: 'actif',
+      protected: 'protégé',
+      idle: 'inactif',
+      warned: 'averti',
+      closable: 'fermable',
+    } as Record<string, string>,
+    session: {
+      live: 'session vivante',
+      ended: 'session terminée',
+      none: 'jamais lancé',
+    } as Record<string, string>,
+    agentLine: (agent: string, stage: string, idle: string | null, session: string, host: string) =>
+      `${agent} : ${stage}${idle ? ` depuis ${idle}` : ''} — ${session}${host === 'none' ? '' : ` (${host})`}.`,
+    blockedBy: (codes: string) => `protégé par : ${codes}.`,
+    reasons: (codes: string) => `actif : ${codes}.`,
+    closeBlocked: (codes: string) => `fermeture impossible pour l'instant : ${codes}.`,
+    closeNotBefore: (date: string) => `fermable à partir de ${date} sans nouvelle activité.`,
+    wouldWarn: (agent: string) => `${agent} serait averti.`,
+    wouldClose: (agent: string) => `la session de ${agent} serait fermée.`,
+    warned: (agent: string) =>
+      `${agent} averti : sa session sera fermable après le délai de grâce.`,
+    closed: (agent: string, host: string, code: string) =>
+      code === 'CLOSING'
+        ? `session de ${agent} (${host}) : arrêt demandé, sortie en cours — clone et travail conservés.`
+        : `session de ${agent} (${host}) fermée proprement — clone et travail conservés.`,
+    refused: (agent: string, code: string, detail: string | null) =>
+      `session de ${agent} NON fermée (${code}${detail ? ` : ${detail}` : ''}) — laissée intacte.`,
+    notAuthorized:
+      'fermeture non autorisée : ajoute ce dépôt à idle.closeRoots dans la config utilisateur (striart doctor).',
+    authorizationError: (code: string) =>
+      `config utilisateur illisible (${code}) : aucune fermeture automatique.`,
+    holds: (codes: string) => `balayage prudent, aucune fermeture : ${codes}.`,
+    summary: (idle: number, warned: number, closed: number, dryRun: boolean) =>
+      `${idle} ${idle > 1 ? 'agents inactifs' : 'agent inactif'}, ${warned} ${dryRun ? 'à avertir' : warned > 1 ? 'avertis' : 'averti'}, ${closed} ${dryRun ? 'à fermer' : closed > 1 ? 'sessions fermées' : 'session fermée'}.`,
   },
 
   prune: {
@@ -1181,6 +1263,22 @@ export const fr = {
       `merge de ${agent} non lancé (arrêt demandé) : le prochain watch ne le reprendra pas.`,
     fetchError: (agent: string | null, error: string) =>
       `fetch silencieux échoué${agent ? ` pour ${agent}` : ''} : ${error}`,
+    overlapAgents: (a: string, b: string, files: string, n: number) =>
+      `chevauchement observé : ${a} et ${b} ont tous deux modifié ${files}${n > 0 ? ` (+${n})` : ''} (non prévu par le Router).`,
+    overlapTarget: (agent: string, files: string, n: number, branch: string) =>
+      `chevauchement observé : ${agent} a modifié ${files}${n > 0 ? ` (+${n})` : ''} que ${branch} a aussi fait avancer.`,
+    overlapCatchup: (agent: string, status: string) =>
+      status === 'REBASED'
+        ? `${agent} rebasé par anticipation (chevauchement observé).`
+        : status === 'SKIPPED_SESSION'
+          ? `${agent} : session vivante, rebase anticipé ajourné (clone intouchable).`
+          : `${agent} : rebase anticipé non effectué (${status}) — traité à son merge.`,
+    overlapError: (error: string) => `observation des chevauchements échouée : ${error}`,
+    idleWarned: (agent: string, idle: string, willClose: boolean) =>
+      willClose
+        ? `${agent} inactif depuis ${idle} : sa session sera fermée après le délai de grâce sans nouvelle activité (clone et travail conservés).`
+        : `${agent} inactif depuis ${idle} (fermeture automatique non activée).`,
+    idleError: (error: string) => `balayage des sessions inactives échoué : ${error}`,
   },
 
   daemon: {
@@ -1235,29 +1333,13 @@ export const fr = {
    * est affiché tel quel. Le catalogue anglais, lui, reformule chacun.
    */
   watchUi: {
-    title: '⚡ Striart watch — pilotage interactif',
-    ticketsOpen: (n: number) =>
-      `🎫 ${n} ${plural(n, 'ticket ouvert', 'tickets ouverts')} — tape « /resolve » pour les traiter`,
-    terminalTab: 'Terminal',
     loading: 'Chargement des agents…',
-    noAgents: 'Aucun agent.',
-    terminalHeader: 'Terminal — sorties de /commande et !commande',
     terminalEmpty: 'Aucune commande lancée pour l’instant — tape /status ou !ls pour commencer.',
     idleTool: 'outil hébergé terminé ? — « /relaunch » pour le relancer',
-    noSupervised: 'Aucun agent supervisé actif à suivre.',
-    scrolled: (n: number) =>
-      `↑ historique (${n} ${plural(n, 'ligne', 'lignes')} — Page Down pour redescendre)`,
-    moreSuggestions: (n: number) =>
-      `… +${n} ${plural(n, 'autre', 'autres')}, continue à taper pour filtrer`,
-    help1:
-      '@ mentionne un agent · texte seul → agent sélectionné · /commande lance striart (/clear, /relaunch, /exit) · !commande lance un vrai shell · @ et / proposent une liste (↑/↓, Tab ou Entrée pour choisir).',
-    help2:
-      '↑/↓ rappelle l’historique (champ non vide) ou change l’onglet (champ vide, • = non lu) · Page Up/Down défile · Ctrl+C quitte.',
     refreshFailed: (error: string) => `Rafraîchissement impossible : ${error}`,
     sending: (agent: string) => `Envoi à « ${agent} »`,
     relaunching: (agent: string) => `Relance de « ${agent} »`,
     relaunchNoAgent: 'aucun agent — « /relaunch agent-a » ou sélectionne son onglet',
-    seeTerminalTab: 'voir l’onglet Terminal',
     unknownAgent: (agent: string) => `Agent inconnu : « ${agent} ».`,
     autonomousRefused: (agent: string) =>
       `« ${agent} » est en mode autonome sans session ACP vivante — une session argv est one-shot (plus de process à qui parler), une session ACP n'est adressable que pendant qu'elle tourne dans son hôte persistant (acp.persistentHost). Utilise le dashboard ou striart resolve.`,
@@ -1282,17 +1364,162 @@ export const fr = {
         'doit posséder le terminal réel (mode raw) — incompatible avec ce panneau qui le possède déjà',
       internal: 'commande interne, jamais destinée à un humain (lancée par --open)',
     },
-    unavailableHere: (reason: string) => `⛔ non disponible ici (${reason})`,
-    dashboardSuggestion: '⛔ seul, tourne au premier plan — « --daemon » pour ce champ',
+    unavailableHere: (reason: string) => `non disponible ici (${reason})`,
+    dashboardSuggestion: 'tourne au premier plan — utilise « --daemon » depuis ce champ',
     initSuggestion: '.striart/ est déjà là si tu es dans ce panneau — rarement utile ici',
     clearSuggestion:
-      "Efface l'onglet actif — vide l'historique sur Terminal, envoie la vraie commande d'effacement du shell sur un agent",
+      "Efface le panneau Commandes — dans le détail d'un agent, envoie la vraie commande d'effacement à son shell",
     relaunchSuggestion:
       '[agent] — retape la commande de lancement (utile si l’outil hébergé s’est arrêté)',
     exitSuggestion: 'Quitte ce panneau (comme Ctrl+C)',
-    agentAutonomous: '🤖 autonome — bus indisponible (Phase E non câblée)',
-    agentSupervised: '👤 supervisé actif',
-    agentInactive: '⚪ inactif',
+    // Cockpit `watch --ui` : écran persistant à positions stables (en-tête,
+    // chiffres clés, agents, détail, panneau du bas, saisie, barre de touches).
+    cockpit: {
+      appName: 'striart watch',
+      starting: 'Démarrage du cockpit (chargement des modules, quelques secondes)',
+      watcherOn: 'watcher actif',
+      watcherMerge: 'merge auto',
+      watcherNoMerge: 'merge désactivé',
+      stale: (since: string) => `données obsolètes depuis ${since}`,
+      loading: 'chargement…',
+      kpiAgents: 'agents',
+      kpiCommits: 'commits en attente',
+      kpiConflicts: 'conflits',
+      kpiQueue: 'file',
+      kpiAgentsShort: 'ag.',
+      kpiCommitsShort: 'commits',
+      kpiConflictsShort: 'conflits',
+      kpiQueueShort: 'file',
+      colAgent: 'AGENT',
+      colState: 'ÉTAT',
+      colCommits: 'COMMITS',
+      colLast: 'DERNIER COMMIT',
+      colAge: 'ÂGE',
+      colBranch: 'BRANCHE',
+      colMode: 'MODE',
+      colSession: 'SESSION',
+      groupAttention: 'À traiter',
+      groupRunning: 'En cours',
+      groupIdle: 'Inactifs',
+      sectionAgents: 'Agents',
+      sectionDetail: (agent: string) => `Détail · ${agent}`,
+      sectionJournal: 'Journal',
+      sectionCommands: 'Commandes',
+      sectionOutput: (agent: string) => `Sortie · ${agent}`,
+      emptyTitle: 'Aucun agent pour l’instant.',
+      emptyHint: 'Crée le premier : striart start agent-a',
+      noSelection: 'Aucun agent sélectionné.',
+      detailSession: 'Session',
+      /** Indicateur d'inactivité (GC) : « inactif 3 h », + l'étage quand il demande attention. */
+      idleState: (stage: 'idle' | 'warned' | 'closable', duration: string) =>
+        stage === 'closable'
+          ? `inactif ${duration}, fermable`
+          : stage === 'warned'
+            ? `inactif ${duration}, averti`
+            : `inactif ${duration}`,
+      detailBranch: 'Branche',
+      detailCommits: 'Commits',
+      detailFiles: 'Fichiers',
+      detailTicket: 'Ticket',
+      detailLoading: 'lecture du clone…',
+      detailUnreadable: (error: string) => `clone illisible : ${error}`,
+      pendingNone: 'aucun commit en attente de merge',
+      pendingCount: (n: number) =>
+        `${n} ${plural(n, 'commit en attente', 'commits en attente')} de merge`,
+      filesNone: 'aucun fichier modifié',
+      filesMore: (n: number) => `+${n} ${plural(n, 'autre', 'autres')}`,
+      uncommitted: (n: number) =>
+        `${n} ${plural(n, 'modification non commitée', 'modifications non commitées')}`,
+      ticketLine: (id: string, reason: string) => `${id} · ${reason}`,
+      journalEmpty: 'Aucun événement. Commits, merges et rebases du watcher apparaîtront ici.',
+      outputEmpty: 'Pas de sortie : cet agent n’a pas de terminal hébergé (mode autonome).',
+      outputDisconnected:
+        'terminal hébergé injoignable pour l’instant — nouvelle tentative en cours',
+      terminalSmall: (cols: number, rows: number) =>
+        `Terminal trop petit (${cols}×${rows}) : agrandis-le pour voir tout l’écran (80×24 conseillé).`,
+      promptIdle: 'Appuie sur / pour une commande, @ pour écrire à un agent, ? pour l’aide.',
+      modeCommand: 'commande',
+      modeMessage: 'message',
+      modeShell: 'shell',
+      merging: (agent: string) => `Merge de « ${agent} »`,
+      syncing: (agent: string) => `Sync de « ${agent} »`,
+      done: (label: string, elapsed: string) => `${label} (${elapsed})`,
+      seeCommands: 'détails dans le panneau Commandes (Tab)',
+      confirmMergeTitle: (agent: string, target: string) =>
+        `Fusionner « ${agent} » dans ${target} ?`,
+      confirmMergePending: (n: number) =>
+        `${n} ${plural(n, 'commit en attente sera intégré', 'commits en attente seront intégrés')}.`,
+      confirmMergeNone: 'Aucun commit en attente : le merge ne changera rien.',
+      confirmMergeGate:
+        'Le Test Gate s’exécute avant tout commit : en cas d’échec, le merge est annulé et un ticket est créé.',
+      confirmMergeTicket:
+        'Un ticket de conflit est ouvert pour cet agent (« striart resolve ») : ce merge peut échouer de nouveau.',
+      plainConfirm: 'Réponds « y » pour confirmer ; toute autre réponse annule.',
+      confirmMergeLive:
+        'Une session autonome est en cours sur ce clone : le merge sera refusé tant qu’elle tourne.',
+      cancelled: 'Annulé.',
+      plainKeys:
+        '  m <agent> merge (confirmation y), s <agent> sync, /commande, !shell, @agent texte, ? aide, q quitter',
+      keys: {
+        select: 'sélectionner',
+        details: 'détails',
+        merge: 'merge',
+        sync: 'sync',
+        command: 'commande',
+        message: 'message @agent',
+        shell: 'shell',
+        pane: 'journal/commandes',
+        help: 'aide',
+        quit: 'quitter',
+        send: 'envoyer',
+        cancel: 'annuler',
+        complete: 'compléter',
+        history: 'suggestions/historique',
+        confirm: 'confirmer',
+        back: 'retour',
+        scroll: 'défiler',
+        close: 'fermer',
+      },
+      helpTitle: 'Aide — raccourcis',
+      helpSections: [
+        {
+          title: 'Navigation',
+          rows: [
+            ['↑ ↓  j k', 'sélectionner un agent'],
+            ['Entrée', 'détails et sortie de l’agent (Échap pour revenir)'],
+            ['Tab', 'basculer le panneau du bas (journal, commandes)'],
+            ['PgUp PgDn', 'remonter / redescendre dans le panneau du bas'],
+          ],
+        },
+        {
+          title: 'Actions sur l’agent sélectionné',
+          rows: [
+            ['m', 'merge dans la branche cible, sous Test Gate (confirmation)'],
+            ['s', 'sync : rebase de l’agent sur la branche cible'],
+          ],
+        },
+        {
+          title: 'Saisie (le focus passe au champ ; Échap l’abandonne)',
+          rows: [
+            ['/', 'commande striart (/status, /resolve, /clear, /relaunch, /exit)'],
+            ['@', 'message à un agent (@agent texte) ; texte seul → agent sélectionné'],
+            ['!', 'commande shell réelle'],
+            ['Tab', 'compléter la suggestion'],
+          ],
+        },
+        {
+          title: 'Général',
+          rows: [
+            ['?', 'cette aide'],
+            ['Échap', 'revenir en arrière (confirmation, aide, détails, saisie)'],
+            ['q  Ctrl+C', 'quitter (le watcher s’arrête)'],
+          ],
+        },
+      ],
+    },
+    agentAutonomous: 'autonome — message transmis à sa session ACP vivante',
+    agentSupervised: 'supervisé actif',
+    agentInactive: 'inactif',
   },
 
   /** Messages du proxy ACP `striart acp` (lot I10), affichés DANS l'éditeur. */

@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { readJson, writeJsonAtomic } from '../../src/json-file.js';
-import { StriartError } from '../../src/errors.js';
+import { readJson, writeJsonAtomic } from '../../src/json-file.ts';
+import { StriartError } from '../../src/errors.ts';
 
 describe('json-file — le socle des fichiers d’état (.striart/*.json)', () => {
   let dir;

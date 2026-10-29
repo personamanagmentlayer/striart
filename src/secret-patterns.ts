@@ -1,4 +1,4 @@
-import { StriartError } from './errors.js';
+import { StriartError } from './errors.ts';
 
 /**
  * Évaluation JS des motifs `secretPatterns` (syntaxe gitignore) sur des

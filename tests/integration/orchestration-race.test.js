@@ -9,9 +9,9 @@ import {
   mockRouter,
   writeStriartConfig,
 } from '../helpers/orchestration.js';
-import { initStriart } from '../../src/init.js';
-import { readRegistry } from '../../src/clone.js';
-import { applyPlan } from '../../src/orchestrator.js';
+import { initStriart } from '../../src/init.ts';
+import { readRegistry } from '../../src/clone.ts';
+import { applyPlan } from '../../src/orchestrator.ts';
 
 // runAgentSession réel, sauf pour l'agent désigné par `sessionHook.failFor` (lève).
 const sessionHook = vi.hoisted(() => ({ failFor: null }));

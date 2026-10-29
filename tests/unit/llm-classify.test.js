@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { llmGenerate, sanitizeErrorText } from '../../src/llm.js';
+import { llmGenerate, sanitizeErrorText } from '../../src/llm.ts';
 import { resetCircuitBreakers } from '../../src/llm-resilience.ts';
 
 // Les attentes de backoff sont enregistrées, jamais subies.

@@ -16,9 +16,9 @@
  * laisser croire à une protection absente.
  */
 import type { BudgetBreach, BudgetScope, StriartConfig, UsageRole } from '../types.js';
-import { StriartError } from '../errors.js';
-import { emitStriartEvent } from '../events.js';
-import { logger } from '../logger.js';
+import { StriartError } from '../errors.ts';
+import { emitStriartEvent } from '../events.ts';
+import { logger } from '../logger.ts';
 import { type CurrentTotals, currentTotals } from './ledger.ts';
 import { costOf, lookupPrice } from './pricing.ts';
 import type { BudgetLimits, TokensSettings } from './settings.ts';
@@ -215,7 +215,8 @@ export async function emitFindings(findings: BudgetFinding[], ctx: GuardContext)
       {
         scope: f.scope,
         metric: f.metric,
-        level: f.level,
+        // `level` est réservé à pino (niveau du log) : ne jamais le réutiliser.
+        severity: f.level,
         used: f.used,
         limit: f.limit,
         role: ctx.role,

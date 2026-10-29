@@ -13,8 +13,8 @@ import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import { execa } from 'execa';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { createAgent, readRegistry } from '../../src/clone.js';
+import { initStriart } from '../../src/init.ts';
+import { createAgent, readRegistry } from '../../src/clone.ts';
 
 const git = (cwd, ...args) => execa('git', ['-C', cwd, ...args]).then((r) => r.stdout.trim());
 

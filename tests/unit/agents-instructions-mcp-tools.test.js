@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { buildAgentInstructions } from '../../src/agents/instructions.ts';
-import { DEFAULT_CONFIG } from '../../src/config.js';
+import { DEFAULT_CONFIG } from '../../src/config.ts';
 import { TOOLS } from '../../src/mcp/tools.ts';
 
 /**

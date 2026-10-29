@@ -10,7 +10,7 @@ import {
   resolveInstructionsChannel,
   wrapPrompt,
 } from '../../src/agents/instructions.ts';
-import { DEFAULT_CONFIG } from '../../src/config.js';
+import { DEFAULT_CONFIG } from '../../src/config.ts';
 
 // Racine inexistante : le registre est absent (branche générique), rien n'est écrit.
 const ROOT = path.join(path.parse(process.cwd()).root, 'striart-nonexistent-root');

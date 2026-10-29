@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { PRESETS, materializePreset } from '../../src/agents/catalog.ts';
-import { DEFAULT_CONFIG } from '../../src/config.js';
+import { DEFAULT_CONFIG } from '../../src/config.ts';
 import {
   PROMPT_PLACEHOLDER,
   buildAgentArgv,
@@ -11,7 +11,7 @@ import {
   resolveAgentProfile,
   runAgentSession,
   sessionLogPath,
-} from '../../src/session.js';
+} from '../../src/session.ts';
 
 describe('session — résolution de profil', () => {
   it('résout un profil déclaré', () => {

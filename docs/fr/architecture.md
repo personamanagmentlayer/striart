@@ -11,7 +11,9 @@ cassés. Striart résout ça avec trois piliers :
 1. **Isolation physique** — chaque agent travaille dans un vrai clone Git
    indépendant, sans remote (`.striart/agents/<nom>/`).
 2. **Router préventif** — avant de lancer un agent, un LLM prédit les fichiers
-   touchés et met en file d'attente les tâches en collision.
+   touchés et met en file d'attente les tâches en collision. C'est un **filtre
+   grossier, pas une garantie** : voir
+   [ce que valent le Router et la fusion](#ce-que-valent-le-router-et-la-fusion-sémantique--mesures-du-2026-10-26).
 3. **Fusion sémantique + Test Gate** — les commits des agents sont mergés
    automatiquement ; en cas de conflit, un LLM fusionne le code ; rien n'est
    commité tant que `npm test` (ou votre commande) ne passe pas.
@@ -21,7 +23,7 @@ L'humain voit tout, peut interrompre, corriger, valider.
 
 ## Pourquoi des clones — et pas des worktrees ?
 
-Isoler les fichiers, c'est 10 % du problème. Un worktree (ou un clone fait à
+Isoler les fichiers n'est qu'une partie du problème. Un worktree (ou un clone fait à
 la main) évite que deux agents écrivent au même endroit *en même temps* — tout
 le reste reste à ta charge, à chaque tâche : éviter les collisions *avant*
 qu'elles n'arrivent, ramener N branches dans la branche cible, arbitrer les
@@ -44,7 +46,7 @@ le `.git/` principal : parfait pour un humain discipliné, dangereux pour un
 agent non supervisé qui lance ses propres commandes git. Striart donne à
 chaque agent un vrai clone — et en neutralise le coût classique : clone par
 chemin local, git **hardlinke nativement les objets** (immuables, donc sûrs
-même si le principal fait un `gc`), création quasi instantanée, l'historique
+même si le principal fait un `gc`), aucune recopie des objets (coût non mesuré ici), l'historique
 ne coûte qu'une fois. L'isolation porte sur tout ce qui est **mutable** :
 worktree en vraie copie, refs et index propres.
 
@@ -103,6 +105,7 @@ mon-projet/
 │   ├── state.lock            # verrou d'état court (+ state.lock.break, transitoires)
 │   ├── merge-state-changed.json  # marqueur « merge ouvert qui n'est pas à Striart » (transitoire)
 │   ├── main-session.json     # session déclarée sur le repo principal (--on-main, lock --start)
+│   ├── idle/                 # GC d'inactivité : state.json (avertissements), beats/<agent>.beat (battement de sortie d'une session autonome), close/<agent>.json (demande d'arrêt propre)
 │   ├── removing/<agent>.json # suppression de clone entamée, à terminer (réconciliation)
 │   ├── watch.pid / dashboard.pid  # daemons en arrière-plan
 │   ├── <nom>.stop / <nom>.pid.lock  # demande d'arrêt d'un daemon / verrou du PID file (transitoires)
@@ -122,6 +125,11 @@ mon-projet/
 │   └── logs/                 # watch.log, dashboard.log, watch-ui.log, pty-<agent>.log, acp-host-<agent>.log, session-*.log
 └── striart.config.mjs
 ```
+
+Tout `.striart/`, hors `agents/` et `removing/` (arbres de travail, jamais
+parcourus), est **réservé à l'utilisateur** : dossiers `0700`, fichiers `0600`,
+ou ACL protégée sous Windows (`privateStateDir`, voir
+[Configuration](configuration.md#données-locales--privatestatedir)).
 
 ## La chaîne sérialisée
 
@@ -166,7 +174,8 @@ Commit détecté sur l'agent A (chokidar sur .git/refs/heads/)
 │  ÉTAPE 3 : contrôle avant commit (verrou toujours tenu ? HEAD,      │
 │    MERGE_HEAD et index inchangés ?) — sinon LOCK_LOST /             │
 │    MERGE_STATE_CHANGED, rien n'est commité — puis commit de merge   │
-│    (+ push origin si autoPush)                                      │
+│    (hooks de la cible, sous commitTimeoutMs, jamais contournés) ;   │
+│    verrou libéré → livraison vers origin si autoPush                │
 │                                                                     │
 │  ÉTAPE 4 : syncAllAgents (sauf A)                                   │
 │    chaque agent B, C... est rebasé immédiatement sur le nouveau     │
@@ -194,6 +203,93 @@ Le Merger envoie les trois au LLM avec un prompt adapté au langage du
 fichier, valide la sortie, puis la soumet au Test Gate. La sortie d'un LLM
 est du **contenu non fiable** : elle n'entre jamais sans que le gate soit
 vert (voir [SECURITY.md](../../SECURITY.md)).
+
+### Ce que valent le Router et la fusion sémantique — mesures du 2026-10-26
+
+Le Router est un **filtre grossier, pas une garantie** (décision n°4 de
+l'architecture) : il réduit le bruit ; la fusion sémantique et surtout le Test
+Gate font le reste. Deux bancs réels, opt-in et hors `npm test`, chiffrent cette
+position : `npm run bench:router` et `npm run bench:merger`. Chaque cas fait un
+**vrai appel à un fournisseur cloud** — les clés `ANTHROPIC_API_KEY`,
+`OPENAI_API_KEY` et `GROQ_API_KEY` sont lues dans le `.env` de la racine (parsé,
+jamais exécuté ; seules ces trois clés sont retenues, jamais affichées). Modèles
+par défaut : `claude-haiku-5-5`, `gpt-5.4-mini` et `openai/gpt-oss-120b` (Groq).
+
+- **Banc Router** (protocole reproductible, sans jugement humain). *Corpus*
+  versionné (`scripts/data/router-bench-tasks.json`) : **94 commits réels** de
+  l'historique de ce dépôt, répartis une fois pour toutes par l'empreinte de leur
+  SHA en un jeu de **réglage** (60) et un jeu de **test** (34) tenu à l'écart —
+  on règle sur le premier, on rapporte sur le second. La *tâche* n'est pas le
+  message du commit (écrit après le travail et optimiste, il citait souvent les
+  fichiers) mais une **demande naturelle et vague**, générée une fois par un LLM à
+  partir du diff dont les chemins sont masqués, avec interdiction de citer chemin,
+  fichier ou symbole (une validation déterministe rejette et régénère). L'*arbre*
+  soumis est le `git ls-tree` du commit parent, la *vérité* l'ensemble des fichiers
+  que ce commit a modifiés (verrous écartés). Il mesure précision et rappel (code
+  et total), couverture complète, **détection des chevauchements** sur toutes les
+  paires de tâches (vus / manqués ; alertes inutiles), jetons et latence, avec des
+  **intervalles de confiance à 95 % par bootstrap**. Les requêtes LLM sont mises en
+  cache sur disque (hors dépôt) : changer une variante purement déterministe ne
+  repaie rien. Variantes : `legacy`, `balanced`, `recall` et des ablations
+  (`scripts/data/router-bench-variants.json`).
+- **Banc Merger** : 8 cas d'or, conflits textuels (BASE / OURS / THEIRS) dont les
+  deux côtés restent **compatibles en intention**, chacun avec une **vérification
+  exécutable** — le fichier fusionné est importé et son comportement contrôlé :
+  une fusion « qui a l'air juste » mais fausse échoue. Plusieurs essais par cas
+  (`--repeat`).
+- **Banc du cycle de merge** (`npm run bench:merge`, sans réseau) : voir
+  [Observabilité](#observabilité--durées-par-phase-contention-du-verrou-performance).
+
+**Router — relevé du 2026-10-26** (jeu de test, 34 tâches, `claude-haiku-5-5` ;
+IC 95 % entre crochets ; relevé du mainteneur, **non rejoué par la passe de
+documentation et antérieur aux dernières retouches des réglages**). Le tableau
+complet, avec `gpt-5.4-mini`, est dans
+[Configuration](configuration.md#tokensrouter--la-fiabilité-du-router).
+
+| Préréglage | Rappel (fichiers de code) | Chevauchements de code détectés | Alertes inutiles | Tâches sérialisées |
+|---|---|---|---|---|
+| `legacy` (comportement d'avant le lot) | 30 % [21–39] | 39 % [23–55] | 8 % [2–18] | 0 % |
+| `balanced` (défaut) | 51 % [43–60] | 78 % [62–90] | 33 % [14–56] | 9 % |
+| `recall` | 72 % [60–84] | 100 % [97–100] | 64 % [46–83] | 29 % |
+
+Merger — 8 cas × 3 essais, relevé du 2026-10-26 (à citer **tel quel**, jamais comme
+une promesse) : `claude-haiku-5-5` **24/24** fusions vérifiées, `gpt-5.4-mini`
+**23/24**. Aucun chiffre n'est consigné pour `openai/gpt-oss-120b`.
+L'ancien relevé du Router (message de commit comme tâche, 24 commits :
+`claude-haiku-5-5` précision ~66 %, rappel ~48 %, chevauchements détectés ~58 %)
+relevait d'un protocole abandonné, plus flatteur — un plafond de rappel — ; il est
+remplacé par le relevé ci-dessus.
+
+Lecture honnête :
+
+- Avec le préréglage par défaut, **environ la moitié** des fichiers de code
+  réellement touchés n'est pas prédite et environ **un chevauchement de code sur
+  cinq** n'est pas vu : le Router ne prévient pas tous les conflits, et rien dans
+  Striart ne le présente comme tel. Le préréglage `recall` voit presque tout,
+  mais en sérialisant une tâche sur trois à une sur deux (une tâche sérialisée
+  entre en collision avec tous les agents actifs, donc « détecte » tout par
+  construction) — c'est un compromis, pas un gain.
+- Environ **26 % des fichiers touchés sont invisibles à tout signal** (ni lexical,
+  ni structurel : couplage sémantique sans trace dans les noms, les imports ni
+  l'historique) d'après la mesure du mainteneur citée en tête de `src/overlap.ts`
+  (non rejouée par la passe de documentation) : aucune prédiction du Router, avec
+  ou sans expansion, ne les atteint. C'est pourquoi existe le filet à l'exécution
+  ([`overlap`](configuration.md#overlap--le-filet-de-chevauchement-à-lexécution)),
+  qui lit les fichiers *réellement* modifiés au lieu de les prédire.
+- Le cas « renommage contre nouvel appelant » : git fusionne **sans conflit** un
+  résultat **faux** (l'appel ajouté par l'agent utilise l'ancien nom). Le Merger
+  n'est même pas invoqué — **seul le Test Gate le rattrape**, et seulement si la
+  suite exerce ce code. La sécurité de Striart repose sur la fusion et le Test
+  Gate, jamais sur le Router ; la qualité de `testCommand` est portante.
+- Limites : 8 cas synthétiques pour le Merger ; 94 commits d'un seul dépôt
+  (JavaScript et TypeScript) pour le Router, des tâches générées par un seul
+  modèle (biais possible), des modèles et une date précis, des sorties non
+  déterministes, des intervalles larges sur 34 tâches. Les bancs Router envoient
+  des données du dépôt courant au fournisseur : l'arbre des fichiers, la carte des
+  candidats (symboles et première ligne de documentation) et les demandes ; la
+  **génération du corpus** (`scripts/bench-router-corpus.ts`) envoie les **diffs**
+  des commits, chemins masqués (voir [SECURITY.md](../../SECURITY.md)). Ne pas les
+  lancer sur un dépôt confidentiel.
 
 ## Les 6 statuts de la synchronisation
 
@@ -293,10 +389,52 @@ section critique commencée n'est jamais interrompue.
 
 **Dette connue (roadmap, chantier « performance et fiabilité sous charge »)** :
 le verrou principal est encore tenu pendant le Test Gate et les appels LLM
-d'un merge ; le clone d'intégration (décision D1 : merge, fusion LLM et Test
+d'un merge (hors verrou depuis : le push vers `origin`, voir la section
+suivante ; le commit de merge reste sous verrou mais borné par
+`commitTimeoutMs`) ; le clone d'intégration (décision D1 : merge, fusion LLM et Test
 Gate hors verrou, le verrou ne couvrant que le fast-forward final) est
 **décidé mais pas livré** — voir la décision n°3 du `CLAUDE.md` du dossier `.claude` et la
 section « Performance et fiabilité sous charge continue » de la roadmap.
+
+## Livraison vers `origin` : hors du verrou
+
+Le push d'un merge vert n'est plus fait dans la section critique : un hook
+`pre-push` d'entreprise, une authentification ou un réseau lent gelaient tout
+l'orchestrateur pendant la durée du push. Les effets d'une opération — événements
+(webhooks), mise à jour de la Memory Layer, **livraison** — sont désormais
+*différés* : ils partent **après la libération du verrou principal**
+(`runWithDeferredEffects`, `src/orchestrator.js`). La livraison
+(`src/delivery.ts`) pousse le **SHA exact** qui a passé le Test Gate
+(`<sha>:refs/heads/<branche>`, jamais `HEAD`, jamais `--force`), avec :
+
+- un **délai dur** (`pushTimeoutMs`) et la mort de l'**arbre** de process au
+  délai (le hook est un petit-fils de git) — ce que simple-git ne sait pas faire ;
+- aucune **invite** possible (`GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`,
+  stdin fermé, aucune variable `GIT_*` héritée) ;
+- la **sortie** du hook conservée, bornée à sa fin (16 Kio), les jetons d'URL de
+  remote caviardés ;
+- une **chaîne par dépôt** dans le process (deux merges successifs poussent dans
+  l'ordre) et, entre process, la reconnaissance d'un SHA déjà publié par un
+  push concurrent (`alreadyDelivered`) ;
+- une garde : le SHA doit encore être dans la branche locale au moment du push
+  (`PUSH_SUPERSEDED` sinon — un rollback est passé), et `rollback` attend les
+  livraisons en vol de son process avant de décider si le merge est « publié ».
+
+Le **commit de merge** reste sous le verrou (il conclut un merge ouvert dans le
+principal) mais est lui aussi borné : `commitTimeoutMs`, arbre tué, hooks de la
+cible exécutés et **jamais contournés** (`COMMIT_HOOK_REJECTED`, ticket qui garde
+la sortie du hook ; `MERGE_COMMIT_FAILED` pour une identité ou une signature
+absente). La promotion avance `mainBranch` par `update-ref` en
+**compare-and-swap** sur l'ancien SHA — et non par un `git push .`, qui
+exécuterait les hooks `pre-push` de la cible *sous* le verrou —, puis livre hors
+verrou. Avec `delivery: 'branch'`, le SHA part vers `striart/<agent>/<tâche>`
+(`striart/promote/<date>-<sha8>` à la promotion) et la branche cible distante
+n'avance jamais du fait de Striart : la forge reste l'autorité d'approbation.
+**Pourquoi hors verrou** : même borné, un push sous le verrou le tiendrait jusqu'à
+`pushTimeoutMs` (2 min par défaut) et gèlerait toutes les autres opérations.
+**Dette assumée** : un `rollback` lancé par un *autre* process pendant un push en
+vol n'est pas empêché (il est rendu bruyant, pas interdit).
+Voir [Configuration](configuration.md#livraison-vers-origin--autopush-delivery-délais).
 
 ## Fichiers d'état : écriture atomique et verrou d'état
 
@@ -371,6 +509,101 @@ Surfaces d'affichage uniquement (aucun démarrage possible depuis elles) :
 « 🔓 Libérer » si occupé), et `striart_status` côté MCP (champ `mainSession`,
 `alive` calculé côté serveur).
 
+## GC d'inactivité : fermer une session oubliée, jamais un clone
+
+Un agent oublié garde un process, un hôte de terminal ou de session ACP et un
+clone vivants indéfiniment. `src/idle/` les détecte et, sur politique et
+autorisation de l'utilisateur, ferme **la session** — la seule exception à
+« un clone dont la session vit est intouchable », strictement bornée :
+
+- **Aucune donnée n'est supprimée ni intégrée.** Pas de suppression de clone, de
+  retrait du registre, de rebase ni de merge ; le travail non commité reste où il
+  est. La fermeture est celle de la *session* (hôte ACP, hôte de pty, ou process
+  d'une session autonome) par son protocole d'arrêt propre, jamais un kill à
+  l'aveugle : un process non identifiable (PID recyclé, autre utilisateur,
+  superviseur muet) n'est **pas** tué (`IDLE_CLOSE_UNVERIFIED`,
+  `IDLE_CLOSE_NOT_ACKNOWLEDGED`).
+- **Fail closed partout.** `classify.ts` est pur (l'horloge est un paramètre) : un
+  signal illisible, une horloge incohérente ou aucun signal rendent l'agent
+  *actif* ; un garde-fou (demande humaine, ticket, orchestration, merge, session
+  du principal, suppression, exclusion) le rend *protégé* ; une source de
+  contexte illisible interdit toute fermeture du balayage.
+- **Gradation obligatoire** : détecter → avertir → grâce → fermer, l'avertissement
+  devant dater d'*après* la dernière activité ; une **revérification fraîche**
+  (registre, signaux, gardes, sans indice) précède l'arrêt.
+- **L'autorisation vient de l'utilisateur** (`idle.closeRoots`, config utilisateur
+  hors dépôt), la politique du dépôt (`idle.action`) ; `--close` est une demande
+  humaine qui remplace les deux mais pas la grâce ni les gardes.
+- **Jamais sous le verrou principal** : le balayage lit, ferme une session et
+  n'écrit son état que sous le verrou d'état (`idle/state.json`, section courte).
+  Dans `striart watch` il tourne hors de la chaîne de merge, un seul à la fois, et
+  une reprise de veille neutralise le tour.
+- **Surfaces** : `striart gc`, `striart status` (balayage `--dry-run`), le
+  Control Protocol (`workspace.gc` et le champ `idle` de l'état), le dashboard
+  (pastille, carte, bouton de prévisualisation), `watch --ui` / `--plain`. Le plan
+  agent (MCP) n'expose aucun outil de GC.
+
+Le battement de sortie d'une session autonome en argv (`heartbeat.ts`) est un
+fichier vide dont le *mtime* est le signal — aucune donnée de l'agent n'y transite.
+Pour un terminal, l'hôte de pty natif publie `host.output` (`{pid, lastOutputAt}`,
+écriture atomique au plus une fois par seconde, liée à son PID, retirée à sa
+sortie) ; son absence rend la sortie inobservable (voir
+[`striart gc`](commandes.md#striart-gc-agent---close---dry-run)).
+
+## Observabilité : durées par phase, contention du verrou, performance
+
+Lot L8 — **mesurer avant de décider** : le gain visé du lot L9 (Test Gate hors
+verrou, **non livré**) doit être prouvé par un avant/après, pas affirmé.
+
+- **`timings`** (`src/timings.ts`) : les résultats de `merge`, `resolve --apply`,
+  `promote` et `run` portent, de façon additive dans `--json`, les durées en
+  millisecondes par phase — `route`, `lockWait`, `sync`, `merge`, `semantic`,
+  `gate`, `commit`, `delivery`, `memory`, `lockHeld` (la section critique, le
+  chiffre que L9 doit faire chuter) et `total`. Horloge monotone ; des nombres,
+  rien d'autre.
+- **`lock:contention`** : événement du bus d'observabilité, publié quand un
+  appelant a dû *attendre* le verrou principal — verbe de l'opération en attente,
+  durée d'attente, opération détentrice et son âge, longueur de la file. Jamais un
+  nom d'agent ni de ticket (il peut dériver d'un prompt). Il n'est ni diffusé aux
+  webhooks, ni relayé par le Control Protocol ou le flux MCP : mesure seule.
+- **`striart doctor` — contrôle `performance`** : latence réelle du verrou d'état
+  (médiane de 5 écritures atomiques sous verrou ; budget 100 ms, alerte au-delà
+  d'une seconde), durée d'un `git status` du dépôt principal (signalé au-delà de
+  2 s), taille de `.striart/` (parcours borné dans le temps), nombre d'agents, âge
+  du plus vieux verrou tenu (signalé au-delà de 5 min). Chaque mesure est bornée ;
+  un constat de performance est un *avertissement*, jamais une erreur.
+- **`npm run bench:merge`** (`scripts/bench-merge.ts`, sans réseau) : rejoue N
+  agents réels qui mergent en parallèle derrière le verrou, avec un Test Gate qui
+  dort `--gate-ms`, et rend, par phase, p50 / p95 / p99 / max (dont `lockHeld` et
+  `lockWait`), le débit et la part de la durée murale pendant laquelle le verrou
+  est tenu, avec la médiane de plusieurs exécutions (`--repeat`). Tant que le gate tourne sous le
+  verrou, `lockHeld` croît avec sa durée et le débit est plafonné à 1 / durée du
+  gate : le banc rend ces chiffres de façon reproductible pour qu'on rejoue le
+  même scénario après L9.
+- **Codes stables d'échec** : un échec de fusion sémantique porte `errorCode`
+  (contrat) à côté du texte français du noyau (`error`, conservé pour la
+  compatibilité) et des `errorDetails` publics (identifiants seulement) ; un
+  échec d'appel LLM porte `details.causeCode` (`TRANSPORT`, `TIMEOUT`,
+  `HTTP_4XX`, `HTTP_5XX`, `TRUNCATED`, `FILTERED`, `REFUSED`, `INVALID_JSON`,
+  `INVALID_RESPONSE`), jamais le message d'un fournisseur.
+
+## Tailles de clones : un cache d'affichage, jamais une garde
+
+La taille additionnelle d'un clone est de l'**affichage** (`sizeBytes` de
+`status`, du dashboard, du Control Protocol). Elle est servie d'un cache
+(`clone-size-cache.ts`) tant que l'entrée a moins de 5 minutes **et** que rien n'a
+bougé (signature : activité du worktree, références, index, dossier des packs), ou
+moins de 10 secondes quoi qu'il arrive — au plus un parcours par clone et par
+10 s, même si son disque bouge en continu. L'instant de la mesure est exposé
+(`sizesComputedAt`, ISO 8601) : l'âge d'une taille n'est jamais caché. Le cache
+est en mémoire d'un process ; une mesure incomplète n'y entre pas.
+
+Ce qui est une **décision de sécurité** (`sessionActive`, gardes de `clean` et de
+`reuse`) lit autre chose : `cloneWorkActivityMs` (`clone-disk.ts`), exact, jamais
+mis en cache, fail closed — un parcours du worktree où chaque entrée est lue (un
+`mtime` de dossier ne suffit pas : une écriture en place ne le change pas), sans
+jamais suivre un lien symbolique ni une jonction, et sans parcourir `.git`. Un
+clone sans activité lisible n'est pas jugé inactif.
 ## Pourquoi la sérialisation rend le stash auto sûr
 
 La vérification de disjonction (fichiers en cours de B vs fichiers touchés
@@ -379,6 +612,69 @@ entre le check et le `stash pop` (problème TOCTOU). Comme les merges et les
 syncs vivent dans la même chaîne, la branche cible est **gelée** pendant
 toute la séquence check → stash → rebase → pop : ce qui a été mesuré reste
 vrai jusqu'au bout.
+
+## Appels sortants : la couche réseau
+
+**Tout appel sortant passe par `src/net.ts`** (`netFetch`) : LLM (Ollama,
+OpenAI-compatible, Anthropic, Azure), webhooks de notification, sonde Ollama,
+registre ACP et ses archives. Invariant **vérifié par un test**
+(`net-single-entry`) : aucun autre module de `src/` n'appelle `fetch()` ni
+`http(s).request()`. Pour chaque appel non local, la couche applique, dans
+l'ordre : URL `http(s)` valide, mode hors ligne, liste blanche d'hôtes, **HTTPS
+exigé** (clé d'API ou non), vérification TLS jamais coupée, **aucune redirection
+suivie** (suivi borné et revérifié saut par saut pour les seules archives du
+registre ACP) — puis construit, **par requête** (jamais un effet global sur le
+process), un dispatcher `undici` (`ProxyAgent`) pour le proxy d'entreprise ; CA
+d'entreprise (`tls.setDefaultCACertificates`, **ajoutée** aux autorités par
+défaut) et version TLS minimale restent appliquées au process, de façon
+idempotente et « tout ou rien ». Décision du 2026-10-28 (incident découvert en
+CI) : le mécanisme natif de Node (`http.setGlobalProxyFromEnv` /
+`NODE_USE_ENV_PROXY`) tunnelle TOUTE requête en CONNECT, y compris les cibles
+`http://` — cassé pour un forward-proxy standard sur Node 22/24/25 à cette date,
+donc jamais utilisé. Un proxy d'un schéma autre que `http:`/`https:` (SOCKS
+compris) **refuse** l'appel (`NET_PROXY_UNSUPPORTED`) plutôt que de le laisser
+sortir en direct.
+
+La politique est une **décision de l'utilisateur** : environnement du shell et
+**config utilisateur** (`network`, `src/user-config.ts`) — jamais la config du
+dépôt, jamais le `.env` (le filtre refuse ces variables). Les deux sources se
+cumulent du côté restrictif. La boucle locale est exemptée et ne lit pas la
+config utilisateur, pour qu'un Ollama local ne dépende de rien. `session-env.ts`
+prolonge la politique aux sessions d'agents : `network.caFile` devient
+`NODE_EXTRA_CA_CERTS` de la session (le shell gagne), `STRIART_PROXY_AUTH` n'est
+jamais transmise. `striart doctor` expose la politique effective (`inspectNetwork`).
+**Limites assumées** : pas de contrôle de l'adresse IP résolue (DNS rebinding sur un
+hôte autorisé), pas de `ALL_PROXY` ni de SOCKS, pas de test de bout en bout avec un
+vrai proxy HTTPS. Détail et options : [Configuration](configuration.md#réseau-dentreprise-network).
+
+## Confidentialité locale, environnement du gate, caviardage
+
+Quelques modules posent la frontière entre les données de Striart et le reste de la
+machine :
+
+- `private-fs.ts` / `state-protection.ts` : `.striart/` réservé à l'utilisateur
+  (0700/0600 sous POSIX ; DACL protégée posée par `icacls` et vérifiée en SDDL
+  sous Windows), migration idempotente de l'existant, échec = `STATE_UNPROTECTED`
+  (fail closed), relâchement explicite `privateStateDir: false`. La protection est
+  posée **avant** de prendre le verrou principal (un `icacls` coûte 1 à 3 s sous
+  Windows : jamais sous un verrou), mémoïsée par racine et par process, et
+  seulement si `.striart/` existe (elle ne crée jamais le dossier d'un dépôt non
+  initialisé). `agents/` et `removing/` ne sont **jamais parcourus** : leurs objets
+  git sont des hardlinks partagés avec le principal, en changer l'ACL changerait
+  aussi celle du principal.
+- `gate-env.ts` : l'environnement du Test Gate est une liste blanche (le gate
+  exécute des tests que l'agent a pu écrire) ; les clés d'API et webhooks n'y
+  entrent jamais ; `gateEnv` du dépôt *demande*, `gate.envAllow` de l'utilisateur
+  *autorise*.
+- `redact-secrets.ts` : caviardage **par le contenu** (formats de clés connus,
+  JWT, en-têtes d'authentification, identifiants d'URL, webhooks, blocs de clé
+  privée) et par **valeurs exactes** de l'environnement, à coût borné (motifs sans
+  imbrication, tranches de 256 Kio). Appliqué au journal du gate, aux journaux de
+  session et ACP, aux tickets, à la sortie des hooks de la cible et aux journaux
+  pino. Défense en profondeur, pas une garantie : un secret sans forme
+  reconnaissable n'est trouvé que par sa valeur exacte, et un secret à cheval sur
+  deux tranches d'une même ligne géante échappe aux motifs.
+- `hardening-checks.ts` : les constats de `doctor` correspondants.
 
 ## La couche CLI
 
@@ -700,10 +996,20 @@ config (`run.ts`, `src/user-config.ts`).
 | `control/`, `mcp/`, `hooks/`, `terminal/` | Control Protocol et jeton du dashboard ; serveur MCP ; hooks advisory ; lanceurs de terminal. |
 | `orchestration/`, `collab/` | Modes `review`/`race`/`team`/`pipeline` et plans v2 ; canal de collaboration. |
 | `tokens/`, `llm-resilience.ts`, `router-tree.ts`, `merge-hunks.ts` | Relevé, plafonds, prix, cache ; backoff et disjoncteur ; arbre du Router compacté ; fusion par régions. |
+| `router-map.ts`, `router-retrieval.ts`, `router-expand.ts`, `router-cochange.ts`, `router-vague.ts`, `router-shared.ts`, `router-sources.ts`, `router-details.ts` | Le Router fiabilisé : carte du dépôt (symboles, doc), récupération lexicale BM25, expansion déterministe (tests, imports, jumeaux, co-modification), détection des tâches vagues (sentinelle `**`), tenue de livre partagée, lecteur de sources borné (disque ou objets git), forme publique des détails (`routing`). |
+| `overlap.ts`, `overlap-settings.ts` | Filet à l'exécution : chevauchements *observés* (git entre commits, lecture seule), rebase anticipé jamais sur une session vivante ; réglages (module feuille). |
+| `session-failure.ts` | Marqueur `sessionFailure` d'un clone conservé après une session en échec, sans commit : la sentinelle `**` ne l'attend plus (`task:serialization-relaxed`, `SERIALIZATION_RELAXED`). |
+| `idle/` | GC d'inactivité : classification pure (`classify.ts`), signaux et gardes (`signals.ts`), balayage (`sweep.ts`), fermeture propre par hôte (`close.ts`), autorisation utilisateur (`authorize.ts`), battement de sortie (`heartbeat.ts`), état (`state.ts`), vue d'état (`status.ts`), réglages (`settings.ts`). |
+| `timings.ts`, `doctor-perf.ts` | Durées par phase d'une opération du noyau ; mesures de performance de `doctor`. |
+| `clone-disk.ts`, `clone-size-cache.ts` | Parcours disque d'un clone (activité exacte fail closed, taille d'affichage) ; cache des tailles daté. |
 | `safe-write.ts`, `secret-patterns.ts`, `project-path.ts`, `agent-artifacts.ts` | Écriture qui ne suit jamais un lien dans un clone (`SAFE_WRITE_UNSAFE`) ; motifs gitignore de `secretPatterns` pour l'historique ; chemin de projet sûr (relatif, jamais absolu ni `..`) ; libération de l'hôte ACP et des *Tab Config* Warp d'un agent (`stop`/`clean`). |
 | `agent-name.ts`, `ticket-id.ts`, `merge-subject.ts`, `plan-command.ts`, `timer-limits.ts`, `pty-limits.ts` | Motif des noms d'agent et des ids de ticket (validés avant tout chargement lourd) ; format des sujets `merge(striart): …` (source unique) ; nom d'exécutable d'un `command` de plan ; borne 2^31 − 1 des délais ; bornes du pty. |
 | `pty-attach.ts`, `pty-host.ts`, `pty-host-state.ts`, `watch-loop.ts`, `watch-ui.ts` | Protocole d'attache multi-clients et cycle de vie de l'hôte de pty ; son état lisible sans dépendance ; boucle de `striart watch` (événements typés, n'écrit rien) ; UI Ink de `watch --ui`. |
-| `user-config.ts`, `doctor-relaxations.ts`, `state-watch-ignore.ts`, `agent-view.ts` | Config utilisateur (`hooks.trustedRoots`) ; synthèse des protections relâchées ; chemins transitoires ignorés par les watchers du Control Protocol et du flux MCP ; présentation des agents (état `REMOVING`). |
+| `net.ts`, `session-env.ts` | Point d'entrée **unique** des appels sortants (politique hors ligne / liste blanche / HTTPS, proxy, CA, TLS) ; environnement réseau des sessions d'agents. |
+| `delivery.ts` | Commit de merge et push bornés (délai dur, arbre tué, aucune invite), livraison du SHA exact, noms de branches de livraison. |
+| `private-fs.ts`, `state-protection.ts`, `gate-env.ts`, `redact-secrets.ts`, `hardening-checks.ts` | `.striart/` réservé à l'utilisateur ; environnement du Test Gate ; caviardage de secrets ; constats `doctor` du durcissement. |
+| `dashboard-page.ts`, `dashboard-client.ts`, `dashboard-messages.ts`, `dashboard-style.ts` | La page du dashboard : squelette rendu côté serveur dans la langue de l'instance, client TypeScript embarqué, catalogue fr/en, feuille de style (clair/sombre). |
+| `user-config.ts`, `doctor-relaxations.ts`, `state-watch-ignore.ts`, `agent-view.ts` | Config utilisateur (`hooks.trustedRoots`, `env.allow`, `native.trustedKeyIds`, `network`, `gate.envAllow`) ; synthèse des protections relâchées ; chemins transitoires ignorés par les watchers du Control Protocol et du flux MCP ; présentation des agents (état `REMOVING`). |
 
 ## Règles d'or
 
@@ -723,6 +1029,10 @@ config (`run.ts`, `src/user-config.ts`).
    autre process ne bloque pas le clone à vie, et n'est jamais tué par
    `striart stop`). Un travail non commité ou non mergé (`PENDING`, `BUSY`)
    protège aussi le clone.
+   Seule exception, et pour la **session** seulement : le
+   [GC d'inactivité](#gc-dinactivité--fermer-une-session-oubliée-jamais-un-clone),
+   sur politique et autorisation de l'utilisateur, ferme proprement la session
+   d'un agent oublié — jamais son clone ni son travail.
 4. **Fallback humain obligatoire.** 3 fusions sémantiques échouées d'affilée
    → mode manuel jusqu'à `striart resolve --unlock`. Chaque échec produit un
    ticket complet dans `.striart/conflicts/` (versions BASE/OURS/THEIRS,

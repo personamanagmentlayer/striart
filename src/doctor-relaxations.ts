@@ -18,8 +18,11 @@
  */
 import { acpRelaxedProtections, resolveAcpOptions } from './acp/protocol.ts';
 import { acpAgentRelaxedProtections, resolveAcpAgentSettings } from './acp-agent/settings.ts';
+import { hardeningRelaxations } from './hardening-checks.ts';
+import { idleRelaxations } from './idle/settings.ts';
 import { mcpRelaxations, resolveMcpSettings } from './mcp/settings.ts';
 import { orchestrationRelaxations } from './orchestration/settings.ts';
+import { overlapRelaxations } from './overlap-settings.ts';
 import { tokensRelaxations } from './tokens/settings.ts';
 
 /** Forme minimale lue ici (la config chargée a ces champs, tous facultatifs). */
@@ -34,11 +37,25 @@ export interface RelaxationInputs {
   userTrustedRoots?: readonly string[];
   /** `env.allow` de la config UTILISATEUR : élargit la liste blanche du `.env` du dépôt. */
   userEnvAllow?: readonly string[];
+  /** `gate.envAllow` de la config UTILISATEUR : plafond des variables que le dépôt peut demander pour le Test Gate. */
+  userGateEnvAllow?: readonly string[];
+  /** Bloc `network` de la config UTILISATEUR (src/net.ts) : hôtes joignables en HTTP en clair. */
+  userNetwork?: { allowInsecureHosts: readonly string[] };
+  /** La config utilisateur n'a pas pu être lue : le bloc réseau est non évaluable. */
+  userNetworkUnreadable?: boolean;
+  /** NODE_TLS_REJECT_UNAUTHORIZED=0 dans l'environnement (vérification TLS coupée). */
+  tlsVerificationDisabled?: boolean;
 }
 
 export interface RelaxationReport {
   /** Identifiants stables, dédoublonnés et triés. */
   names: string[];
+  /**
+   * POLITIQUES choisies (`nom:valeur`), jamais comptées comme relâchement : un choix qui ne baisse
+   * aucune garde — ex. `delivery:branch`, qui livre le commit testé sur une branche de revue au
+   * lieu de la cible.
+   */
+  policies: string[];
   /** Sources qui n'ont pas pu être évaluées (jamais comptées comme sûres). */
   unreadable: string[];
 }
@@ -79,6 +96,21 @@ function flatRelaxations(config: LooseConfig, inputs: RelaxationInputs): string[
   }
   if ((inputs.userTrustedRoots?.length ?? 0) > 0) out.push('hooks.trustedRoots');
   if ((inputs.userEnvAllow?.length ?? 0) > 0) out.push('env.allow');
+  if ((inputs.userGateEnvAllow?.length ?? 0) > 0) out.push('gate.envAllow');
+  if ((inputs.userNetwork?.allowInsecureHosts.length ?? 0) > 0)
+    out.push('network.allowInsecureHosts');
+  if (inputs.tlsVerificationDisabled) out.push('env.NODE_TLS_REJECT_UNAUTHORIZED');
+  return out;
+}
+
+/** Politiques actives (information) : voir `RelaxationReport.policies`. */
+function activePolicies(config: LooseConfig | null): string[] {
+  const out: string[] = [];
+  if (config?.delivery === 'branch') out.push('delivery:branch');
+  // Fermeture automatique des sessions inactives : une POLITIQUE (opt-in), qui exige de surcroît
+  // l'autorisation de la config utilisateur (idle.closeRoots) — jamais comptée comme relâchement.
+  if (config?.idle?.action === 'close') out.push('idle:close');
+  else if (config?.idle?.action === 'warn') out.push('idle:warn');
   return out;
 }
 
@@ -89,9 +121,12 @@ export function collectRelaxations(inputs: RelaxationInputs): RelaxationReport {
 
   if (config) {
     for (const name of flatRelaxations(config, inputs)) found.add(name);
+    for (const name of hardeningRelaxations(config)) found.add(name);
     for (const r of mcpRelaxations(resolveMcpSettings(config as never))) found.add(r.key);
     for (const r of orchestrationRelaxations(config as never)) found.add(r.key);
     for (const r of tokensRelaxations(config)) found.add(r.key);
+    for (const r of overlapRelaxations(config)) found.add(r.key);
+    for (const r of idleRelaxations(config)) found.add(r.key);
 
     for (const [name, profile] of Object.entries(config.agentProfiles ?? {})) {
       if (!(profile as LooseConfig | null)?.acp) continue;
@@ -117,5 +152,11 @@ export function collectRelaxations(inputs: RelaxationInputs): RelaxationReport {
     for (const name of flatRelaxations({}, inputs)) found.add(name);
   }
 
-  return { names: [...found].sort(), unreadable: [...unreadable].sort() };
+  if (inputs.userNetworkUnreadable) unreadable.add('network');
+
+  return {
+    names: [...found].sort(),
+    policies: activePolicies(config).sort(),
+    unreadable: [...unreadable].sort(),
+  };
 }

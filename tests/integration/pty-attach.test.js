@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { rm, stat } from 'node:fs/promises';
-import { StriartError } from '../../src/errors.js';
+import { StriartError } from '../../src/errors.ts';
 import {
   attachSocketPath,
   connectAttachClient,

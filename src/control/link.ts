@@ -5,8 +5,8 @@
  * vit encore, et signe un code à usage unique. Le jeton ne quitte jamais ce
  * process ; seul le lien (éphémère, non rejouable) est rendu.
  */
-import { StriartError } from '../errors.js';
-import { isProcessAlive } from '../process-tree.js';
+import { StriartError } from '../errors.ts';
+import { isProcessAlive } from '../process-tree.ts';
 import { mintSignInCode, readTokenFile } from './auth.ts';
 
 export interface SignInLink {

@@ -8,8 +8,8 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { runDoctor } from '../../src/doctor.js';
+import { initStriart } from '../../src/init.ts';
+import { runDoctor } from '../../src/doctor.ts';
 import { PINNED_NATIVE_KEY_IDS } from '../../src/native.ts';
 
 const check = (result, id) => result.checks.find((c) => c.id === id);

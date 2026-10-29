@@ -13,8 +13,8 @@ import { describeUri, parseSlashCommand, promptToText } from '../../src/acp-agen
 import { OUTGOING_REQUESTS, RpcPeer } from '../../src/acp-agent/rpc.ts';
 import { acpProfileChoices, effectiveAcpOptions } from '../../src/acp-agent/session.ts';
 import { toRpcError } from '../../src/acp-agent/server.ts';
-import { StriartError } from '../../src/errors.js';
-import { validateConfig } from '../../src/config.js';
+import { StriartError } from '../../src/errors.ts';
+import { validateConfig } from '../../src/config.ts';
 
 /**
  * Proxy ACP `striart acp` (lot I10) : réglages, conversion des prompts,

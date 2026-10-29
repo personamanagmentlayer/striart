@@ -22,12 +22,13 @@
  *     ne fait que proposer — le merge reste au Test Gate.
  */
 import { randomBytes, randomUUID } from 'node:crypto';
-import { mkdir, readdir } from 'node:fs/promises';
+import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { validateAgentName } from '../agent-name.ts';
-import { StriartError } from '../errors.js';
-import { UNCHANGED, readJson, updateJsonLocked } from '../json-file.js';
-import { striartDir } from '../paths.js';
+import { StriartError } from '../errors.ts';
+import { UNCHANGED, readJson, updateJsonLocked } from '../json-file.ts';
+import { striartDir } from '../paths.ts';
+import { mkdirPrivate } from '../private-fs.ts';
 import type {
   CollabGroup,
   CollabMember,
@@ -88,7 +89,7 @@ export async function createCollabGroup(
     createdAt: new Date().toISOString(),
     closedAt: null,
   };
-  await mkdir(collabDir(root), { recursive: true });
+  await mkdirPrivate(collabDir(root));
   await updateJsonLocked(
     groupPath(root, id),
     { fallback: null, code: 'COLLAB_CORRUPT' },

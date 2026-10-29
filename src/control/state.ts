@@ -8,21 +8,23 @@
  * Le hub (hub.ts) garantit qu'UNE SEULE collecte est en vol à la fois :
  * cette fonction ne doit jamais être appelée en boucle par un transport.
  */
-import { formatBytes, listAgents } from '../clone.js';
+import { formatBytes, listAgents } from '../clone.ts';
 import { presentAgent } from '../agent-view.ts';
-import { listConflictTickets } from '../conflicts.js';
-import { loadConfig } from '../config.js';
-import { watchDaemonStatus } from '../daemon.js';
-import { listMergeHistory } from '../history.js';
-import { readLocks } from '../locks.js';
-import { readMainSessionStatus } from '../main-session.js';
-import { getQueueDashboard } from '../orchestrator.js';
+import { listConflictTickets } from '../conflicts.ts';
+import { loadConfig } from '../config.ts';
+import { watchDaemonStatus } from '../daemon.ts';
+import { listMergeHistory } from '../history.ts';
+import { readLocks } from '../locks.ts';
+import { readMainSessionStatus } from '../main-session.ts';
+import { getQueueDashboard } from '../orchestrator.ts';
+import { overlapStatus } from '../overlap.ts';
+import { idleStatus } from '../idle/status.ts';
 import { acpHostStatus } from '../acp/host.ts';
 import { listPendingHumanRequests } from '../permissions.ts';
 import type { ElicitationRequest, PermissionRequest } from '../permissions.ts';
-import { readQueue } from '../queue.js';
-import { listProfiles } from '../session.js';
-import { readState } from '../state.js';
+import { readQueue } from '../queue.ts';
+import { listProfiles } from '../session.ts';
+import { readState } from '../state.ts';
 import { sanitizeAgentText } from '../collab/message.ts';
 import { listHumanReviews } from '../orchestration/human-review.ts';
 import { listOrchestrationState } from '../orchestration/store.ts';
@@ -135,6 +137,11 @@ export async function collectControlState(root: string) {
     listHumanReviews(root),
   ]);
   const heatmap = await collectHeatmap(root, allTickets);
+  // Chevauchements OBSERVÉS (filet à l'exécution) : git entre commits, borné, mis en cache
+  // entre deux collectes (le hub recollecte à chaque changement). Ne throw jamais.
+  const overlaps = await overlapStatus(root, config);
+  // GC d'inactivité : balayage en lecture seule (aucune écriture, aucun événement). Ne throw jamais.
+  const idle = await idleStatus(root, agents);
   const permissions = humanRequests.filter(
     (r): r is PermissionRequest => (r.kind ?? 'permission') === 'permission',
   );
@@ -171,6 +178,8 @@ export async function collectControlState(root: string) {
     mainSession,
     orchestration,
     reviews: reviews.map(presentReview),
+    overlaps,
+    idle,
     // Profils du mode autonome : clés d'env uniquement, jamais les valeurs
     // (même contrat que `striart profiles`).
     profiles: listProfiles(config),

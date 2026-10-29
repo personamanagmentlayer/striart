@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { execa } from 'execa';
-import { quotePosix, quotePowerShell } from '../../src/terminal.js';
+import { quotePosix, quotePowerShell } from '../../src/terminal.ts';
 
 // En intégration : ces tests lancent le VRAI interpréteur (PowerShell sous
 // Windows, sh ailleurs) — seule preuve que la citation de terminal.js est

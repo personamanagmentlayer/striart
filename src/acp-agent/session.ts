@@ -33,12 +33,12 @@ import {
   waitForAcpHostExit,
 } from '../acp/host.ts';
 import type { AcpHostEvent, AcpHostOwnerConnection } from '../acp/host.ts';
-import { readRegistry, updateAgentMeta } from '../clone.js';
-import { StriartError } from '../errors.js';
-import { logger } from '../logger.js';
-import { runTask } from '../orchestrator.js';
-import { removeTask } from '../queue.js';
-import { resolveAgentProfile } from '../session.js';
+import { readRegistry, updateAgentMeta } from '../clone.ts';
+import { StriartError } from '../errors.ts';
+import { logger } from '../logger.ts';
+import { runTask } from '../orchestrator.ts';
+import { removeTask } from '../queue.ts';
+import { resolveAgentProfile } from '../session.ts';
 import { waitUntil } from '../orchestration/wait.ts';
 import type { Messages } from '../cli/i18n/index.ts';
 import type { AcpProxyResult, AgentProfile, SessionResult, StriartConfig } from '../types.js';

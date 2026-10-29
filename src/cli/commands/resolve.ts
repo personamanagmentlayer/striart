@@ -1,21 +1,21 @@
-import { assertInitialized } from '../../clone.js';
+import { assertInitialized } from '../../clone.ts';
 import {
   closeConflictTicket,
   isReadableTicket,
   listConflictTickets,
   prepareResolutionScaffold,
-} from '../../conflicts.js';
-import { StriartError } from '../../errors.js';
-import { applyTicketResolution } from '../../orchestrator.js';
-import { quoteForShell } from '../../terminal.js';
-import { readState, resetManualMode } from '../../state.js';
+} from '../../conflicts.ts';
+import { StriartError } from '../../errors.ts';
+import { applyTicketResolution } from '../../orchestrator.ts';
+import { quoteForShell } from '../../terminal.ts';
+import { readState, resetManualMode } from '../../state.ts';
 import type {
   CorruptTicket,
   ManualResolutionResult,
   StriartState,
   TicketEntry,
 } from '../../types.js';
-import type { CommandModule } from '../context.ts';
+import type { CommandModule, CommandResult, Ctx } from '../context.ts';
 import { manualResolutionOutcome } from '../exit.ts';
 
 export interface ResolveInput {
@@ -40,7 +40,7 @@ export type ResolveData =
   | { action: 'apply'; result: ManualResolutionResult };
 
 export const resolve: CommandModule<ResolveInput, ResolveData> = {
-  async execute(ctx, input) {
+  async execute(ctx: Ctx, input: ResolveInput): Promise<CommandResult<ResolveData>> {
     // Une option qui n'a de sens qu'avec une autre : refusée AVANT toute action
     // (jamais ignorée en silence — l'humain croirait avoir accepté la version
     // de l'agent).
@@ -58,6 +58,8 @@ export const resolve: CommandModule<ResolveInput, ResolveData> = {
       return { data: { action: 'unlock' }, outcome: 'ok' };
     }
     if (input.close !== null) {
+      // Fermer un ticket DÉJÀ résolu est refusé par le domaine (TICKET_ALREADY_RESOLVED, comme
+      // `--apply`) : la garde vaut pour tous les appelants, pas seulement cette commande.
       return {
         data: { action: 'close', ticket: await closeConflictTicket(root, input.close) },
         outcome: 'ok',
@@ -123,6 +125,10 @@ export const resolve: CommandModule<ResolveInput, ResolveData> = {
           if (r.closedTickets.length > 1)
             out.detail(m.resolve.duplicatesClosed(r.closedTickets.slice(1).join(', ')));
           if (r.pushError) out.line('warn', m.merge.pushFailed(out.untrusted(r.pushError)));
+          if (r.delivery?.pushed && r.delivery.mode === 'branch' && r.delivery.ref)
+            out.detail(
+              m.merge.deliveredBranch(out.untrusted(r.delivery.ref), out.sha(r.delivery.sha)),
+            );
           out.hint(`striart sync ${r.agent}`);
         } else if (r.status === 'ALREADY_CLEAN') {
           out.line('ok', m.resolve.alreadyClean(r.ticketId));
@@ -147,11 +153,13 @@ export const resolve: CommandModule<ResolveInput, ResolveData> = {
               key: 'state',
               header: m.resolve.colState,
               value: (t) =>
-                !isReadableTicket(t)
-                  ? m.resolve.stateCorrupt(t.cause)
-                  : t.resolved
-                    ? m.resolve.stateResolved
-                    : m.resolve.stateOpen,
+                `${t.resolved ? out.glyphs.ok : out.glyphs.error} ${
+                  !isReadableTicket(t)
+                    ? m.resolve.stateCorrupt(t.cause)
+                    : t.resolved
+                      ? m.resolve.stateResolved
+                      : m.resolve.stateOpen
+                }`,
               style: (text, t) => out.style(t.resolved ? 'ok' : 'error', text),
               priority: 9,
             },

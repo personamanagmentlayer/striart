@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { lstat, mkdir, open, readFile, realpath, rename, rm } from 'node:fs/promises';
 import path from 'node:path';
-import { StriartError } from './errors.js';
+import { StriartError } from './errors.ts';
 
 /**
  * Écritures de Striart DANS un dossier qu'un agent peut modifier (un clone) :

@@ -20,6 +20,7 @@
  * Gate (décision archi n°4).
  */
 import { compileGlob } from './glob-lite.ts';
+import type { ProjectSources } from './router-sources.ts';
 import { estimateTokens } from './tokens/estimate.ts';
 import type { EstimatorOptions } from './tokens/estimate.ts';
 
@@ -124,6 +125,13 @@ export interface BuildTreeParams {
   estimator: EstimatorOptions;
   /** Racine du dépôt : requise pour l'extension par le graphe d'imports. */
   root?: string | null;
+  /** Sources du projet (remplace la lecture du disque sous `root`) pour le graphe d'imports. */
+  sources?: ProjectSources | null;
+  /**
+   * Scores de pertinence DÉTERMINISTES fournis par l'appelant (BM25 de
+   * router-retrieval.ts) : remplacent le score de chemin quand l'arbre doit être classé.
+   */
+  scores?: ReadonlyMap<string, number> | null;
 }
 
 export async function buildRouterTree(p: BuildTreeParams): Promise<TreeResult> {
@@ -167,12 +175,12 @@ async function rank(p: BuildTreeParams, grandTotal: number): Promise<TreeResult>
   const { files, task, settings, estimator } = p;
   const words = keywords(task);
   const scores = new Map<string, number>();
-  for (const f of files) scores.set(f, pathScore(f, words));
+  for (const f of files) scores.set(f, p.scores ? (p.scores.get(f) ?? 0) : pathScore(f, words));
 
   // Un saut dans le graphe d'imports autour des meilleurs candidats : le
   // fichier qu'une tâche touche est souvent un voisin (importeur/importé) de
   // celui dont le nom la décrit.
-  if (settings.importExpansion && p.root && words.length > 0) {
+  if (settings.importExpansion && (p.root || p.sources) && words.length > 0) {
     try {
       const seeds = [...scores.entries()]
         .filter(([, s]) => s > 0)
@@ -180,9 +188,12 @@ async function rank(p: BuildTreeParams, grandTotal: number): Promise<TreeResult>
         .slice(0, 8)
         .map(([f]) => f);
       if (seeds.length > 0) {
-        const { buildImportGraph } = await import('./imports.js');
+        const { buildImportGraph } = await import('./imports.ts');
         const codeFiles = files.slice(0, 4000);
-        const graph = (await buildImportGraph(p.root, codeFiles)) as Map<string, Set<string>>;
+        const graph = (await buildImportGraph(p.root ?? '', codeFiles, p.sources ?? null)) as Map<
+          string,
+          Set<string>
+        >;
         for (const seed of seeds) {
           for (const dep of graph.get(seed) ?? []) scores.set(dep, (scores.get(dep) ?? 0) + 1);
         }

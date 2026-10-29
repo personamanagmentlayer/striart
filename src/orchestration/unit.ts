@@ -31,15 +31,15 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { syncAgentInstructionsToClone } from '../agents/instructions.ts';
 import { applyCommitContract, branchTip, mergeAndCleanClone } from '../autonomous-cycle.ts';
-import { cloneGit, createAgent, readRegistry, updateAgentMeta } from '../clone.js';
+import { cloneGit, createAgent, readRegistry, updateAgentMeta } from '../clone.ts';
 import { resolveCommitPolicy } from '../commit-policy.ts';
-import { loadConfig } from '../config.js';
-import { emitStriartEvent } from '../events.js';
-import { logger } from '../logger.js';
-import { runTask } from '../orchestrator.js';
+import { loadConfig } from '../config.ts';
+import { emitStriartEvent } from '../events.ts';
+import { logger } from '../logger.ts';
+import { runTask } from '../orchestrator.ts';
 import { canonicalProtectedPath, compileProtectedGlob } from '../protected-paths.ts';
-import { readQueue, removeTask } from '../queue.js';
-import { resolveAgentProfile, runAgentSession } from '../session.js';
+import { readQueue, removeTask } from '../queue.ts';
+import { resolveAgentProfile, runAgentSession } from '../session.ts';
 import { postHarvestedMessages } from '../collab/channel.ts';
 import { deliverInbox, harvestOutbox, prepareCollabFiles } from '../collab/files.ts';
 import type { OutboxHarvest } from '../collab/files.ts';
@@ -82,7 +82,9 @@ export type ProgressEvent =
       reason: 'dependency' | 'collision' | 'attended' | 'human-review';
       ref: string | null;
     }
-  | { type: 'verdict'; group: string; reviewer: string; round: number; verdict: string };
+  | { type: 'verdict'; group: string; reviewer: string; round: number; verdict: string }
+  /** La sentinelle WHOLE_REPO du Router n'a pas attendu ces clones (session en échec, sans commit). */
+  | { type: 'serialization-relaxed'; nodeId: string | null; blockers: string[] };
 
 export interface OrchestrationContext {
   root: string;
@@ -163,8 +165,16 @@ export async function startOrchestratedClone(
       mode: 'autonomous',
       profile: profileKey,
     });
-    if (r.status === 'STARTED')
+    if (r.status === 'STARTED') {
+      if (r.relaxedBlockers?.length) {
+        report(ctx, {
+          type: 'serialization-relaxed',
+          nodeId: ctx.nodeId,
+          blockers: r.relaxedBlockers.map((b) => b.agent),
+        });
+      }
       return { ok: true, meta: r.info as AgentInfo, predictedFiles: r.predictedFiles };
+    }
     name = r.task.agent;
     if (!(await removeTask(ctx.root, r.task.id))) {
       // La file l'a déjà relancée (en supervisé) entre l'enfilage et le

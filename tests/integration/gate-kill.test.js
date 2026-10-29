@@ -2,7 +2,7 @@
 // binaire natif (killProcessTree → striart-native proc tree-kill), d'où sa
 // place en intégration (vrais process, binaire construit par le globalSetup).
 import { beforeAll, describe, expect, it } from 'vitest';
-import { runTestGate } from '../../src/gate.js';
+import { runTestGate } from '../../src/gate.ts';
 import { requireNativeBuild } from '../helpers/native-build.js';
 import { REPO_ROOT } from '../helpers/native.js';
 

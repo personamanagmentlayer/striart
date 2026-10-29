@@ -1,11 +1,11 @@
 import { realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { AGENT_NAME_RE } from '../agent-name.ts';
-import { loadConfig } from '../config.js';
-import { StriartError } from '../errors.js';
-import { findRepoRoot, readRegistry } from '../clone.js';
-import { striartDir } from '../paths.js';
-import { logger } from '../logger.js';
+import { loadConfig } from '../config.ts';
+import { StriartError } from '../errors.ts';
+import { findRepoRoot, readRegistry } from '../clone.ts';
+import { striartDir } from '../paths.ts';
+import { logger } from '../logger.ts';
 import { resolveMcpSettings } from './settings.ts';
 import type { McpSettings } from '../types.js';
 
@@ -228,6 +228,16 @@ export async function resolveMcpCaller({
     root = fromCwd.root;
   } else {
     root = await findRepoRoot(cwd);
+    // Même garde que `--root` et que `striart api` : un serveur qui démarrerait « lecture seule »
+    // sur un dépôt sans `.striart/` ferait échouer chacun de ses outils, un par un, au lieu
+    // d'un refus net et immédiat (fail closed).
+    if (!(await isInitialized(root))) {
+      throw new StriartError(`.striart/ not found in ${root}.`, {
+        code: 'NOT_INITIALIZED',
+        hint: 'striart init',
+        details: { root },
+      });
+    }
   }
 
   // Le cwd ne borne que s'il désigne un clone DU dépôt servi.
@@ -304,7 +314,9 @@ export function describeMcpScope(
 /** Journalise le niveau effectif au démarrage (relâchement → warn). */
 export function logMcpScope(root: string, caller: McpCaller, env: NodeJS.ProcessEnv): void {
   const scope = describeMcpScope(caller, env);
-  const fields = { root, level: scope.level, agent: caller.agent, boundBy: caller.boundBy };
+  // `level` est une clé RÉSERVÉE de pino (le niveau du log) : un champ du même nom
+  // l'écraserait (deux `level`, filtre par niveau aveugle au relâchement).
+  const fields = { root, scope: scope.level, agent: caller.agent, boundBy: caller.boundBy };
   if (scope.relaxed) logger.warn(fields, `MCP: ${scope.summary}`);
   else logger.info(fields, `MCP: ${scope.summary}`);
 }

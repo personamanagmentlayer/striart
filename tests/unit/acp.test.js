@@ -11,7 +11,8 @@ import {
   selectPermissionOption,
   striartMcpServers,
 } from '../../src/acp.ts';
-import { runAgentSession } from '../../src/session.js';
+import { runAgentSession } from '../../src/session.ts';
+import { ensureStateProtection } from '../../src/state-protection.ts';
 import {
   answerPermissionRequest,
   createPermissionRequest,
@@ -113,6 +114,9 @@ describe('acp — session supervisée (faux agent ACP)', () => {
     root = await mkdtemp(path.join(os.tmpdir(), 'striart-acp-'));
     clone = path.join(root, 'clone');
     await mkdir(clone, { recursive: true });
+    // Durcissement de `.striart/` (ACL sous Windows : plusieurs process icacls) fait
+    // AVANT le chronométrage du test, pas dans le délai qu'il mesure.
+    await ensureStateProtection(root);
   });
 
   afterEach(async () => {
@@ -259,6 +263,7 @@ describe('acp — publication du PID (registre)', () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'striart-acp-pid-'));
     const clone = path.join(root, 'clone');
     await mkdir(clone, { recursive: true });
+    await ensureStateProtection(root);
     process.env.FAKE_ACP_MODE = 'message';
     let seenPid = null;
     try {
@@ -290,6 +295,8 @@ describe('acp — semi-autonome (politique ask, Phase F)', () => {
     root = await mkdtemp(path.join(os.tmpdir(), 'striart-acp-ask-'));
     clone = path.join(root, 'clone');
     await mkdir(clone, { recursive: true });
+    // Voir plus haut : le durcissement de `.striart/` n'entre pas dans les délais mesurés.
+    await ensureStateProtection(root);
     process.env.FAKE_ACP_MODE = 'permission';
   });
 

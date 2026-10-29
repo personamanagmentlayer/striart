@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_CONFIG, validateConfig } from '../../src/config.js';
-import { StriartError } from '../../src/errors.js';
+import { DEFAULT_CONFIG, validateConfig } from '../../src/config.ts';
+import { StriartError } from '../../src/errors.ts';
 
 // Clés `pty.shell` / `pty.shellArgs` : le shell que l'hôte de pty fait tourner.
 // Validation pure (aucun disque) : la résolution réelle est couverte par

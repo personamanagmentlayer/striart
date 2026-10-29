@@ -1,7 +1,8 @@
-import { mergeAgentCommit } from '../../orchestrator.js';
+import { mergeAgentCommit } from '../../orchestrator.ts';
 import type { MergeResult } from '../../types.js';
 import type { CommandModule } from '../context.ts';
 import { mergeOutcome } from '../exit.ts';
+import { localizeMergeResult } from '../localize.ts';
 import { renderMergeResult } from '../render/results.ts';
 
 export interface MergeInput {
@@ -19,6 +20,6 @@ export const merge: CommandModule<MergeInput, MergeResult> = {
   },
 
   render(ctx, { data }) {
-    renderMergeResult(ctx.out, data);
+    renderMergeResult(ctx.out, localizeMergeResult(ctx.m, data));
   },
 };

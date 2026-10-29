@@ -20,8 +20,8 @@
  */
 import { readFile, rm } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { writeJsonAtomic } from './json-file.js';
-import { isProcessAlive } from './process-tree.js';
+import { writeJsonAtomic } from './json-file.ts';
+import { isProcessAlive } from './process-tree.ts';
 
 const POLL_MS = 100;
 const WATCH_INTERVAL_MS = 250;

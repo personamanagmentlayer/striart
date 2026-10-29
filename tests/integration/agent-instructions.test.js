@@ -4,12 +4,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { simpleGit } from 'simple-git';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { createAgent, readRegistry } from '../../src/clone.js';
-import { syncAgentWithMain } from '../../src/sync.js';
+import { initStriart } from '../../src/init.ts';
+import { createAgent, readRegistry } from '../../src/clone.ts';
+import { syncAgentWithMain } from '../../src/sync.ts';
 import { getPreset, materializePreset } from '../../src/agents/catalog.ts';
-import { runAgentSession, sessionRawLogPath } from '../../src/session.js';
-import { loadConfig } from '../../src/config.js';
+import { runAgentSession, sessionRawLogPath } from '../../src/session.ts';
+import { loadConfig } from '../../src/config.ts';
 
 const FAKE_CLAUDE = fileURLToPath(new URL('../helpers/fake-claude.cjs', import.meta.url));
 const exists = async (p) => Boolean(await stat(p).catch(() => null));

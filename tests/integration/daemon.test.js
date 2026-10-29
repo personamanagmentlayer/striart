@@ -4,8 +4,8 @@ import os from 'node:os';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { isProcessAlive } from '../../src/process-tree.js';
+import { initStriart } from '../../src/init.ts';
+import { isProcessAlive } from '../../src/process-tree.ts';
 import {
   dashboardDaemonStatus,
   startDashboardDaemon,
@@ -14,7 +14,7 @@ import {
   stopDashboardDaemon,
   stopWatchDaemon,
   watchDaemonStatus,
-} from '../../src/daemon.js';
+} from '../../src/daemon.ts';
 
 async function waitFor(predicate, { timeoutMs = 15_000, stepMs = 250 } = {}) {
   const deadline = Date.now() + timeoutMs;

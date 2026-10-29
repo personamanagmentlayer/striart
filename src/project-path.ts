@@ -14,3 +14,8 @@ export function isSafeProjectPath(p: unknown): boolean {
   if (path.isAbsolute(p) || /^[A-Za-z]:/.test(p)) return false; // absolu POSIX ou lettre de lecteur Windows
   return !p.split('/').includes('..');
 }
+
+/** Chemin de projet normalisé : séparateurs POSIX, sans `./` initial ni blancs de bord. */
+export function normalizeFilePath(p: string): string {
+  return p.replaceAll('\\', '/').replace(/^\.\//, '').trim();
+}

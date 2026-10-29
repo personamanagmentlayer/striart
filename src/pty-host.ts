@@ -1,25 +1,19 @@
 import { closeSync, openSync } from 'node:fs';
 import os from 'node:os';
-import {
-  access,
-  constants as fsConstants,
-  mkdir,
-  open as openFile,
-  rm,
-  stat,
-} from 'node:fs/promises';
+import { access, constants as fsConstants, open as openFile, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { StriartError } from './errors.js';
-import { DEFAULT_CONFIG, loadConfig } from './config.js';
+import { StriartError } from './errors.ts';
+import { mkdirPrivate } from './private-fs.ts';
+import { DEFAULT_CONFIG, loadConfig } from './config.ts';
 import { attendedCommandOf } from './agents/catalog.ts';
-import { striartDir } from './paths.js';
+import { striartDir } from './paths.ts';
 import { hostStartError, launchPtyHost, waitForPtyHostReady } from './pty-attach.ts';
 import type { PtyHostSettings } from './pty-attach.ts';
 import { PTY_HOST_EXIT_ALREADY_RUNNING } from './native.ts';
 import { ptyHostPidFilePath, ptyHostStatus, ptyHostStopFilePath } from './pty-host-state.ts';
 import { clearStopRequest, requestStop } from './stop-request.ts';
-import { readRegistry, validateAgentName } from './clone.js';
+import { readRegistry, validateAgentName } from './clone.ts';
 import type { AgentMeta } from './types.js';
 
 /**
@@ -324,7 +318,7 @@ export async function ensurePtyHost(
       ? await resolvePtyShell(root)
       : { shell: options.shell, args: [] as string[] };
   const logPath = logFilePath(root, agent);
-  await mkdir(path.dirname(logPath), { recursive: true });
+  await mkdirPrivate(path.dirname(logPath));
   const logFd = openSync(logPath, 'a');
   let child: Awaited<ReturnType<typeof launchPtyHost>>;
   try {
@@ -499,7 +493,7 @@ export async function openAttendedSession(
       terminal: { launched: false, error: (error as Error).message, hostPid: null },
     };
   }
-  const { openAgentTerminal } = await import('./terminal.js');
+  const { openAgentTerminal } = await import('./terminal.ts');
   const cliPath = fileURLToPath(new URL('./cli.js', import.meta.url));
   const result = await openAgentTerminal({
     cwd: info.path,

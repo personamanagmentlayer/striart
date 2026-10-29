@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { buildImportGraph, detectSemanticNeighbors } from '../../src/imports.js';
+import { buildImportGraph, detectSemanticNeighbors } from '../../src/imports.ts';
 
 describe('buildImportGraph', () => {
   let root;

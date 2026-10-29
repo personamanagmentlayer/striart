@@ -1,10 +1,10 @@
 import path from 'node:path';
 import chokidar from 'chokidar';
-import { onStriartEvent } from '../events.js';
-import { logger } from '../logger.js';
-import { striartDir } from '../paths.js';
+import { onStriartEvent } from '../events.ts';
+import { logger } from '../logger.ts';
+import { striartDir } from '../paths.ts';
 import { isIgnoredStatePath } from '../state-watch-ignore.ts';
-import { watchAgents } from '../watcher.js';
+import { watchAgents } from '../watcher.ts';
 import { STATUS_URI, TICKETS_URI } from './resources.ts';
 
 /**
@@ -94,7 +94,9 @@ export function createChangeFeed(root: string, { debounceMs = 300 } = {}): Chang
     stateWatcher.on('all', onPath);
     stateWatcher.on('error', (error) => logger.warn({ err: error }, 'MCP: state watcher'));
     const refsWatcher = watchAgents({ root, onCommit: () => mark(STATUS_URI) });
-    const offBus = onStriartEvent(() => {
+    const offBus = onStriartEvent((_config, event) => {
+      // Mesure du verrou (L8) : ne change aucun état lisible — pas de notification de ressource.
+      if (event.type === 'lock:contention') return;
       pending.updated.add(STATUS_URI);
       pending.updated.add(TICKETS_URI);
       schedule();

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { buildTerminalCommand, openAgentTerminal, quoteForShell } from '../../src/terminal.js';
-import { StriartError } from '../../src/errors.js';
+import { buildTerminalCommand, openAgentTerminal, quoteForShell } from '../../src/terminal.ts';
+import { StriartError } from '../../src/errors.ts';
 
 const ARGV = [
   'C:\\Program Files\\nodejs\\node.exe',

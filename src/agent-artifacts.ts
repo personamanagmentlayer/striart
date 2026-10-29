@@ -9,8 +9,8 @@
  * `acp/host.ts` (qui dépend de clone.js) ni `terminal.js` ne sont chargés au
  * démarrage de la CLI ni ne créent de cycle avec clone.js.
  */
-import { loadConfig } from './config.js';
-import { logger } from './logger.js';
+import { loadConfig } from './config.ts';
+import { logger } from './logger.ts';
 
 export interface AgentArtifactsReport {
   /** Résultat de l'arrêt de l'hôte ACP (null si l'arrêt a échoué). */
@@ -45,7 +45,7 @@ export async function releaseAgentArtifacts({
   }
 
   try {
-    const { removeAgentTerminalArtifacts } = await import('./terminal.js');
+    const { removeAgentTerminalArtifacts } = await import('./terminal.ts');
     const config = await loadConfig(root).catch(() => null);
     report.terminalArtifacts = await removeAgentTerminalArtifacts({
       root,

@@ -19,7 +19,7 @@
 import path from 'node:path';
 import { nativeProcessInfo } from './native.ts';
 import type { NativeProcessRecord } from './native.ts';
-import { isProcessAlive } from './process-tree.js';
+import { isProcessAlive } from './process-tree.ts';
 
 export interface ProcessInfo {
   pid: number;

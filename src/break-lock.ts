@@ -28,7 +28,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, open, readFile, rm, stat } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { logger } from './logger.js';
+import { logger } from './logger.ts';
 
 /** Verrou de cassure vivant mais sans signe de vie depuis ça : tenu à perpétuité par un PID recyclé ou figé. */
 export const BREAK_STALE_MS = 30_000;

@@ -15,10 +15,10 @@ import { readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { execa } from 'execa';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { createAgent, readRegistry } from '../../src/clone.js';
-import { applyTicketResolution, mergeAgentCommit } from '../../src/orchestrator.js';
-import { listConflictTickets, prepareResolutionScaffold } from '../../src/conflicts.js';
+import { initStriart } from '../../src/init.ts';
+import { createAgent, readRegistry } from '../../src/clone.ts';
+import { applyTicketResolution, mergeAgentCommit } from '../../src/orchestrator.ts';
+import { listConflictTickets, prepareResolutionScaffold } from '../../src/conflicts.ts';
 
 const GATE_OK = 'node -e "process.exit(0)"';
 const git = (cwd, ...args) => execa('git', ['-C', cwd, ...args]).then((r) => r.stdout.trim());
@@ -85,15 +85,15 @@ describe('commit de merge refusé par git (intégration)', () => {
     await repo.cleanup();
   });
 
-  it('merge automatique : hook pre-commit en échec → MERGE_COMMIT_FAILED, merge annulé, principal propre, rien d’enregistré ; relançable', async () => {
+  it('merge automatique : hook pre-commit en échec → COMMIT_HOOK_REJECTED (ticket), merge annulé, principal propre, rien d’enregistré ; relançable', async () => {
     await commitIn(agent.path, 'feature.js', 'export const f = 1;\n', 'feat: f');
     const before = await git(repo.root, 'rev-parse', 'HEAD');
     await installFailingHook(repo.root);
 
     const error = await mergeAgentCommit({ root: repo.root, agent: 'agent-a' }).catch((e) => e);
 
-    expect(error).toMatchObject({ code: 'MERGE_COMMIT_FAILED', kind: 'failure' });
-    expect(error.hint).toMatch(/hook|identity|user\.name/i);
+    expect(error).toMatchObject({ code: 'COMMIT_HOOK_REJECTED', kind: 'failure' });
+    expect(error.hint).toMatch(/hook/i);
     expect(await git(repo.root, 'rev-parse', 'HEAD')).toBe(before);
     await expectNotMerging(repo.root);
     expect((await readRegistry(repo.root))['agent-a'].lastMergedCommit ?? null).toBeNull();
@@ -104,7 +104,7 @@ describe('commit de merge refusé par git (intégration)', () => {
     expect(retry.status).toBe('MERGED');
   });
 
-  it('résolution manuelle (même chemin) : hook en échec → MERGE_COMMIT_FAILED, ticket toujours OUVERT, principal propre', async () => {
+  it('résolution manuelle (même chemin) : hook en échec → COMMIT_HOOK_REJECTED, ticket toujours OUVERT, principal propre', async () => {
     await writeFile(path.join(repo.root, 'app.js'), 'const v = "main";\n');
     await git(repo.root, 'add', 'app.js');
     await git(repo.root, 'commit', '-q', '-m', 'feat: main');
@@ -118,10 +118,13 @@ describe('commit de merge refusé par git (intégration)', () => {
 
     const error = await applyTicketResolution({ root: repo.root, ticketId }).catch((e) => e);
 
-    expect(error).toMatchObject({ code: 'MERGE_COMMIT_FAILED' });
+    expect(error).toMatchObject({ code: 'COMMIT_HOOK_REJECTED' });
     expect(await git(repo.root, 'rev-parse', 'HEAD')).toBe(before);
     await expectNotMerging(repo.root);
-    expect((await listConflictTickets(repo.root)).map((t) => t.id)).toContain(ticketId);
+    // Le ticket d'origine reste intact : aucun nouveau ticket ne l'écrase.
+    const open = await listConflictTickets(repo.root);
+    expect(open.map((t) => t.id)).toContain(ticketId);
+    expect(open.find((t) => t.id === ticketId)).toMatchObject({ reason: 'MERGE_CONFLICT' });
 
     await removeHook(repo.root);
     const retry = await applyTicketResolution({ root: repo.root, ticketId });

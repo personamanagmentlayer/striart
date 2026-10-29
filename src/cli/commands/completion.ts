@@ -10,9 +10,9 @@ export interface CompletionInput {
 
 /** Script de complétion sur stdout (à rediriger dans le profil du shell). */
 export const completion: CommandModule<CompletionInput, { shell: Shell; script: string }> = {
-  async execute(_ctx, input) {
+  async execute(ctx, input) {
     return {
-      data: { shell: input.shell, script: completionScript(input.shell, input.program) },
+      data: { shell: input.shell, script: completionScript(input.shell, input.program, ctx.m) },
       outcome: 'ok',
     };
   },

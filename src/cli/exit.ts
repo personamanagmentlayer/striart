@@ -18,8 +18,8 @@
  * classe existante sans créer de nouveau code. Le détail fin est dans le
  * document `--json` (`data.status`, `error.code`).
  */
-import { errorKindOf } from '../errors.js';
-import type { ErrorKind } from '../errors.js';
+import { errorKindOf } from '../errors.ts';
+import type { ErrorKind } from '../errors.ts';
 
 export const EXIT = Object.freeze({
   OK: 0,

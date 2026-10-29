@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { chmod, lstat, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { StriartError } from '../errors.js';
+import { StriartError } from '../errors.ts';
 
 /**
  * Écriture atomique d'un fichier HORS de `.striart/` (dossier de données

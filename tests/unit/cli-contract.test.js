@@ -3,7 +3,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { constants as osConstants } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ERROR_KINDS } from '../../src/errors.js';
+import { ERROR_KINDS } from '../../src/errors.ts';
 import { detectLocale } from '../../src/cli/i18n/index.ts';
 import { fr } from '../../src/cli/i18n/fr.ts';
 import { en } from '../../src/cli/i18n/en.ts';

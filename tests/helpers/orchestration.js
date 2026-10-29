@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import { vi } from 'vitest';
 
 /**
@@ -56,7 +57,17 @@ export async function writeStriartConfig(root, config) {
   await writeFile(path.join(root, '.striartrc.json'), JSON.stringify(config));
 }
 
-/** Router mocké : fichiers prédits selon une aiguille du prompt (défaut : aucun). */
+/**
+ * Router mocké : fichiers prédits selon une aiguille du prompt. Défaut : UN
+ * fichier propre à la tâche (dérivé du prompt) — une tâche isolée, que le
+ * Router laisse tourner en parallèle. Une prédiction VIDE n'est plus « aucune
+ * collision » : le Router la juge vague (`empty-prediction`, router-vague.ts) et
+ * sérialise la tâche derrière tous les agents actifs — ce qui bloquerait un plan
+ * `parallel` (et, derrière un clone gardé après échec, jusqu'au délai d'attente).
+ */
+const isolatedFile = (prompt) =>
+  `src/isolated-${createHash('sha256').update(prompt).digest('hex').slice(0, 10)}.js`;
+
 export function mockRouter(filesByNeedle = {}) {
   vi.stubGlobal(
     'fetch',
@@ -66,7 +77,9 @@ export function mockRouter(filesByNeedle = {}) {
       const match = Object.entries(filesByNeedle).find(([needle]) => prompt.includes(needle));
       return {
         ok: true,
-        json: async () => ({ response: JSON.stringify({ files: match ? match[1] : [] }) }),
+        json: async () => ({
+          response: JSON.stringify({ files: match ? match[1] : [isolatedFile(prompt)] }),
+        }),
       };
     }),
   );

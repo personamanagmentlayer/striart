@@ -5,7 +5,7 @@
  * Lecture seule, tolérante (lignes illisibles comptées, jamais fatales).
  */
 import type { StriartConfig, UsageRecord, UsageRole } from '../types.js';
-import { StriartError } from '../errors.js';
+import { StriartError } from '../errors.ts';
 import { currentTotals, readRecords, recordTokens, utcDay } from './ledger.ts';
 import { stalePrices as findStalePrices } from './pricing.ts';
 import { resolveTokensSettings, tokensRelaxations } from './settings.ts';

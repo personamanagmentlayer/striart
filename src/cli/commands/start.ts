@@ -1,7 +1,7 @@
-import { startAgent } from '../../orchestrator.js';
+import { startAgent } from '../../orchestrator.ts';
 import { openAttendedSession } from '../../pty-host.ts';
 import type { AttendedSession } from '../../pty-host.ts';
-import { quoteForShell } from '../../terminal.js';
+import { quoteForShell } from '../../terminal.ts';
 import type { AgentMeta } from '../../types.js';
 import type { CommandModule, Ctx } from '../context.ts';
 import type { Output } from '../output.ts';

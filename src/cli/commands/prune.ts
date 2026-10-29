@@ -1,4 +1,4 @@
-import { pruneWorkspace } from '../../prune.js';
+import { pruneWorkspace } from '../../prune.ts';
 import type { CommandModule } from '../context.ts';
 
 export interface PruneInput {

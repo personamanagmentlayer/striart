@@ -112,10 +112,16 @@ export default {
 
 Les clones agents n'ont **pas de remote** : seul l'orchestrateur pousse
 (règle d'or n°1). Par défaut `autoPush: false` — l'humain valide le push.
-Avec `autoPush: true`, chaque merge vert est suivi d'un
-`git push origin <targetBranch>` ; un échec de push est journalisé mais ne
-défait pas le merge local (`pushError` dans le résultat). Même règle pour le
-push de `mainBranch` après une promotion.
+Avec `autoPush: true`, chaque merge vert est livré à `origin` : par défaut
+(`delivery: 'push'`) le SHA testé part vers `<targetBranch>` ; avec
+`delivery: 'branch'` il part vers une branche à approuver
+(`striart/<agent>/<tâche>`) et `<targetBranch>` distante n'avance jamais du fait
+de Striart — la forge (PR/MR) reste l'autorité d'approbation. La livraison se
+fait **hors du verrou principal**, jamais en force, sans invite interactive et
+sous un délai dur (`pushTimeoutMs`) ; un échec ne défait pas le merge local : il
+est rapporté (`delivery` et `pushError` dans le résultat, préfixé de son code
+`PUSH_*`). Même règle pour `mainBranch` après une promotion. Détail :
+[Configuration](configuration.md#livraison-vers-origin--autopush-delivery-délais).
 
 **Authentification du push** : depuis la 0.11 (simple-git 4), aucune
 variable `GIT_*` héritée de l'environnement n'atteint les commandes git
@@ -123,11 +129,13 @@ lancées par Striart — `GIT_SSH_COMMAND` et `GIT_ASKPASS` comprises. Le push
 s'authentifie donc par la configuration de git elle-même : un credential
 helper (`git config credential.helper …`) en HTTPS, ou `~/.ssh/config` et
 l'agent SSH en SSH. Un push qui fonctionnait grâce à une de ces variables
-échoue désormais (journalisé, merge local conservé).
+échoue désormais (rapporté, merge local conservé).
 
 `striart rollback` tient compte du push : merge non poussé → reset local
 (récupérable via reflog) ; merge déjà poussé → revert (l'historique publié
-est conservé).
+est conservé). En mode `delivery: 'branch'`, la branche cible distante n'ayant
+pas avancé, le merge compte comme non publié : reset local ; Striart ne
+supprime jamais la branche de livraison déjà poussée.
 
 ## Voir aussi
 

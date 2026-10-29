@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_CONFIG } from '../../src/config.js';
+import { DEFAULT_CONFIG } from '../../src/config.ts';
 import {
   COMPACT_INSTRUCTIONS_TEMPLATE,
   DEFAULT_INSTRUCTIONS_TEMPLATE,

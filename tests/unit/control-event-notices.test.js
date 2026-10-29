@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { ControlHub } from '../../src/control/hub.ts';
 import { describeOrchestrationEvent } from '../../src/control/event-notices.ts';
-import { emitStriartEvent } from '../../src/events.js';
+import { emitStriartEvent } from '../../src/events.ts';
 
 const EVENTS = [
   {

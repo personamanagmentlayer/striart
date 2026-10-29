@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { emitStriartEvent, onStriartEvent } from '../../src/events.js';
+import { emitStriartEvent, onStriartEvent } from '../../src/events.ts';
 
 afterEach(() => {
   vi.unstubAllGlobals();

@@ -13,7 +13,7 @@
  * défaut en config s'applique aux plans existants.
  */
 import { AGENT_NAME_RE } from '../agent-name.ts';
-import { StriartError } from '../errors.js';
+import { StriartError } from '../errors.ts';
 import { isExecutableName } from '../plan-command.ts';
 import { MAX_TIMER_MS } from '../timer-limits.ts';
 import { protectedPatternProblem } from '../protected-paths.ts';

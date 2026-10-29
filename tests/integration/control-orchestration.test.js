@@ -2,13 +2,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, utimes, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { compareAndUpdateAgentMeta, createAgent } from '../../src/clone.js';
+import { initStriart } from '../../src/init.ts';
+import { compareAndUpdateAgentMeta, createAgent } from '../../src/clone.ts';
 import { createHumanReview } from '../../src/orchestration/human-review.ts';
 import { createGroupState } from '../../src/orchestration/store.ts';
 import { collectStatus } from '../../src/status.ts';
-import { startDashboard } from '../../src/dashboard.js';
-import { striartDir } from '../../src/paths.js';
+import { startDashboard } from '../../src/dashboard.ts';
+import { striartDir } from '../../src/paths.ts';
 import { baseUrl, call, rpc, signIn, useLoopbackDashboard } from '../helpers/control-client.js';
 
 const GROUP_ID = 'review-0123456789ab';
@@ -232,7 +232,8 @@ describe('Control Protocol — revues humaines, orchestration, tickets illisible
     it('le tableau de bord n’offre aucune action sur un clone en suppression', async () => {
       const page = await fetch(`${baseUrl(server)}/`, { headers: { Cookie: cookie } });
       const html = await page.text();
-      expect(html).toContain("a.status === 'REMOVING'");
+      // Le script servi est compacté : on cherche la garde, pas sa mise en forme.
+      expect(html).toMatch(/a\.status\s*===\s*['"]REMOVING['"]/);
     });
 
     it('le script de la page est syntaxiquement valide (revues, orchestration, tickets illisibles)', async () => {

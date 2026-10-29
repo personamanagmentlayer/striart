@@ -3,9 +3,9 @@ import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { simpleGit } from 'simple-git';
 import { backdateDir, createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { createAgent, readRegistry, reuseAgent } from '../../src/clone.js';
-import { runTask, stopAgent } from '../../src/orchestrator.js';
+import { initStriart } from '../../src/init.ts';
+import { createAgent, readRegistry, reuseAgent } from '../../src/clone.ts';
+import { runTask, stopAgent } from '../../src/orchestrator.ts';
 
 async function setConfig(root, config) {
   await writeFile(path.join(root, '.striartrc.json'), JSON.stringify(config));

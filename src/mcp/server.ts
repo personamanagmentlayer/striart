@@ -1,6 +1,6 @@
 import { boundedLines } from '../line-reader.ts';
-import { StriartError } from '../errors.js';
-import { logger } from '../logger.js';
+import { StriartError } from '../errors.ts';
+import { logger } from '../logger.ts';
 import {
   EXT_TASKS,
   EXT_UI,

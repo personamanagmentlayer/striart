@@ -55,8 +55,8 @@ import { readFileSync, rmSync } from 'node:fs';
 import { open, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { StriartError } from './errors.js';
-import { logger } from './logger.js';
+import { StriartError } from './errors.ts';
+import { logger } from './logger.ts';
 import type { BreakContext, LockFileRead } from './break-lock.ts';
 import {
   BREAK_STALE_MS,
@@ -70,6 +70,9 @@ import {
 } from './break-lock.ts';
 
 export const STATE_LOCK_FILE = 'state.lock';
+
+/** Nom du dossier d'état racine d'un dépôt (voir `striartDir`). */
+const STATE_ROOT_DIR_NAME = '.striart';
 
 /** Délai d'acquisition par défaut : un détenteur légitime tient quelques ms. */
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -124,7 +127,7 @@ process.on('exit', () => {
  * complétion shell écrit aussi des fichiers d'état.
  */
 async function isAlive(pid: unknown): Promise<boolean> {
-  const { isProcessAlive } = await import('./process-tree.js');
+  const { isProcessAlive } = await import('./process-tree.ts');
   return isProcessAlive(pid as number);
 }
 
@@ -307,9 +310,27 @@ async function acquireFile(file: string, deadline: number): Promise<string> {
       handle = await open(file, 'wx');
     } catch (error) {
       if (error.code === 'ENOENT') {
+        const dir = path.dirname(file);
+        // Seul l'absence du dossier d'état RACINE (`.striart/`) veut dire « pas initialisé ». Le
+        // verrou d'un sous-dossier (`reviews/`, `collab/`…) y vit aussi : son absence veut dire
+        // « rien n'a encore été écrit là », pas « lance striart init » (hint qui ne règle rien).
+        if (path.basename(dir) === STATE_ROOT_DIR_NAME) {
+          throw new StriartError(
+            `Dossier d'état introuvable (${dir}) : lance d'abord "striart init".`,
+            {
+              code: 'NOT_INITIALIZED',
+              hint: 'striart init',
+              details: { root: path.dirname(dir) },
+            },
+          );
+        }
         throw new StriartError(
-          `Dossier d'état introuvable (${path.dirname(file)}) : lance d'abord "striart init".`,
-          { code: 'NOT_INITIALIZED', hint: 'striart init', details: { root: path.dirname(file) } },
+          `Verrou d'état impossible à créer (${file}) : le dossier n'existe pas.`,
+          {
+            code: 'STATE_LOCK_FAILED',
+            hint: 'striart doctor',
+            details: { lockFile: file, cause: 'ENOENT' },
+          },
         );
       }
       if (error.code !== 'EEXIST' && !isTransientWindowsError(error)) {

@@ -51,10 +51,10 @@ vi.mock('simple-git', async (importOriginal) => {
 });
 
 const { createTempRepo } = await import('../helpers/temp-repo.js');
-const { initStriart } = await import('../../src/init.js');
-const { createAgent } = await import('../../src/clone.js');
+const { initStriart } = await import('../../src/init.ts');
+const { createAgent } = await import('../../src/clone.ts');
 const { mergeAgentCommit, promoteStaging, rollbackLastMerge } =
-  await import('../../src/orchestrator.js');
+  await import('../../src/orchestrator.ts');
 
 const GATE_OK = 'node -e "process.exit(0)"';
 const git = (cwd, ...args) => execa('git', ['-C', cwd, ...args]).then((r) => r.stdout.trim());

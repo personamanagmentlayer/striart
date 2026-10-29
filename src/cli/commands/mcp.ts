@@ -1,4 +1,4 @@
-import { logMcpScope, resolveMcpCaller, startMcpServer } from '../../mcp.js';
+import { logMcpScope, resolveMcpCaller, startMcpServer } from '../../mcp.ts';
 import type { CommandModule } from '../context.ts';
 
 export interface McpInput {

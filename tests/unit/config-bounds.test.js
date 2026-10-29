@@ -9,9 +9,9 @@
  *    arme un délai de 1 ms (le Test Gate ou la session était tué aussitôt).
  */
 import { describe, expect, it, vi } from 'vitest';
-import { DEFAULT_CONFIG, validateConfig } from '../../src/config.js';
-import { StriartError } from '../../src/errors.js';
-import { logger } from '../../src/logger.js';
+import { DEFAULT_CONFIG, validateConfig } from '../../src/config.ts';
+import { StriartError } from '../../src/errors.ts';
+import { logger } from '../../src/logger.ts';
 import { parsePlan } from '../../src/plan.ts';
 import { collectRelaxations } from '../../src/doctor-relaxations.ts';
 

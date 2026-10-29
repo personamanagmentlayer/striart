@@ -147,6 +147,9 @@ réglages dans [Configuration](configuration.md#orchestration-et-collab--modes-d
   le champ fautifs ; en `--json`, `error.details.reason` en donne la cause
   par un sous-code stable (`PROMPT_MISSING`, `AFTER_FORWARD`,
   `DUPLICATE_ID`… — liste dans [Commandes](commandes.md#sortie-machine----json)).
+  Un plan sans ligne `version:` donne `VERSION_MISSING` (attendu :
+  `version: 1` ou `version: 2`), un plan d'une autre version
+  `UNSUPPORTED_VERSION`.
 
 Exemple complet et commenté :
 [`examples/plan.example.yaml`](../../examples/plan.example.yaml).

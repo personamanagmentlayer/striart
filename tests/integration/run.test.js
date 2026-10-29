@@ -1,17 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
-import { readRegistry } from '../../src/clone.js';
+import { initStriart } from '../../src/init.ts';
+import { readRegistry } from '../../src/clone.ts';
 import {
   getQueueDashboard,
   retryQueue,
   runTask,
   slugifyPrompt,
   stopAgent,
-} from '../../src/orchestrator.js';
-import { readLocks } from '../../src/locks.js';
-import { enqueueTask, readQueue } from '../../src/queue.js';
-import { readJson, writeJsonAtomic } from '../../src/json-file.js';
+} from '../../src/orchestrator.ts';
+import { readLocks } from '../../src/locks.ts';
+import { enqueueTask, readQueue } from '../../src/queue.ts';
+import { readJson, writeJsonAtomic } from '../../src/json-file.ts';
 import path from 'node:path';
 
 function mockRouter(filesByPrompt) {

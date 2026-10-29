@@ -11,8 +11,8 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { execa } from 'execa';
-import { initStriart } from '../../src/init.js';
-import { recordMergeStateChanged, withMainLock } from '../../src/lock.js';
+import { initStriart } from '../../src/init.ts';
+import { recordMergeStateChanged, withMainLock } from '../../src/lock.ts';
 
 const git = (cwd, ...args) => execa('git', ['-C', cwd, ...args]).then((r) => r.stdout.trim());
 

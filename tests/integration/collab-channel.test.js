@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readFile, stat, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createTempRepo } from '../helpers/temp-repo.js';
-import { initStriart } from '../../src/init.js';
+import { initStriart } from '../../src/init.ts';
 import {
   closeCollabGroup,
   createCollabGroup,
