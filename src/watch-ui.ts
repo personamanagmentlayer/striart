@@ -1866,6 +1866,14 @@ export async function runWatchUi(
     patchConsole: false,
     maxFps: 12,
     incrementalRendering: true,
+    // `caps.plain` a déjà écarté le cas non interactif (répartition ci-dessus, et
+    // src/cli/caps.ts pour la détection CI/TTY) : arrivé ici, le mode interactif
+    // d'Ink doit s'appliquer. Sans ce `true`, Ink détecte lui-même l'environnement
+    // via `is-in-ci` et désactive tout rendu incrémental dès que CI (ou un outil
+    // comme vitest) positionne CI=1 dans le process — l'écran ne s'écrit alors
+    // qu'au démontage, jamais en continu (vu en CI : les tests d'écran simulé,
+    // qui attendent un rendu immédiat, expiraient silencieusement).
+    interactive: true,
   });
   const onAbort = () => instance.unmount();
   signal?.addEventListener('abort', onAbort, { once: true });
