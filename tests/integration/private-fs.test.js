@@ -62,6 +62,26 @@ async function sddlOf(target) {
   return (raw[0] === 0xff ? raw.subarray(2) : raw).toString('utf16le').match(/D:[^\r\n]*/)?.[0];
 }
 
+/**
+ * Grants d'une SDDL, en ignorant le bruit de forme que Windows peut ajouter
+ * sans changer QUI a accès : le marqueur « hérité » (ID) d'une ACE, et les
+ * drapeaux de contrôle de la DACL (P protégée, AI auto-héritée, AR). Isoler
+ * un arbre de travail de la propagation (`icacls .../inheritance:d`) le
+ * touche directement — il peut donc gagner ces marqueurs — sans jamais lui
+ * accorder ou retirer un droit : c'est cela que « garde son ACL » vérifie.
+ */
+function sddlGrantsOf(sddl) {
+  const match = /^D:[A-Z]*((?:\([^)]*\))*)$/.exec(sddl?.trim() ?? '');
+  if (!match) return sddl;
+  return [...match[1].matchAll(/\(([^)]*)\)/g)]
+    .map((m) => {
+      const parts = m[1].split(';');
+      parts[1] = parts[1].replace(/ID/g, '');
+      return parts.join(';');
+    })
+    .join('|');
+}
+
 describe('hardenStriartDir — migration de l’existant', () => {
   it('un .striart/ ouvert est constaté ouvert, puis resserré, puis constaté privé', async () => {
     const base = await legacyStriart();
@@ -122,7 +142,10 @@ describe('hardenStriartDir — migration de l’existant', () => {
     const before = WIN ? await sddlOf(clonedFile) : (await stat(clonedFile)).mode;
     await hardenStriartDir(root);
     const after = WIN ? await sddlOf(clonedFile) : (await stat(clonedFile)).mode;
-    expect(after).toBe(before);
+    // Windows : seuls les GRANTS comptent (qui a accès) — isoler l'arbre de
+    // travail touche le fichier directement et peut lui ajouter des drapeaux
+    // de forme (protégée, auto-héritée) sans changer qui y a accès.
+    expect(WIN ? sddlGrantsOf(after) : after).toBe(WIN ? sddlGrantsOf(before) : before);
     // Le contenu du clone reste lisible pour l'utilisateur (l'agent y travaille).
     expect(await readFile(clonedFile, 'utf8')).toBe('clone');
   });
