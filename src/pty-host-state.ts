@@ -41,14 +41,19 @@ interface PidFileContent {
 /**
  * Dossier d'état de l'hôte d'un agent (PID file, demande d'arrêt, socket
  * POSIX). Le binaire natif exige que le socket d'attache soit exactement
- * `<ce dossier>/attach.sock` (PTY_ENDPOINT_TOO_LONG / USAGE sinon) : repli
- * vers un dossier privé par utilisateur si le chemin naturel sous
+ * `<ce dossier>/attach.sock` (PTY_ENDPOINT_TOO_LONG / USAGE sinon) ET que
+ * `--state-dir` se termine EXACTEMENT par le nom de l'agent
+ * (`cli.rs::parse_pty_host` : `state_dir.file_name() == agent`, sinon USAGE
+ * — « --state-dir: expected an absolute path ending with the agent name ») :
+ * repli vers un dossier privé par utilisateur si le chemin naturel sous
  * `.striart/pty/` ferait dépasser la limite des sockets Unix (104 octets
  * macOS / 108 Linux) — observé en CI sur un dépôt temporaire profondément
- * imbriqué (macOS). Windows n'a pas cette limite (named pipe, espace de noms
- * global) : toujours le chemin naturel.
+ * imbriqué (macOS) — GARDE le nom de l'agent en dernier segment, un
+ * sous-dossier de hash placé AVANT lui désambiguïsant le dépôt. Windows n'a
+ * pas cette limite (named pipe, espace de noms global) : toujours le chemin
+ * naturel.
  */
-/** Longueur minimale du hash de repli en deçà de laquelle deux agents risqueraient de collider. */
+/** Longueur minimale du hash de repli en deçà de laquelle deux dépôts risqueraient de collider. */
 const MIN_FALLBACK_HASH_HEX = 8;
 
 export function ptyHostStateDir(root: string, agent: string): string {
@@ -61,12 +66,14 @@ export function ptyHostStateDir(root: string, agent: string): string {
   const tmp = privateTmpDir();
   // `privateTmpDir()` dépend de `os.tmpdir()`, dont la longueur varie bien plus
   // que prévu selon l'OS (macOS : `/private/var/folders/<aléatoire>/T`, déjà
-  // ~60 octets à lui seul — observé en CI) : tronquer le hash à 24 caractères
-  // sans tenir compte de cette longueur produisait parfois un chemin de repli
-  // LUI-MÊME trop long (`PTY_ENDPOINT_TOO_LONG` côté binaire natif), en
-  // silence côté JS. La taille du hash est donc dérivée de la marge
-  // RÉELLEMENT disponible sous ce `tmp`, jamais fixée à l'avance.
-  const fixed = '/pty-'.length + '/attach.sock'.length;
+  // ~60 octets à lui seul — observé en CI) : tronquer le hash à une taille
+  // FIXE sans tenir compte de cette longueur, ou (erreur précédente de ce
+  // module) nommer le dossier de repli autrement que par l'agent, produisait
+  // un `--state-dir` que le binaire natif refuse (USAGE), en silence côté JS.
+  // La taille du hash est donc dérivée de la marge RÉELLEMENT disponible sous
+  // ce `tmp`, jamais fixée à l'avance ; le nom de l'agent reste le dernier
+  // segment, imposé par le contrat natif.
+  const fixed = '/s'.length + '/'.length + Buffer.byteLength(agent) + '/attach.sock'.length;
   const budget = MAX_UNIX_SOCKET_PATH - Buffer.byteLength(tmp) - fixed;
   if (budget < MIN_FALLBACK_HASH_HEX) {
     throw new StriartError(
@@ -78,7 +85,7 @@ export function ptyHostStateDir(root: string, agent: string): string {
       },
     );
   }
-  return path.join(tmp, `pty-${hash.slice(0, budget)}`);
+  return path.join(tmp, `s${hash.slice(0, budget)}`, agent);
 }
 
 export function ptyHostPidFilePath(root: string, agent: string): string {
