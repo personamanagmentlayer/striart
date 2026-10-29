@@ -605,6 +605,10 @@ const ERRORS: Record<string, (d: Record<string, unknown>) => string> = {
   PTY_HOST_ALREADY_RUNNING: (d) =>
     `a terminal host already runs for agent "${str(d.agent)}": attach to it instead of starting another.`,
   PTY_HOST_UNKNOWN_AGENT: (d) => `unknown agent "${str(d.agent)}": not in the registry.`,
+  PTY_STATE_PATH_TOO_LONG: (d) =>
+    `cannot build a short enough attach socket path for "${str(d.agent)}": the temporary directory itself (${str(d.tmpDirBytes)} bytes) is too long. Set TMPDIR (POSIX) to a shorter path before retrying.`,
+  ACP_STATE_PATH_TOO_LONG: (d) =>
+    `cannot build a short enough ACP socket path for "${str(d.agent)}": the temporary directory itself (${str(d.tmpDirBytes)} bytes) is too long. Set TMPDIR (POSIX) to a shorter path before retrying.`,
   PTY_SHELL_INVALID: (d) => {
     if (d.reason === 'RELATIVE_PATH')
       return 'pty.shell is a relative path: use a bare name (looked up in PATH) or an absolute path.';

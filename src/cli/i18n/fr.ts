@@ -55,6 +55,10 @@ const FR_ERRORS: Record<string, (d: Record<string, unknown>) => string | null> =
     `le verrou d'état (${frStr(d.lockFile)}) n'a pas pu être ${typeof d.operation === 'string' ? `manipulé (${d.operation}, ${frStr(d.cause)})` : `créé (${frStr(d.cause)})`} : vérifie les droits sur .striart/.`,
   PTY_HOST_ALREADY_RUNNING: (d) =>
     `un hôte de terminal tient déjà l'agent "${frStr(d.agent)}" : attache-toi à lui au lieu d'en lancer un second.`,
+  PTY_STATE_PATH_TOO_LONG: (d) =>
+    `impossible de construire un chemin de socket d'attache assez court pour "${frStr(d.agent)}" : le dossier temporaire lui-même ("${frStr(d.tmpDirBytes)}" octets) est trop long. Fixe TMPDIR (POSIX) sur un chemin plus court avant de relancer.`,
+  ACP_STATE_PATH_TOO_LONG: (d) =>
+    `impossible de construire un chemin de socket ACP assez court pour "${frStr(d.agent)}" : le dossier temporaire lui-même ("${frStr(d.tmpDirBytes)}" octets) est trop long. Fixe TMPDIR (POSIX) sur un chemin plus court avant de relancer.`,
   PTY_HOST_SPAWN_FAILED: (d) => {
     const log = d.logFile ? ` (journal : ${frStr(d.logFile)})` : '';
     if (d.reason === 'TIMEOUT')

@@ -51,6 +51,9 @@ export const acpHostLogPath = (root: string, agent: string) =>
  * d'agent : pas de collision). POSIX : sous `.striart/acp/<agent>/`, ou dans
  * le dossier temporaire si ce chemin dépasse la limite des sockets Unix.
  */
+/** Longueur minimale du hash de repli en deçà de laquelle deux agents risqueraient de collider. */
+const MIN_FALLBACK_HASH_HEX = 8;
+
 export function acpHostSocketPath(root: string, agent: string): string {
   validateAgentName(agent);
   const hash = createHash('sha256')
@@ -62,7 +65,26 @@ export function acpHostSocketPath(root: string, agent: string): string {
   // Repli : un dossier PRIVÉ par utilisateur (jamais un nom prévisible dans
   // le dossier temporaire partagé, que n'importe quel utilisateur local peut
   // squatter — S-M9). Voir assertSocketDirPrivate.
-  return path.join(privateTmpDir(), `acp-${hash.slice(0, 24)}.sock`);
+  //
+  // La longueur du hash est dérivée de la marge RÉELLEMENT disponible sous
+  // `privateTmpDir()`, jamais fixée à l'avance : `os.tmpdir()` est bien plus
+  // long que prévu sur certains OS (macOS : `/private/var/folders/<aléatoire>/T`,
+  // déjà ~60 octets) — un hash tronqué à une taille fixe pouvait produire un
+  // chemin de repli LUI-MÊME trop long pour un socket Unix, en silence.
+  const tmp = privateTmpDir();
+  const fixed = '/acp-'.length + '.sock'.length;
+  const budget = MAX_UNIX_SOCKET_PATH - Buffer.byteLength(tmp) - fixed;
+  if (budget < MIN_FALLBACK_HASH_HEX) {
+    throw new StriartError(
+      `Cannot build a short enough ACP socket path for "${agent}": the temporary directory itself ("${tmp}") is too long.`,
+      {
+        code: 'ACP_STATE_PATH_TOO_LONG',
+        details: { agent, tmpDirBytes: Buffer.byteLength(tmp) },
+        hint: 'Set TMPDIR (POSIX) to a shorter path before running striart, then retry.',
+      },
+    );
+  }
+  return path.join(tmp, `acp-${hash.slice(0, budget)}.sock`);
 }
 
 /**

@@ -401,8 +401,14 @@ async function mapLimit<T>(items: readonly T[], limit: number, task: (item: T) =
  *     corriger — isolement des arbres de travail : ils ne doivent JAMAIS
  *     recevoir la propagation d'héritage de `.striart/` (parcours complet de
  *     clones, hardlinks partagés avec le dépôt). `/inheritance:d` convertit les
- *     ACE héritées en explicites avec les mêmes drapeaux d'héritage : leurs
- *     enfants ne changent pas d'accès.
+ *     ACE héritées en explicites avec les mêmes drapeaux d'héritage, sans
+ *     changer l'accès ; appliqué avec `/T /C` (tout l'arbre, continue malgré
+ *     une entrée illisible), car protéger seulement le dossier de l'arbre de
+ *     travail ne suffit pas à arrêter la propagation Windows observée en CI
+ *     jusqu'à ses descendants (constaté : un fichier de clone deux niveaux
+ *     sous `agents/` recevait quand même l'ACE héritée de la racine après
+ *     B — chaque niveau est donc protégé individuellement, sans dépendre de
+ *     l'arrêt de propagation au premier dossier protégé).
  *  B. Racine : DACL protégée, ACE héritable pour l'utilisateur seul (`/reset`
  *     d'abord seulement si des ACE EXPLICITES existent — DACL par défaut d'un
  *     jeton élevé). Windows propage aux enfants héritants.
@@ -426,7 +432,9 @@ async function windowsScan(base: string, fix: boolean, report: PrivacyReport): P
     readSddlMany(base, { children: true, recursive: false }),
     ...(fix
       ? worktrees.map((dir) =>
-          execa(windowsTool('icacls.exe'), [dir, '/inheritance:d'], { windowsHide: true }),
+          execa(windowsTool('icacls.exe'), [dir, '/inheritance:d', '/T', '/C'], {
+            windowsHide: true,
+          }),
         )
       : []),
   ]);

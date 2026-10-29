@@ -8,6 +8,7 @@
 import { createHash } from 'node:crypto';
 import { open, readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { StriartError } from './errors.ts';
 import { MAX_UNIX_SOCKET_PATH, privateTmpDir, ptyDir } from './paths.ts';
 import { checkProcessInstance } from './process-info.ts';
 import type { ExpectedStriartProcess } from './process-info.ts';
@@ -47,6 +48,9 @@ interface PidFileContent {
  * imbriqué (macOS). Windows n'a pas cette limite (named pipe, espace de noms
  * global) : toujours le chemin naturel.
  */
+/** Longueur minimale du hash de repli en deçà de laquelle deux agents risqueraient de collider. */
+const MIN_FALLBACK_HASH_HEX = 8;
+
 export function ptyHostStateDir(root: string, agent: string): string {
   const inRepo = path.join(ptyDir(root), agent);
   if (process.platform === 'win32') return inRepo;
@@ -54,7 +58,27 @@ export function ptyHostStateDir(root: string, agent: string): string {
   const hash = createHash('sha256')
     .update(`${path.resolve(root)}\0${agent}`)
     .digest('hex');
-  return path.join(privateTmpDir(), `pty-${hash.slice(0, 24)}`);
+  const tmp = privateTmpDir();
+  // `privateTmpDir()` dépend de `os.tmpdir()`, dont la longueur varie bien plus
+  // que prévu selon l'OS (macOS : `/private/var/folders/<aléatoire>/T`, déjà
+  // ~60 octets à lui seul — observé en CI) : tronquer le hash à 24 caractères
+  // sans tenir compte de cette longueur produisait parfois un chemin de repli
+  // LUI-MÊME trop long (`PTY_ENDPOINT_TOO_LONG` côté binaire natif), en
+  // silence côté JS. La taille du hash est donc dérivée de la marge
+  // RÉELLEMENT disponible sous ce `tmp`, jamais fixée à l'avance.
+  const fixed = '/pty-'.length + '/attach.sock'.length;
+  const budget = MAX_UNIX_SOCKET_PATH - Buffer.byteLength(tmp) - fixed;
+  if (budget < MIN_FALLBACK_HASH_HEX) {
+    throw new StriartError(
+      `Cannot build a short enough attach socket path for "${agent}": the temporary directory itself ("${tmp}") is too long.`,
+      {
+        code: 'PTY_STATE_PATH_TOO_LONG',
+        details: { agent, tmpDirBytes: Buffer.byteLength(tmp) },
+        hint: 'Set TMPDIR (POSIX) to a shorter path before running striart, then retry.',
+      },
+    );
+  }
+  return path.join(tmp, `pty-${hash.slice(0, budget)}`);
 }
 
 export function ptyHostPidFilePath(root: string, agent: string): string {
