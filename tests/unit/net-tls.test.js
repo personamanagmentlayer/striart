@@ -97,18 +97,27 @@ describe('net — CA d’entreprise et TLS minimal', () => {
     'network.caFile ajoute la CA : un serveur signé par elle est accepté, puis refusé après reset',
     async (ctx) => {
       if (!pki) return ctx.skip();
-      const server = https.createServer({ key: pki.key, cert: pki.cert }, (_q, r) => r.end('ok'));
+      let server = https.createServer({ key: pki.key, cert: pki.cert }, (_q, r) => r.end('ok'));
       await new Promise((r) => server.listen(0, '127.0.0.1', r));
-      const url = `https://localhost:${server.address().port}/`;
       try {
-        const untrusted = await fetch(url).catch((e) => e);
+        const untrusted = await fetch(`https://localhost:${server.address().port}/`).catch(
+          (e) => e,
+        );
         expect(untrusted.cause?.code).toMatch(/SELF_SIGNED|UNABLE_TO_VERIFY|UNABLE_TO_GET_ISSUER/);
 
         await applyNetworkSettings(policyWith({ caFile: pki.caFile }));
-        expect(await (await fetch(url)).text()).toBe('ok');
+        expect(await (await fetch(`https://localhost:${server.address().port}/`)).text()).toBe(
+          'ok',
+        );
 
         resetNetState();
-        const after = await fetch(url).catch((e) => e);
+        // Un nouveau port (pas juste resetNetState()) : `fetch` met en cache le ticket de
+        // session TLS par host:port et une reprise de session ne revérifie pas le certificat —
+        // réutiliser le même port donnerait une fausse réussite même si le reset était un no-op.
+        await new Promise((r) => server.close(r));
+        server = https.createServer({ key: pki.key, cert: pki.cert }, (_q, r) => r.end('ok'));
+        await new Promise((r) => server.listen(0, '127.0.0.1', r));
+        const after = await fetch(`https://localhost:${server.address().port}/`).catch((e) => e);
         expect(after.cause?.code).toBeDefined();
       } finally {
         await new Promise((r) => server.close(r));
