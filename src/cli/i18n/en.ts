@@ -116,6 +116,9 @@ const PLAN_REASONS: Record<string, (d: Record<string, unknown>) => string> = {
   KIND_UNKNOWN: (d) =>
     `${planTask(d)}unknown task mode ${str(d.kind)} (expected: task, review, pipeline, race, team).`,
   AFTER_INVALID: (d) => `${planTask(d)}"after" must be an id or a non-empty list of distinct ids.`,
+  RESOURCES_INVALID: (d) =>
+    `${planTask(d)}"resources" must be a list of distinct non-empty names (at most ${str(d.max)} characters each).`,
+  RESOURCES_TOO_MANY: (d) => `${planTask(d)}at most ${str(d.max)} declared resources.`,
   AGENT_INVALID: (d) =>
     `${planTask(d)}"agent" is not a valid agent name (letters, digits, - and _, at most ${str(d.max)} characters).`,
   COMMAND_AUTONOMOUS_CONFLICT: (d) =>

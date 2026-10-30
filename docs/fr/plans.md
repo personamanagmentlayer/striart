@@ -109,7 +109,25 @@ dépendances, `concurrency` bornée par `orchestration.maxConcurrency`) ;
 `--on-failure` les surchargent à l'application. **Niveau tâche** : `id`,
 `mode` (`task` par défaut, `review`, `race`, `team`, `pipeline`), `agent`,
 `after` (un id ou une liste ; un id défini plus haut, ou une référence
-d'exécution — agent ou tâche vivant, attendu avec délai borné).
+d'exécution — agent ou tâche vivant, attendu avec délai borné), `resources`
+(tous les modes — voir plus bas).
+
+### Ressources hors-Git (ordonnancement déterministe)
+
+`resources` : une liste optionnelle de 10 noms distincts et opaques au plus
+(80 caractères chacun au plus — `db`, `port:5432`, `s3:uploads`, tout ce qui
+a un sens pour toi ; Striart ne les interprète jamais comme un chemin ni une
+commande). Deux nœuds qui déclarent le MÊME nom ne tournent jamais en même
+temps, même sans `after` entre eux, sans collision prédite par le Router, et
+même en mode `parallel` avec une `concurrency` qui les laisserait sinon se
+chevaucher. Un conflit ne fait que RETARDER le lancement d'un nœud (revérifié
+à chaque passage de l'ordonnanceur) ; ce n'est jamais un échec ni un statut
+`SKIPPED` — le nœud tourne dès que la ressource se libère. C'est la garantie
+déterministe que demande la conception de
+[run-manager-design.md](conception-run-manager.md) : quoi que prédise (ou
+manque) le Router, une ressource externe partagée (base de données, port,
+fichier verrouillé, service externe) n'est jamais touchée par deux nœuds à
+la fois.
 
 Une application `version: 2` est **persistée** au fil de l'eau comme un run
 (`.striart/orchestration/runs/<id>.json`, pure observabilité). Interrompue

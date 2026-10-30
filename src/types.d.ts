@@ -1250,6 +1250,13 @@ interface PlanNodeBase {
   agent: string | null;
   /** Dépendances : ids de plan définis plus haut, ou références d'exécution (agent/tâche vivants). */
   after: string[];
+  /**
+   * Ressources hors-Git (lot O, priorité 4) : base, port, fichier verrouillé,
+   * service externe — noms opaques. Deux nœuds qui en partagent un ne
+   * tournent jamais en même temps (src/orchestration/scheduler.ts), même
+   * sans dépendance ni collision prédite par le Router.
+   */
+  resources: string[];
 }
 
 export type PlanNode =

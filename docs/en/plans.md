@@ -118,7 +118,24 @@ the run (same tasks, same order) and refuses a run still owned by a live
 process, or a `version: 1` plan (no run state exists for it).
 **Task level**: `id`, `mode` (`task` by default, `review`, `race`, `team`,
 `pipeline`), `agent`, `after` (an id or a list; an id defined earlier, or a
-runtime reference — a live agent or task, awaited with a bounded timeout).
+runtime reference — a live agent or task, awaited with a bounded timeout),
+`resources` (any node kind — see below).
+
+### Non-Git resources (deterministic scheduling)
+
+`resources`: an optional list of up to 10 distinct, opaque names (at most 80
+characters each — `db`, `port:5432`, `s3:uploads`, anything meaningful to
+you; Striart never interprets them as a path or a command). Two nodes that
+declare the **same** name never run at the same time, even with no `after`
+between them, no collision predicted by the Router, and even in `parallel`
+mode with a `concurrency` that would otherwise let them overlap. A conflict
+only *delays* a node's launch (checked again on every scheduler tick); it is
+never a failure and never a `SKIPPED` status — the node runs as soon as the
+resource frees up. This is the deterministic guarantee the design in
+[run-manager-design.md](run-manager-design.md) calls for: whatever the
+Router predicts (or misses), a shared external resource (a database, a
+port, a locked file, an external service) is never touched by two nodes at
+once.
 
 | Mode | Specific fields | Bounds |
 |---|---|---|

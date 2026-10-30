@@ -349,6 +349,14 @@ export async function runPlanV2({
   };
 
   for (;;) {
+    // Ressources hors-Git (lot O, priorité 4) : occupées par tout nœud EN COURS
+    // (recalculé à chaque passage — jamais mémorisé, un nœud qui finit libère
+    // sa ressource immédiatement). Un conflit retarde le lancement, il ne
+    // l'échoue ni ne le saute : le nœud repasse à l'itération suivante.
+    const busyResources = new Set<string>();
+    for (const idx of running.keys()) {
+      for (const r of plan.tasks[idx].resources) busyResources.add(r);
+    }
     for (let i = 0; i < plan.tasks.length; i += 1) {
       if (results[i] || running.has(i)) continue;
       if (signal?.aborted) {
@@ -365,8 +373,12 @@ export async function runPlanV2({
         continue;
       }
       if (!local.every((d) => results[d])) continue;
+      if (plan.tasks[i].resources.some((r) => busyResources.has(r))) continue;
       if (running.size >= concurrency) break;
       launch(i);
+      // Pris en compte tout de suite : un nœud plus loin dans ce même passage
+      // qui partage la ressource ne doit pas être lancé à côté.
+      for (const r of plan.tasks[i].resources) busyResources.add(r);
     }
     if (running.size === 0) break;
     await Promise.race(running.values());
