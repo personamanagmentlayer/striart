@@ -25,6 +25,7 @@
 
 ## Autres documents
 
+- [Conception du Run Manager (proposition)](conception-run-manager.md) — non implémenté : un Run Manager durable, des exécutions reprenables, un dossier de preuves, un Planner, un Scheduler déterministe, et l'ordre de réalisation.
 - [SECURITY.md](../../SECURITY.md) — modèle de menace et frontières de confiance.
 - [CONTRIBUTING.md](../../CONTRIBUTING.md) — guide contributeur.
 - [CHANGELOG.md](../../CHANGELOG.md) — historique des versions.

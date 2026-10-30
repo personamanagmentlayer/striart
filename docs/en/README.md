@@ -25,6 +25,7 @@
 
 ## Other documents
 
+- [Run Manager design (proposal)](run-manager-design.md) — not implemented: a durable Run Manager, resumable executions, an evidence bundle, a Planner, a deterministic Scheduler, and the build order.
 - [SECURITY.md](../../SECURITY.md) — threat model and trust boundaries.
 - [CONTRIBUTING.md](../../CONTRIBUTING.md) — contributor guide.
 - [CHANGELOG.md](../../CHANGELOG.md) — version history.
