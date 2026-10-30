@@ -1516,6 +1516,8 @@ export interface OrchestrationRunState {
   id: string;
   mode: OrchestrationMode;
   concurrency: number;
+  /** Politique d'échec EFFECTIVE de ce run (overrides déjà résolus) — reprise fidèle sans reconfig. */
+  onFailure: PlanFailurePolicy;
   status: 'running' | 'done' | 'interrupted';
   nodes: Array<{
     id: string | null;
@@ -1523,6 +1525,13 @@ export interface OrchestrationRunState {
     state: 'pending' | 'running' | 'done' | 'skipped';
     status: OrchestrationStatus | null;
     agent: string | null;
+    /**
+     * Résultat complet du nœud une fois `state` à `done`/`skipped` — jamais
+     * recalculé, relu tel quel par `striart plan --resume` pour ne jamais
+     * relancer une tâche déjà terminée (merge compris). `null` tant que le
+     * nœud n'a pas fini — y compris après un crash en plein `running`.
+     */
+    result: OrchestrationNodeResult | null;
   }>;
   pid: number;
   startedAt: string;

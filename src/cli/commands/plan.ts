@@ -20,6 +20,8 @@ export interface PlanInput {
   mode?: 'sequential' | 'parallel' | null;
   concurrency?: number | null;
   onFailure?: 'stop' | 'skip-dependents' | null;
+  /** Plan v2 (Run Manager) : reprend un run interrompu plutôt que d'en créer un. */
+  resume?: string | null;
 }
 
 type PlanResult = Awaited<ReturnType<typeof applyPlan>>;
@@ -163,7 +165,14 @@ export async function executePlanText(
     file,
     dryRun,
     overrides = {},
-  }: { text: string; file: string; dryRun: boolean; overrides?: PlanOverrides },
+    resume = null,
+  }: {
+    text: string;
+    file: string;
+    dryRun: boolean;
+    overrides?: PlanOverrides;
+    resume?: string | null;
+  },
 ) {
   const root = await ctx.repoRoot();
   const sessions: Record<string, AttendedSession> = {};
@@ -184,6 +193,7 @@ export async function executePlanText(
       signal: AbortSignal.any([ctx.signal, planAbort.signal]),
       onProgress: progress.render,
       overrides,
+      resume: resume ? { runId: resume } : null,
     }),
   );
   await progress.settle();
@@ -350,6 +360,7 @@ export const plan: CommandModule<PlanInput, PlanData> = {
         concurrency: input.concurrency ?? null,
         onFailure: input.onFailure ?? null,
       },
+      resume: input.resume ?? null,
     });
   },
 

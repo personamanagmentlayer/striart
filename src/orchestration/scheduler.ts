@@ -19,6 +19,7 @@
 import { readRegistry } from '../clone.ts';
 import { StriartError } from '../errors.ts';
 import { logger } from '../logger.ts';
+import { isProcessAlive } from '../process-tree.ts';
 import { removeTask, readQueue } from '../queue.ts';
 import { DEFAULT_PROFILE, resolveAgentProfile } from '../session.ts';
 import { runAutonomousTask, runTask } from '../orchestrator.ts';
@@ -26,6 +27,7 @@ import type {
   MergeResult,
   OrchestrationMode,
   OrchestrationNodeResult,
+  OrchestrationRunState,
   OrchestrationStatus,
   PlanFailurePolicy,
   PlanNode,
@@ -37,7 +39,13 @@ import { runRaceNode } from './race.ts';
 import { nodeResult } from './result.ts';
 import { runReviewNode } from './review.ts';
 import { resolveCollabSettings, resolveOrchestrationSettings } from './settings.ts';
-import { createRunState, finishRunState, updateRunNode } from './store.ts';
+import {
+  createRunState,
+  finishRunState,
+  loadRunState,
+  reopenRunState,
+  updateRunNode,
+} from './store.ts';
 import { runTeamNode } from './team.ts';
 import { emit, report } from './unit.ts';
 import type { AgentInfo, OrchestrationContext, ProgressEvent } from './unit.ts';
@@ -118,6 +126,48 @@ async function isWorkActive(root: string, ref: string): Promise<boolean> {
   return (await readQueue(root)).some((t) => t.id === ref || t.agent === ref);
 }
 
+/**
+ * Un nœud est réutilisable depuis un run persisté quand son résultat est
+ * VRAIMENT terminal. Un arrêt gracieux (`INTERRUPTED` au signal, `STOPPED`
+ * par la politique d'échec) n'est pas une décision : il n'a jamais tourné,
+ * la reprise doit le relancer, jamais le figer en échec.
+ */
+function resumableResult(result: OrchestrationNodeResult | null): OrchestrationNodeResult | null {
+  if (!result) return null;
+  if (
+    result.status === 'SKIPPED' &&
+    (result.detail === 'INTERRUPTED' || result.detail === 'STOPPED')
+  ) {
+    return null;
+  }
+  return result;
+}
+
+/** Le plan rejoué doit décrire exactement les mêmes nœuds que le run persisté (par index). */
+function checkResumeCongruence(
+  run: OrchestrationRunState,
+  plan: StriartPlanV2,
+  runId: string,
+): void {
+  const mismatch =
+    run.nodes.length !== plan.tasks.length ||
+    run.nodes.some((n, i) => {
+      const t = plan.tasks[i];
+      if (n.kind !== t.kind) return true;
+      return n.id !== null && t.id !== null && n.id !== t.id;
+    });
+  if (mismatch) {
+    throw new StriartError(
+      `Le plan fourni ne correspond pas au run "${runId}" (tâches différentes).`,
+      {
+        code: 'ORCHESTRATION_RESUME_MISMATCH',
+        details: { runId },
+        hint: 'Reprends avec le même fichier de plan que celui qui a produit ce run.',
+      },
+    );
+  }
+}
+
 export async function runPlanV2({
   root,
   plan,
@@ -125,6 +175,7 @@ export async function runPlanV2({
   signal = null,
   onProgress = null,
   overrides = {},
+  resume = null,
 }: {
   root: string;
   plan: StriartPlanV2;
@@ -132,35 +183,64 @@ export async function runPlanV2({
   signal?: AbortSignal | null;
   onProgress?: ((event: ProgressEvent) => void) | null;
   overrides?: PlanOverrides;
+  resume?: { runId: string } | null;
 }) {
   const settings = resolveOrchestrationSettings(config);
   const collab = resolveCollabSettings(config);
-  const mode = overrides.mode ?? plan.mode;
-  const concurrency =
-    mode === 'sequential'
-      ? 1
-      : Math.min(
-          overrides.concurrency ?? plan.concurrency ?? settings.concurrency,
-          settings.maxConcurrency,
-        );
-  const onFailure = overrides.onFailure ?? plan.onFailure ?? settings.onFailure;
   validatePlanAgainstConfig(plan, config);
 
-  const run = await createRunState(
-    root,
-    {
-      mode,
-      concurrency,
-      nodes: plan.tasks.map((t) => ({
-        id: t.id,
-        kind: t.kind,
-        state: 'pending',
-        status: null,
-        agent: null,
-      })),
-    },
-    settings.keepRuns,
-  );
+  let run: OrchestrationRunState;
+  let seeded: Array<OrchestrationNodeResult | null>;
+
+  if (resume) {
+    const existing = await loadRunState(root, resume.runId);
+    if (!existing) {
+      throw new StriartError(`Run introuvable : "${resume.runId}".`, {
+        code: 'ORCHESTRATION_RUN_NOT_FOUND',
+        details: { runId: resume.runId },
+        hint: 'striart status --json (section orchestration) pour lister les runs connus.',
+      });
+    }
+    if (existing.status === 'running' && isProcessAlive(existing.pid)) {
+      throw new StriartError(`Run "${resume.runId}" est toujours en cours (pid ${existing.pid}).`, {
+        code: 'ORCHESTRATION_RUN_LIVE',
+        details: { runId: resume.runId, pid: existing.pid },
+        hint: 'Attends la fin du run, ou interromps-le proprement avant de le reprendre.',
+      });
+    }
+    checkResumeCongruence(existing, plan, resume.runId);
+    run = await reopenRunState(root, resume.runId);
+    seeded = run.nodes.map((n) => resumableResult(n.result));
+  } else {
+    const mode = overrides.mode ?? plan.mode;
+    const concurrency =
+      mode === 'sequential'
+        ? 1
+        : Math.min(
+            overrides.concurrency ?? plan.concurrency ?? settings.concurrency,
+            settings.maxConcurrency,
+          );
+    const onFailure = overrides.onFailure ?? plan.onFailure ?? settings.onFailure;
+    run = await createRunState(
+      root,
+      {
+        mode,
+        concurrency,
+        onFailure,
+        nodes: plan.tasks.map((t) => ({
+          id: t.id,
+          kind: t.kind,
+          state: 'pending',
+          status: null,
+          agent: null,
+          result: null,
+        })),
+      },
+      settings.keepRuns,
+    );
+    seeded = plan.tasks.map(() => null);
+  }
+  const { mode, concurrency, onFailure } = run;
 
   const indexOfId = new Map(
     plan.tasks.map((t, i) => [t.id, i] as const).filter(([id]) => id !== null) as Array<
@@ -179,7 +259,7 @@ export async function runPlanV2({
     return { local: [...local], external };
   });
 
-  const results: Array<OrchestrationNodeResult | null> = plan.tasks.map(() => null);
+  const results: Array<OrchestrationNodeResult | null> = seeded;
   const running = new Map<number, Promise<void>>();
   let stopped = false;
 
@@ -226,6 +306,7 @@ export async function runPlanV2({
         state: 'done',
         status: result.status,
         agent: result.agent,
+        result,
       });
       report(ctx, {
         type: 'node-finished',
@@ -257,12 +338,13 @@ export async function runPlanV2({
   };
 
   const skip = (i: number, detail: string) => {
-    results[i] = nodeResult(plan.tasks[i], {
+    const result = nodeResult(plan.tasks[i], {
       status: 'SKIPPED',
       detail,
       mode: modeOf(plan.tasks[i]),
     });
-    void updateRunNode(root, run.id, i, { state: 'skipped', status: 'SKIPPED' });
+    results[i] = result;
+    void updateRunNode(root, run.id, i, { state: 'skipped', status: 'SKIPPED', result });
   };
 
   for (;;) {

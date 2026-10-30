@@ -528,6 +528,12 @@ const ERRORS: Record<string, (d: Record<string, unknown>) => string> = {
   REVIEW_CORRUPT: (d) => `review request file is corrupted: ${str(d.path)}${because(d.cause)}`,
   ORCHESTRATION_STATE_CORRUPT: (d) =>
     `orchestration state file is corrupted: ${str(d.path)}${because(d.cause)}`,
+  ORCHESTRATION_RUN_NOT_FOUND: (d) =>
+    `unknown orchestration run "${str(d.runId)}" (see "striart status --json").`,
+  ORCHESTRATION_RUN_LIVE: (d) =>
+    `orchestration run "${str(d.runId)}" is still running (pid ${str(d.pid)}): wait for it to finish, or interrupt it cleanly before resuming it.`,
+  ORCHESTRATION_RESUME_MISMATCH: (d) =>
+    `the supplied plan does not match run "${str(d.runId)}" (different tasks): resume with the exact plan file that produced this run.`,
   RACE_JUDGE_FAILED: (d) =>
     `the race judge did not produce a valid ranking${llmTarget(d)}${llmBecause(d)}`,
   ORCHESTRATE_USAGE: (d) =>
@@ -1156,6 +1162,8 @@ export const en: Messages = {
     ticketId: (value) => `invalid ticket id "${value}".`,
     projectPath: (value) =>
       `invalid project path "${value}": a path relative to the root, with "/" separators, no "..", no drive letter, no control character.`,
+    runId: (value) =>
+      `invalid run id "${value}": expected the form run-xxxxxxxxxxxx ("striart status --json", orchestration section).`,
   },
 
   usageErrors: {
@@ -1302,12 +1310,15 @@ export const en: Messages = {
         'striart plan plan.yaml --dry-run',
         'striart plan plan.yaml',
         'striart plan plan.yaml --mode parallel --concurrency 3',
+        'striart plan plan.yaml --resume run-0123456789ab',
       ],
       file: 'YAML plan file',
       dryRun: 'validate and show the plan without starting anything',
       mode: 'version 2 plan: force the chaining (sequential or parallel)',
       concurrency: 'version 2 plan: simultaneous tasks in parallel mode',
       onFailure: 'version 2 plan: after a failure, stop (nothing else starts) or skip-dependents',
+      resume:
+        'version 2 plan: resume an interrupted run (id shown by "status --json") — same plan file, already-finished tasks are not restarted',
     },
     orchestrate: {
       summary: 'Run an orchestrated task: review, race, team or pipeline',

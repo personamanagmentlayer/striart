@@ -15,6 +15,7 @@ import {
   integerParser,
   nonEmptyParser,
   projectPathParser,
+  runIdParser,
   ticketIdParser,
 } from './parse.ts';
 import { GROUP_ORDER, SHELLS, publicCommands } from './registry.ts';
@@ -114,6 +115,7 @@ export function buildProgram({
   const ticketId = ticketIdParser(m);
   const projectPath = projectPathParser(m);
   const nonEmpty = nonEmptyParser(m);
+  const runId = runIdParser(m);
 
   const groupTitle = (group: CommandGroup) => m.help.groups[group];
   const declared = new Set<string>();
@@ -276,6 +278,7 @@ export function buildProgram({
                 'skip-dependents',
               ]),
             )
+            .option('--resume <run-id>', c.plan.resume, runId)
             .action((file: string, o) =>
               dispatch(
                 'plan',
@@ -286,6 +289,7 @@ export function buildProgram({
                   mode: o.mode ?? null,
                   concurrency: o.concurrency ?? null,
                   onFailure: o.onFailure ?? null,
+                  resume: o.resume ?? null,
                 },
               ),
             ),

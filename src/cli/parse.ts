@@ -8,6 +8,7 @@
  */
 import { InvalidArgumentError } from 'commander';
 import { AGENT_NAME_RE } from '../agent-name.ts';
+import { RUN_ID_RE } from '../orchestration/store.ts';
 import { isSafeProjectPath } from '../project-path.ts';
 import { TICKET_ID_RE } from '../ticket-id.ts';
 import type { Messages } from './i18n/index.ts';
@@ -69,6 +70,14 @@ export function ticketIdParser(m: Messages): (value: string) => string {
     if (!TICKET_ID_RE.test(value)) {
       throw new InvalidArgumentError(m.parse.ticketId(value));
     }
+    return value;
+  };
+}
+
+/** Identifiant de run d'orchestration (`striart plan --resume`) — source unique src/orchestration/store.ts. */
+export function runIdParser(m: Messages): (value: string) => string {
+  return (value) => {
+    if (!RUN_ID_RE.test(value)) throw new InvalidArgumentError(m.parse.runId(value));
     return value;
   };
 }

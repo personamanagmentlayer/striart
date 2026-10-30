@@ -125,6 +125,8 @@ export const fr = {
     ticketId: (value: string) => `identifiant de ticket invalide « ${value} ».`,
     projectPath: (value: string) =>
       `chemin de projet invalide « ${value} » : un chemin relatif à la racine, en « / », sans « .. », sans lecteur ni caractère de contrôle.`,
+    runId: (value: string) =>
+      `identifiant de run invalide « ${value} » : de la forme run-xxxxxxxxxxxx (« striart status --json », section orchestration).`,
   },
 
   usageErrors: {
@@ -270,12 +272,15 @@ export const fr = {
         'striart plan plan.yaml --dry-run',
         'striart plan plan.yaml',
         'striart plan plan.yaml --mode parallel --concurrency 3',
+        'striart plan plan.yaml --resume run-0123456789ab',
       ],
       file: 'fichier YAML du plan',
       dryRun: 'valide et affiche le plan sans rien lancer',
       mode: 'plan v2 : impose l’enchaînement (sequential ou parallel)',
       concurrency: 'plan v2 : tâches simultanées en mode parallel',
       onFailure: 'plan v2 : après un échec, stop (rien ne démarre plus) ou skip-dependents',
+      resume:
+        'plan v2 : reprend un run interrompu (id affiché par « status --json ») — même fichier de plan, tâches déjà terminées non relancées',
     },
     orchestrate: {
       summary: 'Lance une tâche orchestrée : review, race, team ou pipeline',

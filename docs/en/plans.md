@@ -105,6 +105,17 @@ on the previous one; a *supervised* task is **awaited** until its agent leaves
 the registry) or `parallel` (dependency graph, `concurrency` bounded by
 `orchestration.maxConcurrency`); `concurrency`; `onFailure`. `striart plan
 --mode`, `--concurrency` and `--on-failure` override them at application.
+
+A `version: 2` application is **persisted** as a run (`.striart/orchestration/runs/<id>.json`,
+observability only) as it progresses. If it is interrupted (crash, `Ctrl+C`,
+process killed) before every task reached a terminal status, `striart plan
+<file> --resume <run-id>` (the id is printed on interruption, and listed by
+`striart status --json` under `orchestration.runs`) replays the **same plan
+file** without rerunning tasks that already finished — a task skipped only
+because of the interruption itself (never a real decision) is retried, not
+left skipped forever. `--resume` requires the exact plan file that produced
+the run (same tasks, same order) and refuses a run still owned by a live
+process, or a `version: 1` plan (no run state exists for it).
 **Task level**: `id`, `mode` (`task` by default, `review`, `race`, `team`,
 `pipeline`), `agent`, `after` (an id or a list; an id defined earlier, or a
 runtime reference — a live agent or task, awaited with a bounded timeout).

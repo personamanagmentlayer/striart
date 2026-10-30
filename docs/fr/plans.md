@@ -111,6 +111,18 @@ dépendances, `concurrency` bornée par `orchestration.maxConcurrency`) ;
 `after` (un id ou une liste ; un id défini plus haut, ou une référence
 d'exécution — agent ou tâche vivant, attendu avec délai borné).
 
+Une application `version: 2` est **persistée** au fil de l'eau comme un run
+(`.striart/orchestration/runs/<id>.json`, pure observabilité). Interrompue
+(crash, `Ctrl+C`, process tué) avant que toutes les tâches aient atteint un
+statut terminal, `striart plan <fichier> --resume <run-id>` (l'id est affiché
+à l'interruption, et listé par `striart status --json` sous
+`orchestration.runs`) rejoue le **même fichier de plan** sans relancer les
+tâches déjà terminées — une tâche sautée uniquement à cause de l'interruption
+elle-même (jamais une vraie décision) est retentée, jamais figée sautée pour
+toujours. `--resume` exige le fichier de plan exact qui a produit ce run
+(mêmes tâches, même ordre) et refuse un run encore possédé par un process
+vivant, ou un plan `version: 1` (aucun état de run n'existe pour lui).
+
 | Mode | Champs propres | Bornes |
 |---|---|---|
 | `task` | `prompt`, `autonomous`, `profile`, `command`, `timeout` | comme en v1 |

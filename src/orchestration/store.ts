@@ -16,6 +16,7 @@
 import { randomBytes } from 'node:crypto';
 import { readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
+import { StriartError } from '../errors.ts';
 import { UNCHANGED, readJson, updateJsonLocked } from '../json-file.ts';
 import { logger } from '../logger.ts';
 import { striartDir } from '../paths.ts';
@@ -27,7 +28,8 @@ import type {
   OrchestrationStatus,
 } from '../types.js';
 
-const RUN_ID_RE = /^run-[0-9a-f]{12}$/;
+/** Forme d'un id de run — source unique (CLI : `src/cli/parse.ts`, `runIdParser`). */
+export const RUN_ID_RE = /^run-[0-9a-f]{12}$/;
 const GROUP_ID_RE = /^(review|team|pipeline|race)-[0-9a-f]{12}$/;
 
 export function orchestrationDir(root: string): string {
@@ -49,7 +51,7 @@ const now = () => new Date().toISOString();
 
 export async function createRunState(
   root: string,
-  init: Pick<OrchestrationRunState, 'mode' | 'concurrency' | 'nodes'>,
+  init: Pick<OrchestrationRunState, 'mode' | 'concurrency' | 'onFailure' | 'nodes'>,
   keep: number,
 ): Promise<OrchestrationRunState> {
   await mkdirPrivate(runsDir(root));
@@ -68,6 +70,45 @@ export async function createRunState(
     () => state,
   );
   return state;
+}
+
+/** Lecture seule d'un run par id — `null` s'il n'existe pas (id bien formé mais absent). */
+export async function loadRunState(
+  root: string,
+  id: string,
+): Promise<OrchestrationRunState | null> {
+  return (await readJson(runPath(root, id), {
+    fallback: null,
+    code: 'ORCHESTRATION_STATE_CORRUPT',
+  })) as OrchestrationRunState | null;
+}
+
+/**
+ * Reprend un run existant (`striart plan --resume`) : remet `status` à
+ * `running` et `pid` au process courant, SANS toucher `nodes` (déjà la
+ * mémoire des tâches terminées que l'appelant va relire pour ne pas les
+ * relancer). Échoue si le run n'existe pas ou est illisible — jamais une
+ * reprise sur un état déduit par défaut.
+ */
+export async function reopenRunState(root: string, id: string): Promise<OrchestrationRunState> {
+  let reopened: OrchestrationRunState | null = null;
+  await updateJsonLocked(
+    runPath(root, id),
+    { fallback: null as OrchestrationRunState | null, code: 'ORCHESTRATION_STATE_CORRUPT' },
+    (s: OrchestrationRunState | null) => {
+      if (!s) return UNCHANGED;
+      reopened = { ...s, status: 'running', pid: process.pid, updatedAt: now() };
+      return reopened;
+    },
+  );
+  if (!reopened) {
+    throw new StriartError(`Run introuvable : "${id}".`, {
+      code: 'ORCHESTRATION_RUN_NOT_FOUND',
+      details: { runId: id },
+      hint: 'striart status --json (section orchestration) pour lister les runs connus.',
+    });
+  }
+  return reopened;
 }
 
 /** Mise à jour best effort : l'état est de l'observabilité, jamais une raison d'échouer un nœud. */
