@@ -1412,6 +1412,23 @@ export interface OrchestrationNodeResult {
    * échouée, interruption, collision du Router avant tout lancement).
    */
   evidence?: EvidenceBundle | null;
+  /**
+   * Observabilité (lot O, priorité 6) : combième lancement RÉEL de ce nœud a
+   * produit ce résultat — 1 pour un premier essai, davantage seulement pour
+   * une tâche autonome relancée après une collision du Router
+   * (`collisionPolicy: 'wait'`, src/orchestration/scheduler.ts). Absent pour
+   * les modes qui ne rejouent jamais un même lancement (review, race, team,
+   * pipeline) : à lire comme 1 quand absent.
+   */
+  attempt?: number;
+  /**
+   * Observabilité (lot O, priorité 6) : chemin du journal de LA session qui a
+   * produit ce résultat (`SessionResult.logPath`, sous `.striart/logs/` —
+   * survit à la suppression du clone). Seulement pour une tâche autonome
+   * simple (un seul agent, une seule session) ; absent pour review/race/
+   * team/pipeline, qui en comptent plusieurs.
+   */
+  sessionLogPath?: string | null;
 }
 
 /**
@@ -1575,6 +1592,13 @@ export interface OrchestrationRunState {
   /** Politique d'échec EFFECTIVE de ce run (overrides déjà résolus) — reprise fidèle sans reconfig. */
   onFailure: PlanFailurePolicy;
   status: 'running' | 'done' | 'interrupted';
+  /**
+   * Observabilité (lot O, priorité 6) : combien de fois ce run a été repris
+   * (`striart plan --resume`) après une interruption — un « crash recovery »
+   * compté au moment réel de la reprise, jamais déduit après coup de l'état
+   * courant (qui ne garde pas la trace d'une interruption une fois reprise).
+   */
+  resumeCount: number;
   nodes: Array<{
     id: string | null;
     kind: PlanNodeKind;

@@ -167,6 +167,24 @@ A node that never ran (dependency failed, interruption, a Router collision
 before any launch) carries no `evidence` at all — absence here means "never
 started", not "started and said nothing".
 
+### Observability chain
+
+Alongside `evidence`, a node result also carries `attempt` (how many times
+it was actually launched — greater than 1 only for an autonomous task
+retried after a Router collision) and, for a simple autonomous task,
+`sessionLogPath` (the on-disk log of the session that produced the result,
+under `.striart/logs/` — survives the clone's removal). Together with the
+run's own `id` and `resumeCount` (how many times `--resume` actually
+reopened it), this is the chain `run_id → task_id → attempt →
+agent/session → commit_sha` the design in
+[run-manager-design.md](run-manager-design.md) calls for.
+
+`striart trace <run-id>` renders that chain for one run; `striart trace`
+with no id renders the aggregate report (merged-task rate, the share of
+nodes kept for a human decision, how many runs were actually resumed,
+average cost per merged task) over the runs retained by
+`orchestration.keepRuns` — see [Commands](commands.md).
+
 Role and reviewer names use lowercase letters, digits and dashes (`author`
 and `striart` are reserved). A derived agent name (`<agent>-<step>`,
 `<agent>-<n>`) must stay a valid name: `agent` is limited to 30 characters for

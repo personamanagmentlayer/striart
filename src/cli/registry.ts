@@ -69,6 +69,7 @@ export const COMMANDS: readonly CommandSpec[] = Object.freeze([
   { name: 'queue', group: 'observe', json: 'document' },
   { name: 'history', group: 'observe', json: 'document' },
   { name: 'usage', group: 'observe', json: 'document' },
+  { name: 'trace', group: 'observe', json: 'document' },
   { name: 'dashboard', group: 'observe', json: 'stream', foreground: 'server' },
 
   { name: 'rollback', group: 'repair', json: 'document' },

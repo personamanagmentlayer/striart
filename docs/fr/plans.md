@@ -171,6 +171,24 @@ Un nœud qui n'a jamais tourné (dépendance échouée, interruption, collision 
 Router avant tout lancement) ne porte AUCUNE `evidence` : son absence veut
 dire « jamais démarré », pas « démarré sans rien à dire ».
 
+### Chaîne d'observabilité
+
+En plus d'`evidence`, un résultat de nœud porte aussi `attempt` (combien de
+fois il a VRAIMENT été lancé — supérieur à 1 seulement pour une tâche
+autonome relancée après une collision du Router) et, pour une tâche
+autonome simple, `sessionLogPath` (le journal disque de la session qui a
+produit ce résultat, sous `.striart/logs/` — survit à la suppression du
+clone). Avec l'`id` du run lui-même et `resumeCount` (combien de fois
+`--resume` l'a VRAIMENT repris), c'est la chaîne `run_id → task_id → essai →
+agent/session → commit_sha` que demande la conception de
+[conception-run-manager.md](conception-run-manager.md).
+
+`striart trace <run-id>` affiche ce fil pour un run ; `striart trace` sans
+id affiche le bilan agrégé (taux de réussite, part des nœuds conservés pour
+une décision humaine, combien de runs ont VRAIMENT été repris, coût moyen
+par tâche réussie) sur les runs retenus par `orchestration.keepRuns` — voir
+[Commandes](commandes.md).
+
 Les noms de rôles et de relecteurs sont en minuscules, chiffres et tirets
 (`author` et `striart` sont réservés). Un nom d'agent dérivé (`<agent>-<étape>`,
 `<agent>-<n>`) doit rester un nom valide : `agent` est limité à 30 caractères

@@ -58,8 +58,8 @@ export interface PlanOverrides {
   onFailure?: PlanFailurePolicy | null;
 }
 
-/** Statuts qui satisfont une dépendance. */
-const SUCCESS: ReadonlySet<OrchestrationStatus> = new Set(['MERGED', 'FINISHED']);
+/** Statuts qui satisfont une dépendance — et, hors dépendances, un nœud RÉUSSI (priorité 6). */
+export const SUCCESS: ReadonlySet<OrchestrationStatus> = new Set(['MERGED', 'FINISHED']);
 
 /** Profils de tous les agents d'un nœud (validés avant tout effet de bord). */
 export function nodeProfiles(node: PlanNode): string[] {
@@ -500,8 +500,13 @@ async function runAutonomousNode(
 ): Promise<OrchestrationNodeResult> {
   const deadline = Date.now() + ctx.settings.waitTimeoutMs;
   let agent = node.agent;
+  // Observabilité (priorité 6) : combième lancement RÉEL — une collision du
+  // Router retire la tâche de la file et la relance (voir plus bas), c'est
+  // un nouvel essai du MÊME nœud logique, jamais tu dans le résultat.
+  let attempt = 0;
   for (;;) {
     if (ctx.signal?.aborted) return nodeResult(node, { status: 'CANCELLED', detail: 'ABORTED' });
+    attempt += 1;
     const r = await runAutonomousTask({
       root: ctx.root,
       agent,
@@ -539,11 +544,13 @@ async function runAutonomousNode(
         kept,
         merge: nodeMergeOf(r.merge),
         evidence,
+        attempt,
+        sessionLogPath: r.session?.logPath ?? null,
         ...(r.relaxedBlockers?.length ? { relaxedBlockers: r.relaxedBlockers } : {}),
       });
     }
     const task = r.task;
-    if (!task) return nodeResult(node, { status: 'SKIPPED', detail: 'ROUTER_COLLISION' });
+    if (!task) return nodeResult(node, { status: 'SKIPPED', detail: 'ROUTER_COLLISION', attempt });
     agent = task.agent;
     if (!(await removeTask(ctx.root, task.id))) {
       return nodeResult(node, {
@@ -551,10 +558,11 @@ async function runAutonomousNode(
         detail: 'QUEUE_TOOK_OVER',
         agent,
         agents: [agent],
+        attempt,
       });
     }
     if (ctx.settings.collisionPolicy === 'fail')
-      return nodeResult(node, { status: 'SKIPPED', detail: 'ROUTER_COLLISION' });
+      return nodeResult(node, { status: 'SKIPPED', detail: 'ROUTER_COLLISION', attempt });
     const blockers = task.collisions.map((c) => c.agent);
     report(ctx, { type: 'waiting', nodeId: node.id, reason: 'collision', ref: blockers.join(',') });
     const outcome = await waitUntil(
@@ -568,8 +576,9 @@ async function runAutonomousNode(
         signal: ctx.signal,
       },
     );
-    if (outcome === 'aborted') return nodeResult(node, { status: 'CANCELLED', detail: 'ABORTED' });
+    if (outcome === 'aborted')
+      return nodeResult(node, { status: 'CANCELLED', detail: 'ABORTED', attempt });
     if (outcome === 'timeout')
-      return nodeResult(node, { status: 'WAIT_TIMEOUT', detail: 'ROUTER_COLLISION' });
+      return nodeResult(node, { status: 'WAIT_TIMEOUT', detail: 'ROUTER_COLLISION', attempt });
   }
 }

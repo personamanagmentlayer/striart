@@ -48,6 +48,7 @@ supprimée : l'hôte est désormais le binaire natif `striart-native pty-host`
 | `striart queue [--retry]` | Tâches démarrées et en attente, avec ce qui les bloque ; `--retry` démarre les débloquées. |
 | `striart history [--limit <n>]` | Historique des merges/rollbacks, reconstruit du graphe Git. |
 | `striart usage [--since <p>] [--until <p>] [--role <r>] [--agent <a>] [--task <id>]` | Consommation de tokens et coûts, depuis le registre `.striart/usage/`. |
+| `striart trace [run-id]` | Observabilité de bout en bout : le fil d'un run (run_id → tâche → essai → agent/session → commit), ou le bilan agrégé sans id de run. |
 | `striart dashboard [--port <p>] [--daemon \| --status \| --stop \| --link]` | Dashboard web local temps réel (127.0.0.1, SSE), à lien de connexion à usage unique, + pilotage. |
 | **Réparer et nettoyer** | |
 | `striart rollback` | Défait le dernier merge Striart (reset local ou revert). |
@@ -1053,18 +1054,18 @@ comment un conflit éventuel a été tranché (`resolution` : `auto`,
 
 Consommation de tokens et coûts, lue dans le registre **append-only**
 `.striart/usage/AAAA-MM-JJ.ndjson` (jour UTC) : un enregistrement par appel
-LLM de Striart (`router`, `merger`, `memory`, `judge`, `review`) et par
-session d'agent (`agent`). Le registre ne contient **jamais** de prompt, de
-réponse, de contenu de fichier ni de clé : chaque ligne est reconstruite
-champ par champ (liste blanche). Tableaux par rôle (avec un TOTAL), par
-agent, par tâche (20 premières), par modèle et par jour, puis le taux de
-succès du cache de prompt, les réponses servies par le cache de résultats et
-l'empreinte des consignes injectées.
+LLM de Striart (`router`, `merger`, `memory`, `judge`, `review`, `planner`)
+et par session d'agent (`agent`). Le registre ne contient **jamais** de
+prompt, de réponse, de contenu de fichier ni de clé : chaque ligne est
+reconstruite champ par champ (liste blanche). Tableaux par rôle (avec un
+TOTAL), par agent, par tâche (20 premières), par modèle et par jour, puis le
+taux de succès du cache de prompt, les réponses servies par le cache de
+résultats et l'empreinte des consignes injectées.
 
 - `--since` / `--until` : `7d`, `24h`, `30m`, `today` ou `AAAA-MM-JJ` (UTC,
   jour entier inclus). Période incohérente ou illisible :
   `USAGE_PERIOD_INVALID` (sortie 2).
-- `--role` : `router`, `merger`, `memory`, `judge`, `review` ou `agent`.
+- `--role` : `router`, `merger`, `memory`, `judge`, `review`, `agent` ou `planner`.
 - Le **coût** n'existe que pour un modèle dont le prix est déclaré
   (`tokens.pricing`, sans prix en dur : un prix change sans prévenir) ; un
   modèle Ollama local compte 0 USD. Les appels sans prix sont comptés à part
@@ -1081,6 +1082,33 @@ l'empreinte des consignes injectées.
   jetons estimés du Merger (conflit réel à trois voies), de l'arbre du
   Router (le dépôt, puis un monorepo synthétique de 10 000 fichiers), des
   consignes injectées (complet / compact) et de la Memory Layer.
+
+### `striart trace [run-id]`
+
+Observabilité de bout en bout des plans `version: 2` (voir [Plans —
+tâches-as-code](plans.md)) : le fil `run_id → task_id → essai →
+agent/session → commit_sha`, entièrement assemblé depuis ce que le Run
+Manager et la preuve du nœud persistent déjà — rien de nouveau n'est mesuré
+ici, seulement relié et, sans id, agrégé.
+
+- Avec un `run-id` (l'id affiché à l'interruption par `striart plan`, ou
+  listé par `striart status --json` sous `orchestration.runs`) : une ligne
+  par nœud de ce run — son id de tâche, son type, son statut, son **essai**
+  (combien de fois il a VRAIMENT été lancé — supérieur à 1 seulement pour
+  une tâche autonome relancée après une collision du Router), son agent et
+  son commit, plus le chemin du journal de session pour une relecture. Id
+  inconnu : `ORCHESTRATION_RUN_NOT_FOUND`.
+- Sans id : le bilan agrégé sur les runs retenus par
+  `orchestration.keepRuns` — taux de réussite, part des nœuds conservés
+  pour une décision humaine, combien de runs ont VRAIMENT été repris après
+  une interruption (`striart plan --resume`), et le coût moyen par tâche
+  réussie. Ce dernier chiffre divise le total GLOBAL du registre d'usage
+  par le nombre de nœuds réussis : un ratio de portefeuille, jamais une
+  attribution par tâche (l'`usage` de la preuve du nœud est lui-même un
+  cumul à vie de l'agent, pas isolé à un seul nœud — voir [Plans —
+  tâches-as-code](plans.md)). Les rollbacks et les défauts qui ont franchi
+  le Test Gate ne sont PAS encore suivis : le bilan ne fabrique jamais un
+  chiffre pour eux.
 
 ### `striart dashboard [--port <p>] [--daemon | --status | --stop | --link]`
 

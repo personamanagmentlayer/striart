@@ -1473,9 +1473,16 @@ export const en: Messages = {
       ],
       since: 'period start: 7d, 24h, 30m, today or YYYY-MM-DD (UTC)',
       until: 'period end (YYYY-MM-DD UTC, whole day included, or a duration)',
-      role: 'filter by role: router, merger, memory, judge, review, agent',
+      role: 'filter by role: router, merger, memory, judge, review, agent, planner',
       agent: 'filter by agent',
       task: 'filter by task id',
+    },
+    trace: {
+      summary: 'End-to-end observability: one run’s chain, or the aggregate report',
+      description:
+        'With a run id, the chain run_id → task → attempt → agent/session → commit. Without one, the aggregate report (merged-task rate, human interventions, crash recoveries, average cost) over the persisted runs.',
+      examples: ['striart trace', 'striart trace run-0123456789ab'],
+      runId: 'the run id to detail (shown by "plan", listed by "status --json")',
     },
     dashboard: {
       summary: 'Local real-time web dashboard (127.0.0.1)',
@@ -1967,6 +1974,32 @@ export const en: Messages = {
     instructions: (tokens: number) => `injected instructions: ~${tokens} tokens per session.`,
     skipped: (n: number) => `${n} unreadable ${plural(n, 'line', 'lines')} skipped in the ledger.`,
     none: '—',
+  },
+
+  trace: {
+    empty: 'no persisted orchestrated run (striart plan on a "version: 2" plan).',
+    reportHeading: 'Observability — aggregate report',
+    totalRuns: (n: number) => `retained runs: ${n}`,
+    totalNodes: (total: number, terminal: number) => `tasks: ${total} (${terminal} finished)`,
+    mergedRate: (merged: number, terminal: number, rate: number) =>
+      `merged-task rate: ${merged}/${terminal} (${(rate * 100).toFixed(1)}%)`,
+    mergedRateNone: 'merged-task rate: — (no finished task yet)',
+    humanRate: (rate: number) => `human interventions: ${(rate * 100).toFixed(1)}%`,
+    humanRateNone: 'human interventions: — (no finished task yet)',
+    crashRecoveries: (n: number) => `crash recoveries: ${n}`,
+    avgCost: (usd: number) =>
+      `average cost per merged task: $${usd.toFixed(4)} (a portfolio ratio, not a per-task attribution)`,
+    avgCostNone: 'average cost per merged task: — (no known price or no merged task)',
+    runHeading: (runId: string, status: string) => `Run ${runId} — ${status}`,
+    runMeta: (mode: string, resumeCount: number) =>
+      `${mode}${resumeCount > 0 ? ` · resumed ${resumeCount} ${plural(resumeCount, 'time', 'times')}` : ''}`,
+    colTask: 'TASK',
+    colKind: 'KIND',
+    colStatus: 'STATUS',
+    colAttempt: 'ATTEMPT',
+    colAgent: 'AGENT',
+    colCommit: 'COMMIT',
+    sessionLog: (task: string, logPath: string) => `${task}: log — ${logPath}`,
   },
 
   history: {

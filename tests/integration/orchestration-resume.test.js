@@ -8,6 +8,7 @@ import {
 } from '../helpers/orchestration.js';
 import { initStriart } from '../../src/init.ts';
 import { applyPlan } from '../../src/orchestrator.ts';
+import { loadRunState } from '../../src/orchestration/store.ts';
 
 /**
  * Run Manager (lot O, priorité 1) : un plan v2 interrompu persiste assez
@@ -69,6 +70,7 @@ describe('plan v2 --resume (intégration) — reprise sans doublon', { timeout: 
     expect(first.notApplied).toEqual([{ id: 'b', agent: 'b' }]);
     expect(await script.invocations('a')).toBe(1);
     expect(await script.invocations('b')).toBe(0);
+    expect((await loadRunState(repo.root, first.run.id)).resumeCount).toBe(0);
 
     const runId = first.run.id;
     const second = await applyPlan({
@@ -85,6 +87,9 @@ describe('plan v2 --resume (intégration) — reprise sans doublon', { timeout: 
     // `a` n'a pas été rejouée : une seule invocation malgré les deux applyPlan.
     expect(await script.invocations('a')).toBe(1);
     expect(await script.invocations('b')).toBe(1);
+    // Observabilité (priorité 6) : la reprise est comptée au moment réel où
+    // elle survient, jamais déduite après coup de l'état courant.
+    expect((await loadRunState(repo.root, runId)).resumeCount).toBe(1);
   });
 
   it('refuse de reprendre un run introuvable', async () => {

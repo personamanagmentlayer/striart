@@ -571,6 +571,17 @@ export function buildProgram({
             ),
         );
         return;
+      case 'trace':
+        define('trace', (cmd) =>
+          cmd.argument('[run-id]', c.trace.runId, runId).action((runIdArg: string | undefined) =>
+            dispatch(
+              'trace',
+              lazy(() => import('./commands/trace.ts'), 'trace'),
+              { runId: runIdArg ?? null },
+            ),
+          ),
+        );
+        return;
       case 'dashboard':
         define('dashboard', (cmd) =>
           cmd

@@ -422,9 +422,16 @@ export const fr = {
       ],
       since: 'début de période : 7d, 24h, 30m, today ou AAAA-MM-JJ (UTC)',
       until: 'fin de période (date AAAA-MM-JJ UTC incluse, ou durée)',
-      role: 'filtre par rôle : router, merger, memory, judge, review, agent',
+      role: 'filtre par rôle : router, merger, memory, judge, review, agent, planner',
       agent: 'filtre par agent',
       task: 'filtre par identifiant de tâche',
+    },
+    trace: {
+      summary: 'Observabilité de bout en bout : fil d’un run, ou bilan agrégé',
+      description:
+        'Avec un id de run, le fil run_id → tâche → essai → agent/session → commit. Sans id, le bilan agrégé (taux de réussite, interventions humaines, reprises après crash, coût moyen) sur les runs persistés.',
+      examples: ['striart trace', 'striart trace run-0123456789ab'],
+      runId: 'id du run à détailler (affiché par « plan », listé par « status --json »)',
     },
     dashboard: {
       summary: 'Tableau de bord web local, temps réel (127.0.0.1)',
@@ -943,6 +950,32 @@ export const fr = {
     skipped: (n: number) =>
       `${n} ${plural(n, 'ligne illisible ignorée', 'lignes illisibles ignorées')} dans le registre.`,
     none: '—',
+  },
+
+  trace: {
+    empty: 'aucun run orchestré persisté (striart plan sur un plan "version: 2").',
+    reportHeading: 'Observabilité — bilan agrégé',
+    totalRuns: (n: number) => `runs retenus : ${n}`,
+    totalNodes: (total: number, terminal: number) => `tâches : ${total} (${terminal} terminées)`,
+    mergedRate: (merged: number, terminal: number, rate: number) =>
+      `taux de réussite : ${merged}/${terminal} (${(rate * 100).toFixed(1)} %)`,
+    mergedRateNone: 'taux de réussite : — (aucune tâche terminée)',
+    humanRate: (rate: number) => `interventions humaines : ${(rate * 100).toFixed(1)} %`,
+    humanRateNone: 'interventions humaines : — (aucune tâche terminée)',
+    crashRecoveries: (n: number) => `reprises après interruption : ${n}`,
+    avgCost: (usd: number) =>
+      `coût moyen par tâche réussie : ${usd.toFixed(4)} USD (ratio de portefeuille, pas une attribution par tâche)`,
+    avgCostNone: 'coût moyen par tâche réussie : — (aucun prix connu ou aucune tâche réussie)',
+    runHeading: (runId: string, status: string) => `Run ${runId} — ${status}`,
+    runMeta: (mode: string, resumeCount: number) =>
+      `${mode}${resumeCount > 0 ? ` · repris ${resumeCount} ${plural(resumeCount, 'fois', 'fois')}` : ''}`,
+    colTask: 'TÂCHE',
+    colKind: 'TYPE',
+    colStatus: 'STATUT',
+    colAttempt: 'ESSAI',
+    colAgent: 'AGENT',
+    colCommit: 'COMMIT',
+    sessionLog: (task: string, logPath: string) => `${task} : journal — ${logPath}`,
   },
 
   history: {

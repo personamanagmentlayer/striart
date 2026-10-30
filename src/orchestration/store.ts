@@ -60,6 +60,7 @@ export async function createRunState(
     id: `run-${randomBytes(6).toString('hex')}`,
     ...init,
     status: 'running',
+    resumeCount: 0,
     pid: process.pid,
     startedAt: now(),
     updatedAt: now(),
@@ -97,7 +98,15 @@ export async function reopenRunState(root: string, id: string): Promise<Orchestr
     { fallback: null as OrchestrationRunState | null, code: 'ORCHESTRATION_STATE_CORRUPT' },
     (s: OrchestrationRunState | null) => {
       if (!s) return UNCHANGED;
-      reopened = { ...s, status: 'running', pid: process.pid, updatedAt: now() };
+      reopened = {
+        ...s,
+        status: 'running',
+        // Un run persisté par une version antérieure (sans resumeCount) n'est
+        // pas un bug de lecture : il n'a simplement jamais été repris encore.
+        resumeCount: (s.resumeCount ?? 0) + 1,
+        pid: process.pid,
+        updatedAt: now(),
+      };
       return reopened;
     },
   );
