@@ -2,7 +2,7 @@
 
 Format : [Keep a Changelog](https://keepachangelog.com/fr/), versionnage [SemVer](https://semver.org/lang/fr/).
 
-## [Non publié] — 0.11.0 en préparation
+## [0.11.0] — 2026-10-30
 
 Refonte de la couche CLI (décidée le 2026-10-19 après trois audits — DevX,
 UI/UX, architecture —, plan de lots 0 à 5 consigné dans la roadmap),

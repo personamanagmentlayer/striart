@@ -1,6 +1,6 @@
 {
   "name": "@jumsay/striart",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "private": true,
   "description": "Orchestrateur Git multi-agents pour Claude Code et autres IA coding agents — isolation physique, routing préventif, fusion sémantique, Test Gate bloquant",
   "type": "module",
