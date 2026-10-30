@@ -297,6 +297,18 @@ export const profiles: CommandModule<ProfilesInput, ProfilesData> = {
           shrink: { min: 10 },
         },
         {
+          key: 'envAllow',
+          header: m.profiles.colEnvAllow,
+          value: (p) =>
+            p.envAllow === null
+              ? m.profiles.envAllowFull
+              : p.envAllow.length === 0
+                ? m.profiles.envAllowNone
+                : p.envAllow.join(', '),
+          priority: 1,
+          shrink: { min: 10 },
+        },
+        {
           key: 'invocation',
           header: m.profiles.colInvocation,
           value: (p) => p.invocation,

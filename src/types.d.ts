@@ -314,6 +314,18 @@ export interface AgentProfile {
    */
   env?: Record<string, string>;
   /**
+   * Allégement de confiance (lot O, priorité 5 — SECURITY.md « frontières de
+   * confiance ») : `null` (défaut, inchangé) transmet tout l'environnement du
+   * process, comme aujourd'hui. Un tableau — même vide — RESTREINT ce qui est
+   * hérité à ces noms EXACTS, avant que `env` (ci-dessus) ne s'applique :
+   * `env` n'est jamais retiré par cette liste, même s'il n'y figure pas. Deux
+   * tableaux distincts : hérité (filtré par `envAllow`) puis propre au profil
+   * (`env`, toujours entier). Jamais STRIART_SESSION, posé après les deux et
+   * non surchargeable. Une défense en profondeur de PLUS (voir SECURITY.md),
+   * pas une sandbox : un outil déjà démarré garde ce qu'il a lu une fois.
+   */
+  envAllow?: string[] | null;
+  /**
    * Délai max de session PROPRE à ce profil (ms). Précédence :
    * `--timeout` explicite > `profile.timeout` > `config.autonomousTimeoutMs`.
    */

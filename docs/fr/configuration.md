@@ -607,6 +607,7 @@ avec son nom, `PROFILE_INVALID`) :
 |---|---|
 | `command`, `args` | L'outil et son argv. `{{prompt}}` obligatoire en argv, interdit en ACP. Emplacements optionnels : `{{striartInstructions}}` (texte des consignes), `{{striartInstructionsFile}}` (chemin du fichier de consignes, hors du clone), `{{striartTestCommand}}` (commande du Test Gate). |
 | `env` | Variables propres au profil, fusionnées par-dessus l'environnement (cloisonner une clé par outil). Depuis un `.mjs`, `env: { KEY: process.env.SOURCE }` — jamais un secret en clair. |
+| `envAllow` | `null` (défaut) hérite tout l'environnement du process, inchangé. Un tableau de noms exacts — même `[]` — restreint ce qui est HÉRITÉ à cette liste, appliqué avant `env` (qui, lui, s'applique toujours en entier : `envAllow` ne retire jamais ce que `env` ajoute). Défense en profondeur, pas une sandbox — voir [SECURITY.md](../../SECURITY.md). |
 | `timeout` | Délai max de session (ms, 1000 à 2147483647). Précédence : `--timeout` > `profile.timeout` > `autonomousTimeoutMs`. |
 | `preset`, `experimental` | Preset dont dérive le profil ; drapeau « non vérifié en documentation officielle ». |
 | `writeMode` | `workspace` \| `read-only` \| `unrestricted` : ce que l'invocation permet d'écrire (déclaratif, affiché). |
@@ -616,10 +617,10 @@ avec son nom, `PROFILE_INVALID`) :
 | `settingsFile` | `{ flag, json, claudeMdExcludes? }` : fichier de réglages de session écrit par Striart **hors du clone** (`.striart/logs/`) et passé à l'outil par `flag` (≤ 64 Kio). |
 | `acp` | Transport ACP : `true` ou un objet (voir ci-dessous). |
 
-Sans `env`, la session hérite de tout l'environnement du process — voir
-[SECURITY.md](../../SECURITY.md). `striart profiles` liste les profils
-configurés (noms d'`env`, jamais les valeurs), `--catalog` les presets,
-`--detect` les outils installés.
+Sans `env` ni `envAllow`, la session hérite de tout l'environnement du
+process — voir [SECURITY.md](../../SECURITY.md). `striart profiles` liste
+les profils configurés (noms d'`env`, jamais les valeurs), `--catalog` les
+presets, `--detect` les outils installés.
 
 ### `agentProfiles.<nom>.acp` — le transport ACP
 

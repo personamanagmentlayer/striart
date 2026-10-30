@@ -51,6 +51,7 @@ describe('session — listProfiles (striart profiles)', () => {
           args: ['exec', '{{prompt}}'],
           env: { OPENAI_API_KEY: 'secret-a-ne-pas-fuiter', MODEL: 'o4' },
           timeout: 600000,
+          envAllow: ['PATH'],
         },
         claude: { command: 'claude', args: ['-p', '{{prompt}}'] },
       },
@@ -61,10 +62,15 @@ describe('session — listProfiles (striart profiles)', () => {
     expect(codex.invocation).toBe('codex exec {{prompt}}');
     expect(codex.envKeys).toEqual(['OPENAI_API_KEY', 'MODEL']);
     expect(codex.timeout).toBe(600000);
+    expect(codex.envAllow).toEqual(['PATH']);
     // La sortie ne doit JAMAIS contenir une valeur d'env (potentiellement un secret).
     expect(JSON.stringify(rows)).not.toContain('secret-a-ne-pas-fuiter');
-    // Profil sans env/timeout : envKeys vide, timeout null.
-    expect(rows.find((r) => r.name === 'claude')).toMatchObject({ envKeys: [], timeout: null });
+    // Profil sans env/timeout/envAllow : envKeys vide, timeout et envAllow null (hérite tout).
+    expect(rows.find((r) => r.name === 'claude')).toMatchObject({
+      envKeys: [],
+      timeout: null,
+      envAllow: null,
+    });
   });
 
   it('signale le transport ACP des profils qui le déclarent', () => {

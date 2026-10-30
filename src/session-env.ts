@@ -57,6 +57,27 @@ export function sessionNetworkEnv(
   return { env, caFile: 'applied' };
 }
 
+/**
+ * Allégement de confiance (lot O, priorité 5 — `AgentProfile.envAllow`,
+ * SECURITY.md « frontières de confiance »). `null` : hérite tout, comme
+ * aujourd'hui. Un tableau — même vide — ne garde que les noms EXACTS listés ;
+ * appliqué à l'environnement HÉRITÉ, avant tout ajout de Striart
+ * (`network.caFile`, `profile.env`, `STRIART_SESSION`) : une liste restreinte
+ * ne prive jamais une session de ce que Striart lui-même choisit de poser.
+ */
+export function applyEnvAllowlist(
+  env: NodeJS.ProcessEnv,
+  allow: readonly string[] | null,
+): NodeJS.ProcessEnv {
+  if (allow === null) return env;
+  const keep = new Set(allow);
+  const out: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(env)) {
+    if (keep.has(name)) out[name] = value;
+  }
+  return out;
+}
+
 let warnedUnreadable = false;
 const warnedShadow = new Set<string>();
 

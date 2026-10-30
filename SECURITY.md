@@ -537,18 +537,31 @@ accepter.
 
 - **L'outil de coding est du code de confiance.** En mode autonome, Striart
   lance l'outil configuré (`agentProfiles`) en lui **transmettant tout
-  l'environnement du process** (`process.env`) — c'est nécessaire : l'outil a
-  besoin de ses propres clés API. Vaut à l'identique en transport ACP
-  (`acp: true`) : le protocole ajoute des points de contrôle — fs borné au
+  l'environnement du process** (`process.env`) PAR DÉFAUT — c'est nécessaire :
+  l'outil a besoin de ses propres clés API. Vaut à l'identique en transport
+  ACP (`acp: true`) : le protocole ajoute des points de contrôle — fs borné au
   clone, permissions répondues par politique — qui sont de la **défense en
   profondeur, pas une sandbox** : l'outil garde son propre accès disque et
-  réseau, hors du protocole. Un outil malveillant ou compromis a donc
-  accès à tous les secrets de l'environnement. N'exécutez en autonome que des
-  outils que vous exécuteriez de toute façon à la main. Pour **cloisonner**,
-  deux voies : lancer Striart dans un shell dont l'environnement ne contient
-  que les clés strictement nécessaires, ou donner à chaque profil son propre
-  `env` (`agentProfiles.<nom>.env`) — chaque outil ne reçoit alors que sa clé.
-  Ne jamais **inliner un secret en clair** dans `env` : depuis un
+  réseau, hors du protocole. Un outil malveillant ou compromis a donc, PAR
+  DÉFAUT, accès à tous les secrets de l'environnement. N'exécutez en autonome
+  que des outils que vous exécuteriez de toute façon à la main. Pour
+  **cloisonner**, trois voies, cumulables : lancer Striart dans un shell dont
+  l'environnement ne contient que les clés strictement nécessaires ; donner à
+  chaque profil son propre `env` (`agentProfiles.<nom>.env`) — chaque outil ne
+  reçoit alors QUE sa clé, en plus de l'héritage ; ou, de façon déclarative et
+  testable, `agentProfiles.<nom>.envAllow` (lot O, priorité 5 du Run
+  Manager — un tableau de noms EXACTS, même vide) qui **restreint**
+  l'environnement HÉRITÉ à cette liste avant que `env` ne s'applique
+  (`env`, lui, n'est jamais retiré par `envAllow` : il s'ajoute après,
+  toujours entier). `envAllow` reste une **défense en profondeur
+  supplémentaire, pas une sandbox** : elle borne ce qu'un outil **reçoit au
+  démarrage** dans son environnement de process, rien d'autre — un outil déjà
+  lancé garde ce qu'il a lu une fois, elle ne limite ni son accès disque, ni
+  son accès réseau, ni ses appels système, et un outil qui lit des secrets
+  autrement qu'via son environnement (fichier de credentials, agent SSH,
+  trousseau système) n'est pas concerné. `null` (défaut, implicite si la clé
+  est absente) laisse le comportement actuel inchangé : rien ne se cloisonne
+  tout seul. Ne jamais **inliner un secret en clair** dans `env` : depuis un
   `striart.config.mjs`, référencer la variable (`env: { KEY: process.env.SOURCE }`) ;
   `striart profiles` n'affiche que les *clés* d'env, jamais les valeurs.
 - **La config est du code exécuté.** `striart.config.js` / `.mjs` est chargé

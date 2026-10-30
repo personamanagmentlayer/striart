@@ -209,6 +209,19 @@ describe('agentProfiles (mode autonome)', () => {
     expect(() => validateConfig(p({ timeout: 1.5 }))).toThrow(StriartError);
   });
 
+  it('envAllow (lot O, priorité 5) : null ou liste de noms distincts non vides, sinon refusé', () => {
+    const p = (extra) => ({
+      agentProfiles: { x: { command: 'x', args: ['{{prompt}}'], ...extra } },
+    });
+    expect(() => validateConfig(p({ envAllow: null }))).not.toThrow();
+    expect(() => validateConfig(p({ envAllow: [] }))).not.toThrow();
+    expect(() => validateConfig(p({ envAllow: ['PATH', 'HOME'] }))).not.toThrow();
+    expect(() => validateConfig(p({ envAllow: ['PATH', 'PATH'] }))).toThrow(StriartError);
+    expect(() => validateConfig(p({ envAllow: ['', 'PATH'] }))).toThrow(StriartError);
+    expect(() => validateConfig(p({ envAllow: 'PATH' }))).toThrow(StriartError);
+    expect(() => validateConfig(p({ envAllow: [42] }))).toThrow(StriartError);
+  });
+
   it('AJOUTE un profil utilisateur sans effacer les profils par défaut', async () => {
     // La fusion de config est shallow ailleurs : sans traitement dédié,
     // déclarer "kimi" ferait disparaître claude/codex/aider/ollama.

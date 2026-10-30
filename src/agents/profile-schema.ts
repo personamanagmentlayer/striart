@@ -197,6 +197,18 @@ export function isValidAgentProfile(p: unknown): boolean {
     !(isObject(p.env) && Object.values(p.env).every((x) => typeof x === 'string'))
   )
     return false;
+  // `envAllow` (lot O, priorité 5) : null = héritage complet (défaut, inchangé) ;
+  // un tableau, même vide, restreint l'environnement hérité à ces noms EXACTS
+  // (en plus de `env`, toujours appliqué après — jamais retiré par la liste).
+  if (
+    p.envAllow != null &&
+    !(
+      Array.isArray(p.envAllow) &&
+      p.envAllow.every((x) => typeof x === 'string' && x.length > 0) &&
+      new Set(p.envAllow).size === p.envAllow.length
+    )
+  )
+    return false;
   if (
     p.timeout != null &&
     !(

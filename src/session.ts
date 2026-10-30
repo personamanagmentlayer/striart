@@ -25,7 +25,7 @@ import { writePrivateFile } from './private-fs.ts';
 import { killProcessTree, normalizeExitCode } from './process-tree.ts';
 import type { AgentProfile, SessionResult, StriartConfig } from './types.js';
 import { redactSecrets, secretValuesFromEnv } from './redact-secrets.ts';
-import { buildSessionEnv } from './session-env.ts';
+import { applyEnvAllowlist, buildSessionEnv } from './session-env.ts';
 import { ensureStateProtection } from './state-protection.ts';
 import { clearStopRequest, watchStopRequest } from './stop-request.ts';
 import { SessionMeter } from './tokens/session-meter.ts';
@@ -123,6 +123,8 @@ export function listProfiles(config: StriartConfig): Array<{
   command: string;
   invocation: string;
   envKeys: string[];
+  /** `null` = hérite tout l'environnement (défaut) ; sinon la liste `envAllow` déclarée. */
+  envAllow: string[] | null;
   timeout: number | null;
   acp: boolean;
   preset: string | null;
@@ -139,6 +141,7 @@ export function listProfiles(config: StriartConfig): Array<{
       command: p.command,
       invocation: `${p.command} ${p.args.join(' ')}`,
       envKeys: Object.keys(p.env ?? {}),
+      envAllow: p.envAllow ?? null,
       timeout: p.timeout ?? null,
       acp: Boolean(p.acp),
       preset: p.preset ?? null,
@@ -303,6 +306,11 @@ export async function runAgentSession({
   // Valeurs à caviarder : celles de l'environnement D'ORIGINE (STRIART_PROXY_AUTH
   // comprise), même si la session ne la reçoit pas.
   const redactionEnv = env;
+  // Allégement de confiance (priorité 5) : restreint l'environnement HÉRITÉ
+  // avant tout ajout de Striart, pour qu'une liste restreinte ne prive jamais
+  // une session de ce que Striart pose lui-même ensuite (CA, profile.env,
+  // STRIART_SESSION). `null` (défaut) : comportement inchangé.
+  env = applyEnvAllowlist(env, profile?.envAllow ?? null);
   // Environnement réseau de la session (une seule fois pour les trois
   // transports : argv, ACP en process, hôte ACP persistant) : network.caFile
   // de la config UTILISATEUR → NODE_EXTRA_CA_CERTS ; STRIART_PROXY_AUTH jamais.
