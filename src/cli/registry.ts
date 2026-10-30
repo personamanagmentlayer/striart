@@ -55,6 +55,7 @@ export const COMMANDS: readonly CommandSpec[] = Object.freeze([
   { name: 'run', group: 'launch', json: 'document' },
   { name: 'attach', group: 'launch', json: 'none', foreground: 'terminal' },
   { name: 'plan', group: 'launch', json: 'document' },
+  { name: 'draft', group: 'launch', json: 'document' },
   { name: 'profiles', group: 'launch', json: 'document' },
 
   { name: 'watch', group: 'orchestrate', json: 'stream', foreground: 'watch' },

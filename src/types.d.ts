@@ -1625,6 +1625,7 @@ export interface LlmRoles {
   merger: LlmSpec | null;
   memory: LlmSpec | null;
   judge: LlmSpec | null;
+  planner: LlmSpec | null;
 }
 
 /**
@@ -1719,7 +1720,7 @@ export interface McpSettings {
 // ---------------------------------------------------------------------------
 
 /** Rôle d'un appel dépensant des tokens (champ `role` du registre). */
-export type UsageRole = 'router' | 'merger' | 'memory' | 'judge' | 'review' | 'agent';
+export type UsageRole = 'router' | 'merger' | 'memory' | 'judge' | 'review' | 'agent' | 'planner';
 
 /** Origine d'un relevé : réponse API, flux structuré d'agent, estimation locale, session sans relevé. */
 export type UsageSource = 'api' | 'agent-stream' | 'acp' | 'estimate' | 'unmetered';

@@ -129,6 +129,8 @@ export const ERROR_KINDS: Readonly<Record<string, ErrorKind>> = Object.freeze({
   AGENT_QUEUED: 'refusal',
   // Suppression de clone entamée : le nom n'est réutilisable qu'après sa fin.
   CLONE_REMOVAL_PENDING: 'refusal',
+  // `striart draft --out` : jamais d'écrasement silencieux d'un fichier existant.
+  DRAFT_FILE_EXISTS: 'refusal',
   DAEMON_RUNNING: 'refusal',
   DAEMON_IDENTITY_UNVERIFIED: 'refusal',
   DAEMON_STOP_DENIED: 'refusal',
@@ -329,6 +331,11 @@ export const ERROR_KINDS: Readonly<Record<string, ErrorKind>> = Object.freeze({
   ORCHESTRATION_RUN_NOT_FOUND: 'failure',
   ORCHESTRATION_STATE_CORRUPT: 'failure',
   PERMISSION_OPTION_UNKNOWN: 'failure',
+  // Planner (lot O, priorité 3) : FAILED si le LLM n'a pas produit de plan
+  // valide (retenté, puis échec) ; REFUSED est une décision CONSCIENTE du
+  // Planner (objectif trop ambigu) — jamais un plan deviné.
+  PLANNER_FAILED: 'failure',
+  PLANNER_REFUSED: 'refusal',
   PLAN_NOT_FOUND: 'failure',
   PORT_IN_USE: 'failure',
   PROFILE_INVALID: 'failure',

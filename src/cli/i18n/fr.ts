@@ -282,6 +282,17 @@ export const fr = {
       resume:
         'plan v2 : reprend un run interrompu (id affiché par « status --json ») — même fichier de plan, tâches déjà terminées non relancées',
     },
+    draft: {
+      summary: 'Propose un plan v2 pour un objectif (Planner) — n’applique rien',
+      description:
+        'Tourne un objectif en fichier de plan "version: 2" validé (mêmes règles qu’un plan écrit à la main) : à relire, puis appliquer soi-même avec « striart plan ». Ne lance jamais un agent, jamais de merge.',
+      examples: [
+        'striart draft "Ajoute la pagination à l’API /users"',
+        'striart draft "Migre les tests vers Vitest" --out migration.yaml',
+      ],
+      objective: 'objectif en langage naturel à transformer en plan',
+      out: 'fichier de sortie (YAML) — défaut : striart-draft-<horodatage>.yaml',
+    },
     orchestrate: {
       summary: 'Lance une tâche orchestrée : review, race, team ou pipeline',
       description:
@@ -734,6 +745,14 @@ export const fr = {
       verdict: (reviewer: string, round: number, verdict: string) =>
         `relecture : ${reviewer} (tour ${round}) → ${verdict}`,
     },
+  },
+
+  draft: {
+    running: 'Le Planner propose un plan',
+    written: (file: string, tasks: number, tokens: number) =>
+      `plan écrit : ${file} (${tasks} ${plural(tasks, 'tâche', 'tâches')}, ~${tokens} jetons de consignes). Rien n'a été lancé.`,
+    note: (note: string) => `Planner : ${note}`,
+    fileExists: (file: string) => `${file} existe déjà — rien n'a été écrasé.`,
   },
 
   completion: {

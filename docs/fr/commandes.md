@@ -31,7 +31,8 @@ supprimée : l'hôte est désormais le binaire natif `striart-native pty-host`
 | `striart run "<prompt>" --autonomous [--profile <p>] [--timeout <ms>]` | Mode autonome : Striart pilote l'outil de bout en bout. |
 | `striart run "<prompt>" --on-main [--profile <p>] [--timeout <ms>]` | Lance l'agent DIRECTEMENT sur le repo principal (pas de clone), sous session protégée. |
 | `striart attach <agent>` | Attache le terminal au pty possédé d'un agent (session ouverte par `--open`). |
-| `striart plan <fichier.yaml> [--dry-run] [--mode <m>] [--concurrency <n>] [--on-failure <p>]` | Tâches-as-code : applique un plan YAML versionné (v1, ou v2 : modes d'orchestration). |
+| `striart plan <fichier.yaml> [--dry-run] [--mode <m>] [--concurrency <n>] [--on-failure <p>] [--resume <run-id>]` | Tâches-as-code : applique un plan YAML versionné (v1, ou v2 : modes d'orchestration) ; `--resume` rejoue un run v2 interrompu sans relancer les tâches terminées. |
+| `striart draft "<objectif>" [--out <fichier>]` | Planner : propose un plan v2 validé pour un objectif — écrit un fichier, ne lance rien. |
 | `striart profiles [--catalog \| --detect \| --import-acp <id>]` | Profils d'agents configurés ; catalogue des presets ; outils installés ; import d'un agent du registre ACP. |
 | **Orchestrer** | |
 | `striart watch [--no-merge]` | Surveille les commits, merge + Test Gate + rebase en continu. |
@@ -646,7 +647,7 @@ travail référencé, puis part automatiquement. Référence inconnue
 (`AFTER_UNKNOWN`) ou cycle (`AFTER_CYCLE`) → refus au lancement. C'est la
 brique sous-jacente des [plans YAML](plans.md).
 
-### `striart plan <fichier.yaml> [--dry-run] [--mode <m>] [--concurrency <n>] [--on-failure <p>]`
+### `striart plan <fichier.yaml> [--dry-run] [--mode <m>] [--concurrency <n>] [--on-failure <p>] [--resume <run-id>]`
 
 Voir [Plans — tâches-as-code](plans.md). Un plan `version: 1` est la file et
 `--after` rédigés en YAML ; un plan `version: 2` ajoute les modes
@@ -665,6 +666,28 @@ affichées « non appliquée (arrêt demandé) » ; la CLI sort en 130 (143 pour
 SIGTERM) ; le document `--json` rend `ok: false` (un plan interrompu n'a
 pas atteint son intention) et la ligne « plan appliqué » passe en
 avertissement. Un second Ctrl+C coupe net.
+
+`--resume <run-id>` (v2 seulement, incompatible avec `--dry-run`) rejoue le
+**même fichier de plan** après une interruption sans relancer les tâches
+déjà terminées — voir [Plans — tâches-as-code](plans.md). L'id du run est
+affiché à l'interruption et listé par `striart status --json` sous
+`orchestration.runs`.
+
+### `striart draft "<objectif>" [--out <fichier>]`
+
+Planner (voir [Plans — tâches-as-code](plans.md)) :
+tourne un objectif en langage naturel en fichier de plan `version: 2`,
+validé par l'EXACT même chemin qu'un plan écrit à la main (profil inconnu,
+mauvaise dépendance… tout est refusé pareil). Il **ne lance rien** — aucun
+agent, aucun merge — et écrit le plan dans `--out` (défaut
+`striart-draft-<horodatage>.yaml`), en refusant d'écraser un fichier déjà
+existant (`DRAFT_FILE_EXISTS`). L'étape d'approbation humaine est explicite
+et séparée : relire le fichier, puis `striart plan <fichier> --dry-run`,
+puis `striart plan <fichier>`. Si l'objectif est trop ambigu pour être
+planifié sans deviner, le Planner refuse plutôt que de supposer
+(`PLANNER_REFUSED`) ; un échec du LLM après nouvelles tentatives est
+`PLANNER_FAILED`. Utilise le rôle LLM `planner`
+(`config.llmRoles.planner`, voir [Configuration](configuration.md)).
 
 ### `striart profiles [--catalog | --detect | --import-acp <id>]`
 

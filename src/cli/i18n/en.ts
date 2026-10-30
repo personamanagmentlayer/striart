@@ -536,6 +536,16 @@ const ERRORS: Record<string, (d: Record<string, unknown>) => string> = {
     `the supplied plan does not match run "${str(d.runId)}" (different tasks): resume with the exact plan file that produced this run.`,
   RACE_JUDGE_FAILED: (d) =>
     `the race judge did not produce a valid ranking${llmTarget(d)}${llmBecause(d)}`,
+  PLANNER_FAILED: (d) =>
+    d.reason === 'NO_PROFILES'
+      ? 'no agent profile is configured: the Planner cannot propose any autonomous task.'
+      : d.reason === 'NOT_V2'
+        ? 'the Planner produced a plan that is not "version: 2" (internal contract violated).'
+        : d.reason === 'ABORTED'
+          ? 'the Planner was interrupted before making any call.'
+          : `the Planner did not produce a valid plan${llmTarget(d)}${llmBecause(d)}`,
+  PLANNER_REFUSED: (d) => `the Planner refused this objective: ${str(d.reason)}`,
+  DRAFT_FILE_EXISTS: (d) => `"${str(d.file)}" already exists: nothing was overwritten.`,
   ORCHESTRATE_USAGE: (d) =>
     d.reason === 'OPTION_NOT_FOR_MODE'
       ? `option ${str(d.option)} does not apply to "orchestrate ${str(d.mode)}".`
@@ -1320,6 +1330,17 @@ export const en: Messages = {
       resume:
         'version 2 plan: resume an interrupted run (id shown by "status --json") — same plan file, already-finished tasks are not restarted',
     },
+    draft: {
+      summary: 'Propose a version 2 plan for an objective (Planner) — applies nothing',
+      description:
+        'Turns an objective into a validated "version: 2" plan file (same rules as a hand-written plan): review it, then apply it yourself with "striart plan". Never starts an agent, never merges.',
+      examples: [
+        'striart draft "Add pagination to the /users API"',
+        'striart draft "Migrate the tests to Vitest" --out migration.yaml',
+      ],
+      objective: 'natural-language objective to turn into a plan',
+      out: 'output file (YAML) — default: striart-draft-<timestamp>.yaml',
+    },
     orchestrate: {
       summary: 'Run an orchestrated task: review, race, team or pipeline',
       description:
@@ -1756,6 +1777,14 @@ export const en: Messages = {
         } ${ref}`,
       verdict: (reviewer, round, verdict) => `review: ${reviewer} (round ${round}) → ${verdict}`,
     },
+  },
+
+  draft: {
+    running: 'The Planner is drafting a plan',
+    written: (file, tasks, tokens) =>
+      `plan written: ${file} (${tasks} ${plural(tasks, 'task', 'tasks')}, ~${tokens} instruction tokens). Nothing was started.`,
+    note: (note) => `Planner: ${note}`,
+    fileExists: (file) => `${file} already exists — nothing was overwritten.`,
   },
 
   completion: {

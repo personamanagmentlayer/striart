@@ -108,7 +108,7 @@ export default {
   ollamaHost: 'http://localhost:11434',
   prompts: { router: null, merger: null },
   llm: null,                      // or { provider, model, … } — see below
-  llmRoles: { router: null, merger: null, memory: null, judge: null },
+  llmRoles: { router: null, merger: null, memory: null, judge: null, planner: null },
   llmResilience: {},              // backoff + circuit breaker — see below
   tokens: {},                     // accounting, ceilings, optimizations — see below
 
@@ -227,12 +227,14 @@ The unwrapping also applies to answers read back from the result cache.
 
 ### `llmRoles` — one LLM per role
 
-`llmRoles: { router, merger, memory, judge }` gives each role its own model;
-each entry is an `llm` specification (same fields) or `null` (= the global
-`llm` block, or Ollama). A cheap local model for the Router and a strong
-model for the Merger, for instance. `judge` is the LLM that ranks a `race`
-(`pick: judge`). Only these four roles exist (unknown key refused); the
-`review` reviewers are agents, not Striart LLM roles.
+`llmRoles: { router, merger, memory, judge, planner }` gives each role its
+own model; each entry is an `llm` specification (same fields) or `null` (=
+the global `llm` block, or Ollama). A cheap local model for the Router and a
+strong model for the Merger, for instance. `judge` is the LLM that ranks a
+`race` (`pick: judge`). `planner` is the LLM `striart draft` calls to turn an
+objective into a plan (see [Commands](commands.md)). Only these five roles
+exist (unknown key refused); the `review` reviewers are agents, not Striart
+LLM roles.
 
 ### `llmResilience` — retries, backoff and circuit breaker
 

@@ -504,8 +504,8 @@ function classifyError(error) {
  * compte comme une tentative échouée et est retentée.
  *
  * Paramètres de comptabilité (lot T, tous facultatifs, rétro-compatibles) :
- *  - `role` : 'router' | 'merger' | 'memory' | 'judge' | 'review' — sélectionne
- *    le LLM du rôle (`config.llmRoles`) et classe l'usage au registre ;
+ *  - `role` : 'router' | 'merger' | 'memory' | 'judge' | 'review' | 'planner' —
+ *    sélectionne le LLM du rôle (`config.llmRoles`) et classe l'usage au registre ;
  *  - `root`, `agent`, `taskId` : attribution (sinon contexte asynchrone
  *    `withTokenContext`, sinon racine retrouvée depuis le dépôt courant) ;
  *  - `stablePrefix` : début EXACT du prompt, identique d'un appel à l'autre

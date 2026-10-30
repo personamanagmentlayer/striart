@@ -14,6 +14,7 @@ import {
   agentNameParser,
   integerParser,
   nonEmptyParser,
+  outPathParser,
   projectPathParser,
   runIdParser,
   ticketIdParser,
@@ -116,6 +117,7 @@ export function buildProgram({
   const projectPath = projectPathParser(m);
   const nonEmpty = nonEmptyParser(m);
   const runId = runIdParser(m);
+  const outPath = outPathParser(m);
 
   const groupTitle = (group: CommandGroup) => m.help.groups[group];
   const declared = new Set<string>();
@@ -291,6 +293,20 @@ export function buildProgram({
                   onFailure: o.onFailure ?? null,
                   resume: o.resume ?? null,
                 },
+              ),
+            ),
+        );
+        return;
+      case 'draft':
+        define('draft', (cmd) =>
+          cmd
+            .argument('<objective>', c.draft.objective, nonEmpty)
+            .option('--out <file>', c.draft.out, outPath)
+            .action((objective: string, o) =>
+              dispatch(
+                'draft',
+                lazy(() => import('./commands/draft.ts'), 'draft'),
+                { objective, out: o.out ?? null },
               ),
             ),
         );

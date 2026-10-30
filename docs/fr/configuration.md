@@ -108,7 +108,7 @@ export default {
   ollamaHost: 'http://localhost:11434',
   prompts: { router: null, merger: null },
   llm: null,                      // ou { provider, model, … } — voir plus bas
-  llmRoles: { router: null, merger: null, memory: null, judge: null },
+  llmRoles: { router: null, merger: null, memory: null, judge: null, planner: null },
   llmResilience: {},              // backoff + disjoncteur — voir plus bas
   tokens: {},                     // comptabilité, plafonds, optimisations — voir plus bas
 
@@ -230,13 +230,15 @@ cache de résultats.
 
 ### `llmRoles` — un LLM par rôle
 
-`llmRoles: { router, merger, memory, judge }` donne à chaque rôle son propre
-modèle ; chaque entrée est une spécification `llm` (mêmes champs) ou `null`
-(= le bloc `llm` global, ou Ollama). Un modèle local peu coûteux pour le
-Router et un modèle fort pour le Merger, par exemple. `judge` est le LLM qui
-départage une course `race` (`pick: judge`). Seuls ces quatre rôles existent
-(clé inconnue refusée) ; les relecteurs `review` sont des agents, pas des
-rôles LLM de Striart.
+`llmRoles: { router, merger, memory, judge, planner }` donne à chaque rôle
+son propre modèle ; chaque entrée est une spécification `llm` (mêmes champs)
+ou `null` (= le bloc `llm` global, ou Ollama). Un modèle local peu coûteux
+pour le Router et un modèle fort pour le Merger, par exemple. `judge` est le
+LLM qui départage une course `race` (`pick: judge`). `planner` est le LLM
+que `striart draft` appelle pour tourner un objectif en plan (voir
+[Commandes](commandes.md)). Seuls ces cinq rôles existent (clé inconnue
+refusée) ; les relecteurs `review` sont des agents, pas des rôles LLM de
+Striart.
 
 ### `llmResilience` — retries, backoff et disjoncteur
 
