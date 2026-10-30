@@ -34,6 +34,7 @@ import type {
   StriartConfig,
   StriartPlanV2,
 } from '../types.js';
+import { buildEvidence, partialEvidenceFromMerge } from './evidence.ts';
 import { runPipelineNode } from './pipeline.ts';
 import { runRaceNode } from './race.ts';
 import { nodeResult } from './result.ts';
@@ -510,13 +511,22 @@ async function runAutonomousNode(
       }
       const status: OrchestrationStatus =
         r.status === 'SESSION_FAILED' && r.session?.status === 'CANCELLED' ? 'CANCELLED' : r.status;
+      const kept = !r.cleaned;
+      const evidence = await buildEvidence(ctx.root, {
+        objective: node.prompt,
+        partial: partialEvidenceFromMerge(r.merge),
+        verdicts: [],
+        agent: r.agent,
+        kept,
+      });
       return nodeResult(node, {
         status,
         agent: r.agent,
         agents: r.agent ? [r.agent] : [],
         detail: r.keptCode ? `${r.keptCode}${r.keptDetail ? `:${r.keptDetail}` : ''}` : null,
-        kept: !r.cleaned,
+        kept,
         merge: nodeMergeOf(r.merge),
+        evidence,
         ...(r.relaxedBlockers?.length ? { relaxedBlockers: r.relaxedBlockers } : {}),
       });
     }

@@ -41,6 +41,8 @@ import type {
   PlanNode,
 } from '../types.js';
 import { composeTurnPrompt, messageItems } from './briefing.ts';
+import { buildEvidence, partialEvidenceFromMerge } from './evidence.ts';
+import type { PartialEvidence } from './evidence.ts';
 import { nodeResult } from './result.ts';
 import { createGroupState, finishGroupState, updateGroupState } from './store.ts';
 import {
@@ -213,11 +215,13 @@ export async function runTeamFlow(
   });
 
   let result: OrchestrationNodeResult;
+  let partial: PartialEvidence = partialEvidenceFromMerge(null);
   if (failure) {
     const f: { status: OrchestrationStatus; detail: string | null } = failure;
     result = nodeResult(node, { status: f.status, detail: f.detail, kept: true });
   } else {
     const final = await finalizeClone(ctx, meta);
+    partial = final.evidence;
     result = nodeResult(node, {
       status: final.status,
       detail: final.detail,
@@ -227,7 +231,14 @@ export async function runTeamFlow(
   }
   await closeCollabGroup(ctx.root, group.id).catch(() => {});
   await finishGroupState(ctx.root, group.id, result.status);
-  return { ...result, agent: meta.name, agents: [meta.name], group: group.id, rounds };
+  const evidence = await buildEvidence(ctx.root, {
+    objective: flow.goal,
+    partial,
+    verdicts: [],
+    agent: meta.name,
+    kept: result.kept,
+  });
+  return { ...result, agent: meta.name, agents: [meta.name], group: group.id, rounds, evidence };
 }
 
 type RoundOutcome =

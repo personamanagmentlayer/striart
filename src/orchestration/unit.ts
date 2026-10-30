@@ -43,6 +43,8 @@ import { resolveAgentProfile, runAgentSession } from '../session.ts';
 import { postHarvestedMessages } from '../collab/channel.ts';
 import { deliverInbox, harvestOutbox, prepareCollabFiles } from '../collab/files.ts';
 import type { OutboxHarvest } from '../collab/files.ts';
+import { partialEvidenceFromMerge } from './evidence.ts';
+import type { PartialEvidence } from './evidence.ts';
 import type {
   AgentCollabInfo,
   AgentMeta,
@@ -636,6 +638,8 @@ export interface FinalOutcome {
   detail: string | null;
   kept: boolean;
   merge: { sha: string; mergeSha: string; alreadyMerged?: boolean } | null;
+  /** Preuve partielle (lot O, priorité 2) — src/orchestration/evidence.ts complète avec la consigne, les verdicts et l'usage. */
+  evidence: PartialEvidence;
 }
 
 /**
@@ -652,23 +656,47 @@ export async function finalizeClone(
     logger.warn({ err: error, agent: meta.name }, 'Dépublication du PID de groupe impossible');
   });
   if ((await branchTip(meta)) === meta.baseCommit) {
-    return { status: 'EMPTY', detail: 'NO_COMMIT', kept: true, merge: null };
+    return {
+      status: 'EMPTY',
+      detail: 'NO_COMMIT',
+      kept: true,
+      merge: null,
+      evidence: partialEvidenceFromMerge(null),
+    };
   }
   // `commitPolicy: 'human'` (profil du clone, sinon global) : jamais de merge
   // automatique, même pour un clone orchestré — le travail attend la revue humaine.
   const config = ctx.config ?? (await loadConfig(ctx.root));
   const profile = meta.profile ? config.agentProfiles?.[meta.profile] : undefined;
   if (resolveCommitPolicy(config, profile ?? {}) === 'human') {
-    return { status: 'KEPT', detail: 'HUMAN_REVIEW_REQUIRED', kept: true, merge: null };
+    return {
+      status: 'KEPT',
+      detail: 'HUMAN_REVIEW_REQUIRED',
+      kept: true,
+      merge: null,
+      evidence: partialEvidenceFromMerge(null),
+    };
   }
   const done = await mergeAndCleanClone({ root: ctx.root, name: meta.name });
   if (done.kind === 'blocked') {
-    return { status: 'MERGE_BLOCKED', detail: done.detail, kept: true, merge: null };
+    return {
+      status: 'MERGE_BLOCKED',
+      detail: done.detail,
+      kept: true,
+      merge: null,
+      evidence: partialEvidenceFromMerge(done.merge),
+    };
   }
   const merged = done.merge;
   // `mergeAndCleanClone` ne rend « merged » que pour MERGED ou UP_TO_DATE alreadyMerged.
   if (merged.status !== 'MERGED' && merged.status !== 'UP_TO_DATE') {
-    return { status: 'MERGE_BLOCKED', detail: merged.status, kept: true, merge: null };
+    return {
+      status: 'MERGE_BLOCKED',
+      detail: merged.status,
+      kept: true,
+      merge: null,
+      evidence: partialEvidenceFromMerge(merged),
+    };
   }
   const mergeSha = merged.status === 'MERGED' ? merged.mergeSha : (merged.mergeSha ?? merged.sha);
   return {
@@ -680,6 +708,7 @@ export async function finalizeClone(
       mergeSha,
       ...(done.alreadyIntegrated ? { alreadyMerged: true } : {}),
     },
+    evidence: partialEvidenceFromMerge(merged),
   };
 }
 

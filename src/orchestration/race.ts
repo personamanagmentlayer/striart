@@ -26,6 +26,7 @@ import { slugifyPrompt, stopAgent } from '../orchestrator.ts';
 import { DEFAULT_PROFILE, resolveAgentProfile } from '../session.ts';
 import type { OrchestrationNodeResult, PlanNode, RaceLosers } from '../types.js';
 import { composeTurnPrompt } from './briefing.ts';
+import { buildEvidence } from './evidence.ts';
 import { nodeResult } from './result.ts';
 import { createGroupState, finishGroupState, updateGroupState } from './store.ts';
 import {
@@ -254,6 +255,14 @@ export async function runRaceNode(
   await updateGroupState(ctx.root, groupId, { round: 1 });
   await finishGroupState(ctx.root, groupId, 'MERGED');
   const final = winner.final as FinalOutcome;
+  const kept = final.kept || keptLosers;
+  const evidence = await buildEvidence(ctx.root, {
+    objective: node.prompt,
+    partial: final.evidence,
+    verdicts: [],
+    agent: winner.name,
+    kept,
+  });
   return nodeResult(node, {
     status: 'MERGED',
     agent: winner.name,
@@ -261,8 +270,9 @@ export async function runRaceNode(
     group: groupId,
     rounds: 1,
     detail: final.detail ?? `winner:${winner.index + 1}`,
-    kept: final.kept || keptLosers,
+    kept,
     merge: final.merge,
+    evidence,
   });
 }
 

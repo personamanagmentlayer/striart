@@ -1386,6 +1386,43 @@ export interface OrchestrationNodeResult {
   info?: (AgentMeta & { name: string }) | null;
   /** Clones en échec que la sentinelle WHOLE_REPO du Router n'a pas attendus (additif). */
   relaxedBlockers?: RelaxedBlocker[];
+  /**
+   * Preuve du nœud (lot O, priorité 2) — src/orchestration/evidence.ts.
+   * Construite depuis des données déjà mesurées (jamais recalculées) :
+   * absente seulement pour un nœud qui n'a jamais tourné (dépendance
+   * échouée, interruption, collision du Router avant tout lancement).
+   */
+  evidence?: EvidenceBundle | null;
+}
+
+/**
+ * Ce qu'un nœud de plan a VRAIMENT produit et vérifié (lot O, priorité 2) —
+ * jamais une déclaration de l'agent, toujours une mesure du noyau. Un nœud
+ * `MERGED`/`FINISHED` sans bundle exploitable est un bug de l'orchestrateur,
+ * jamais un succès silencieux (voir AGENTS.md — fail closed).
+ */
+export interface EvidenceBundle {
+  /** Consigne initiale du nœud (ce qui définissait « fait ») — absente pour un pipeline (consigne par étape). */
+  objective: string | null;
+  /** Commit de l'agent mergé et commit de merge sur la cible ; `null` si rien n'a été mergé. */
+  commit: { sha: string; mergeSha: string; alreadyMerged?: boolean } | null;
+  /** Test Gate exécuté pour ce merge — déjà mesuré par mergeAgentCommit, jamais relancé ici. */
+  gate: { success: boolean; exitCode: number | undefined; timedOut: boolean; log: string } | null;
+  /** Fusion sémantique (LLM) employée à la place d'une fusion Git ordinaire. */
+  semantic: boolean;
+  /** Fichiers d'un conflit résolu manuellement (vide hors conflit). */
+  resolvedFiles: string[];
+  /** Verdicts humains/IA déjà collectés (review, team) — jamais recalculés. */
+  verdicts: ReviewVerdictRecord[];
+  /** Travail conservé pour revue humaine au lieu d'être perdu (limitation déclarée). */
+  kept: boolean;
+  /**
+   * Usage et coût connus pour cet agent (src/tokens/ledger.ts, `currentTotals`
+   * — déjà mesuré, jamais recalculé). Cumul **de l'agent** depuis l'origine
+   * du registre, pas isolé à ce nœud seul (aucune frontière plus fine
+   * n'existe encore côté usage) ; `null` si le nœud n'a jamais eu d'agent.
+   */
+  usage: { tokens: number; costUsd: number; unpriced: number } | null;
 }
 
 export type CollabMessageKind = 'note' | 'question' | 'answer' | 'handoff' | 'verdict' | 'done';

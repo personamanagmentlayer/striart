@@ -128,6 +128,28 @@ runtime reference — a live agent or task, awaited with a bounded timeout).
 | `team` | `prompt`, `cadence`, `rounds`, `roles` (`name`, `profile`, `timeout`, `prompt`, `files`) | 2 to 8 roles; in `parallel`, `files` is mandatory per role; `cadence: dynamic` refused (`CADENCE_UNAVAILABLE`) |
 | `pipeline` | `handoff`, `steps` (`id`, `prompt`, `profile`, `timeout`) | 2 to 10 steps; no task-level `prompt` |
 
+### Evidence bundle
+
+Every node result (`result.nodes[i]`, also persisted in the run — see above)
+carries an `evidence` bundle: what was actually produced and checked, built
+from data the core already measured — never recomputed, never declared by
+the agent itself.
+
+| Field | Comes from |
+|---|---|
+| `objective` | The node's own prompt (`null` for `pipeline`: each step has its own) |
+| `commit` | `{sha, mergeSha, alreadyMerged?}` of the merge that actually landed, or `null` if nothing merged |
+| `gate` | The Test Gate that ran for that merge (`success`, `exitCode`, `timedOut`, `log`) — present even when the gate failed (`GATE_FAILED`/`MERGE_BLOCKED`): the log is the evidence of *why*, never withheld behind a null commit |
+| `semantic` | Whether a semantic (LLM) merge was used instead of an ordinary Git merge |
+| `resolvedFiles` | Files touched by a manual conflict resolution (empty outside a conflict) |
+| `verdicts` | Review verdicts already collected for this node (`review`, `team`) — the same array as `result.verdicts` |
+| `kept` | Work kept for human review instead of discarded (same as `result.kept`) |
+| `usage` | Tokens/cost known for the node's agent (`src/tokens/ledger.ts`, `currentTotals`) — a lifetime total for that agent, not isolated to this one node (no finer boundary exists yet); `null` if the node never had an agent |
+
+A node that never ran (dependency failed, interruption, a Router collision
+before any launch) carries no `evidence` at all — absence here means "never
+started", not "started and said nothing".
+
 Role and reviewer names use lowercase letters, digits and dashes (`author`
 and `striart` are reserved). A derived agent name (`<agent>-<step>`,
 `<agent>-<n>`) must stay a valid name: `agent` is limited to 30 characters for

@@ -131,6 +131,28 @@ vivant, ou un plan `version: 1` (aucun état de run n'existe pour lui).
 | `team` | `prompt`, `cadence`, `rounds`, `roles` (`name`, `profile`, `timeout`, `prompt`, `files`) | 2 à 8 rôles ; en `parallel`, `files` est obligatoire par rôle ; `cadence: dynamic` refusée (`CADENCE_UNAVAILABLE`) |
 | `pipeline` | `handoff`, `steps` (`id`, `prompt`, `profile`, `timeout`) | 2 à 10 étapes ; pas de `prompt` au niveau tâche |
 
+### Preuve du nœud (evidence bundle)
+
+Chaque résultat de nœud (`result.nodes[i]`, aussi persisté dans le run — voir
+plus haut) porte une `evidence` : ce qui a VRAIMENT été produit et vérifié,
+construite depuis des données déjà mesurées par le noyau — jamais
+recalculée, jamais déclarée par l'agent lui-même.
+
+| Champ | Provenance |
+|---|---|
+| `objective` | La consigne propre du nœud (`null` pour `pipeline` : chaque étape a la sienne) |
+| `commit` | `{sha, mergeSha, alreadyMerged?}` du merge réellement arrivé, ou `null` si rien n'a été mergé |
+| `gate` | Le Test Gate exécuté pour ce merge (`success`, `exitCode`, `timedOut`, `log`) — présent même quand le gate a échoué (`GATE_FAILED`/`MERGE_BLOCKED`) : le journal est la preuve du POURQUOI, jamais tu derrière un commit null |
+| `semantic` | Si une fusion sémantique (LLM) a été employée à la place d'une fusion Git ordinaire |
+| `resolvedFiles` | Fichiers touchés par une résolution manuelle de conflit (vide hors conflit) |
+| `verdicts` | Verdicts de revue déjà collectés pour ce nœud (`review`, `team`) — le même tableau que `result.verdicts` |
+| `kept` | Travail conservé pour revue humaine au lieu d'être perdu (identique à `result.kept`) |
+| `usage` | Usage/coût connus pour l'agent du nœud (`src/tokens/ledger.ts`, `currentTotals`) — un cumul à vie de cet agent, pas isolé à ce seul nœud (aucune frontière plus fine n'existe encore) ; `null` si le nœud n'a jamais eu d'agent |
+
+Un nœud qui n'a jamais tourné (dépendance échouée, interruption, collision du
+Router avant tout lancement) ne porte AUCUNE `evidence` : son absence veut
+dire « jamais démarré », pas « démarré sans rien à dire ».
+
 Les noms de rôles et de relecteurs sont en minuscules, chiffres et tirets
 (`author` et `striart` sont réservés). Un nom d'agent dérivé (`<agent>-<étape>`,
 `<agent>-<n>`) doit rester un nom valide : `agent` est limité à 30 caractères
