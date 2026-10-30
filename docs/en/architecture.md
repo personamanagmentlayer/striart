@@ -2,6 +2,79 @@
 
 > [Documentation](README.md) · Architecture
 
+## Overview
+
+A container-level view of what talks to what: the three planes (human
+Control Protocol, agent MCP, Striart-to-agent ACP), the serialized merge
+chain (Router → Merger → Test Gate), and the native helper binary. The
+numbered [flow of an agent commit](#flow-of-an-agent-commit) below gives the
+step-by-step sequence; this diagram gives the static picture it runs inside.
+
+```mermaid
+%%{init: {"flowchart": {"htmlLabels": true, "curve": "linear"}, "theme": "base", "themeVariables": {"primaryColor": "#eef2ff", "primaryBorderColor": "#4338ca", "primaryTextColor": "#1e1b4b", "lineColor": "#64748b", "fontSize": "14px"}} }%%
+flowchart LR
+    accTitle: Striart container architecture
+    accDescr: Shows how a developer, an editor, Striart's single orchestrator process, one agent clone (representative of N, one per agent, all isolated the same way) and the target branch connect through the three planes (human Control Protocol, agent MCP, Striart-to-agent ACP) and the serialized merge chain (Router, Semantic Merger, Test Gate, native helper binary).
+
+    Human["<b>Developer</b><br/><i>person</i>"]
+    Editor["<b>Editor / terminal</b><br/><i>container</i><br/>IDE, CLI, browser dashboard"]
+
+    subgraph ORCH["Striart orchestrator — single Node.js process"]
+        direction TB
+        CP["<b>Control Protocol</b><br/><i>container · JSON-RPC 2.0</i><br/>stdio or token-protected loopback HTTP"]
+        ROUTER["<b>Router</b><br/><i>container · LLM</i><br/>predicts touched files (coarse filter)"]
+        WATCH["<b>Watch loop</b><br/><i>container</i><br/>serialized chain: detect commit,<br/>fetch, dispatch, sync"]
+        MERGER["<b>Semantic Merger</b><br/><i>container · LLM</i><br/>3-way merge on conflict (BASE/OURS/THEIRS)"]
+        GATE["<b>Test Gate</b><br/><i>container</i><br/>blocking: runs testCommand"]
+        MCP["<b>MCP server</b><br/><i>container · stdio</i><br/>bound to the calling clone"]
+        ACP["<b>ACP client</b><br/><i>container · ACP v1</i><br/>persistent session host"]
+    end
+
+    NATIVE["<b>striart-native</b><br/><i>container · Rust</i><br/>process identity, tree-kill,<br/>process container, pty host"]
+
+    subgraph CLONE["Agent clone — real Git clone, no remote<br/>(one of N, one per agent, same pattern each)"]
+        AGENT["<b>Coding agent</b><br/><i>container</i><br/>Claude Code / Aider / Codex / Ollama…"]
+    end
+
+    MAIN[("<b>Target branch</b><br/><i>storage</i><br/>the main repository")]
+
+    Human -->|"writes prompts, reviews, approves"| Editor
+    Editor ==>|"human plane: everything — read state,<br/>approve permissions, merge, rollback<br/>(refused inside an agent session)"| CP
+
+    AGENT ==>|"agent plane: read state, merge/resolve<br/>only its own clone's work"| MCP
+    ACP ==>|"Striart → agent plane: starts session,<br/>hands prompts, answers permissions (ACP v1)"| AGENT
+
+    ROUTER -->|"reads repo map (tree, symbols)<br/>to predict files, queues collisions"| MAIN
+    WATCH -->|"detects commit (chokidar on refs/heads),<br/>fetches into a private ref"| CLONE
+    WATCH -.->|"periodic: rebases every active agent<br/>onto the latest main (sync step)"| CLONE
+    WATCH -->|"on conflict: hands BASE/OURS/THEIRS"| MERGER
+    MERGER -->|"resolved result feeds the Gate"| MAIN
+    WATCH -->|"runs after a clean or resolved merge"| GATE
+    GATE -->|"runs testCommand in a process container<br/>(Job Object / cgroup + subreaper)"| NATIVE
+    WATCH -->|"commits the merge, pushes<br/>to origin (autoPush)"| MAIN
+
+    classDef storage fill:#fef9c3,stroke:#92400e,color:#1e1b4b;
+    classDef nativeBox fill:#f1f5f9,stroke:#334155,color:#1e1b4b;
+    class MAIN storage;
+    class NATIVE nativeBox;
+
+    subgraph LEGEND["Legend"]
+        direction TB
+        LEG1["— plain line → : internal orchestration<br/>(within the serialized chain)"]
+        LEG2["┄┄ dashed line ┄→ : periodic / secondary<br/>(background rebase sync)"]
+        LEG3["══ bold line ═→ : a plane boundary crossing<br/>(human / agent / Striart→agent — label says which)"]
+    end
+```
+
+What it shows, in one line each: the developer drives everything through the
+**Control Protocol**; each coding agent only ever reaches its own clone's
+state through the **MCP server**; Striart itself starts and drives each agent
+through its **ACP client**; the **Watch loop** is the serialized chain that
+fetches an agent's commit, hands conflicts to the **Semantic Merger**, runs
+the **Test Gate** (via **striart-native**'s process container) before
+committing and pushing; the **Router** only ever reads the target branch to
+predict files ahead of time, it never talks to a clone directly.
+
 ## The three pillars
 
 When several AI agents work on the same repo in parallel, they trample each
