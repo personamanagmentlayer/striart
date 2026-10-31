@@ -1,11 +1,17 @@
-# Conception — Run Manager (proposition)
+# Conception — Run Manager
 
 > [Documentation](README.md) · Conception — Run Manager
 >
-> **Statut : proposition, non implémentée.** Ce document décrit une cible
-> d'architecture et un ordre de réalisation ; rien ici n'est livré. Il sert
-> de point de départ à la discussion et à la planification, pas de
-> spécification figée. 🇬🇧 [English version](../en/run-manager-design.md).
+> **Statut : livrée (v0.12.0).** Les sept priorités ci-dessous sont
+> arrivées sur `main` (PR #4) dans l'ordre que décrit ce document. Les
+> priorités 5 et 7 ont été livrées **au périmètre réduit** à ce qui pouvait
+> être livré honnêtement plutôt qu'à l'esquisse d'origine — voir la note à
+> la fin de chacune de leurs sections. Le reste de ce document reste le
+> compte-rendu de conception ; pour le comportement livré lui-même, voir
+> [Plans](plans.md), [Commandes](commandes.md) (`striart draft`,
+> `plan --resume`, `trace`, `work`) et
+> [Configuration](configuration.md) (`agentProfiles.<nom>.envAllow`).
+> 🇬🇧 [English version](../en/run-manager-design.md).
 
 ## Pourquoi
 
@@ -255,6 +261,16 @@ Si retenu, profils d'exécution proposés :
 pouvoir ni lire hors de son périmètre, ni récupérer les secrets de
 l'orchestrateur, ni pousser, ni approuver son propre résultat.
 
+> **Livré, au périmètre réduit** : seulement
+> `agentProfiles.<nom>.envAllow` (une liste blanche déclarative de
+> l'environnement hérité) — la seule pièce réelle, honnête et
+> indépendante de la plateforme. Le sandboxing système de
+> fichiers/réseau/process pour l'outil hébergé n'est **pas** implémenté ;
+> SECURITY.md continue de qualifier le modèle de « défense en profondeur,
+> pas une sandbox ». Voir
+> [Configuration](configuration.md#profils-dagents-agentprofiles) et
+> SECURITY.md.
+
 ## 6. Observabilité de bout en bout (priorité 6)
 
 Identifiant commun à travers dashboard et registres existants :
@@ -278,6 +294,14 @@ Hors scope de ce document pour l'instant — dépend entièrement des
 priorités 1 à 6 (un Run Manager non durable ne peut pas distribuer sans
 double exécution).
 
+> **Livré, au périmètre réduit** : `striart work <fichier> [--run
+> <run-id>]` — des workers coopératifs (plusieurs process indépendants
+> partageant le même dossier `.striart/`, sur une machine ou plusieurs)
+> drainent un même run ensemble via une réclamation atomique, jamais un
+> protocole réseau, une authentification ou une exécution multi-dépôt.
+> Voir [Plans](plans.md#workers-coopératifs) et
+> [Commandes](commandes.md#striart-work-fichieryaml---run-run-id).
+
 ## Ordre de réalisation
 
 | Priorité | Incrément | Résultat vérifiable |
@@ -299,5 +323,8 @@ est la fondation prioritaire.
 
 ## Portée de cette branche
 
-Ce document seul. Aucun code n'est livré ici : il sert à valider la cible
-et l'ordre avant d'entamer la priorité 1 dans une branche séparée.
+Ce document seul, à l'origine — il servait à valider la cible et l'ordre
+avant d'entamer la priorité 1 dans une branche séparée. Les sept
+priorités ci-dessus ont ensuite été implémentées, chacune son propre
+commit, sur `feat/run-manager`, et mergées sur `main` dans la PR #4
+(v0.12.0).

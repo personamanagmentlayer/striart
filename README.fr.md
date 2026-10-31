@@ -10,7 +10,7 @@
 <p align="center">
   <img alt="version 0.12.0" src="https://img.shields.io/badge/version-0.12.0-6e56cf">
   <img alt="Node.js ≥ 22.21" src="https://img.shields.io/badge/node-%E2%89%A5%2022.21-339933?logo=node.js&logoColor=white">
-  <img alt="3293 tests" src="https://img.shields.io/badge/tests-3293-blue">
+  <img alt="3350 tests" src="https://img.shields.io/badge/tests-3350-blue">
   <img alt="zéro build en développement" src="https://img.shields.io/badge/build-aucun%20en%20dev-8250df">
   <img alt="licence MIT" src="https://img.shields.io/badge/licence-MIT-blue">
 </p>
@@ -137,7 +137,8 @@ anglais (`STRIART_LANG`), complétion bash/zsh/fish/PowerShell
 ## Documentation
 
 La documentation complète vit dans **[docs/fr/](docs/fr/README.md)**
-(🇬🇧 [docs/en/](docs/en/README.md)) :
+(🇬🇧 [docs/en/](docs/en/README.md)), et est aussi publiée comme site
+navigable : **<https://personamanagmentlayer.github.io/striart/>**.
 
 | Page | Contenu |
 |---|---|

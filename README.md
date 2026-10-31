@@ -10,7 +10,7 @@
 <p align="center">
   <img alt="version 0.12.0" src="https://img.shields.io/badge/version-0.12.0-6e56cf">
   <img alt="Node.js ≥ 22.21" src="https://img.shields.io/badge/node-%E2%89%A5%2022.21-339933?logo=node.js&logoColor=white">
-  <img alt="3293 tests" src="https://img.shields.io/badge/tests-3293-blue">
+  <img alt="3350 tests" src="https://img.shields.io/badge/tests-3350-blue">
   <img alt="no build in development" src="https://img.shields.io/badge/build-none%20in%20dev-8250df">
   <img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue">
 </p>
@@ -137,7 +137,9 @@ Scriptable exit codes (0 success, 1 failure, 2 usage, 3 refused by a guard),
 ## Documentation
 
 The complete documentation lives in **[docs/en/](docs/en/README.md)**
-(🇫🇷 [docs/fr/](docs/fr/README.md) — the French version is the reference):
+(🇫🇷 [docs/fr/](docs/fr/README.md) — the French version is the reference),
+and is also published as a browsable site:
+**<https://personamanagmentlayer.github.io/striart/>**.
 
 | Page | Content |
 |---|---|

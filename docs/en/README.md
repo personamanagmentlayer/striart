@@ -2,7 +2,8 @@
 
 > Complete documentation for Striart, the multi-agent Git orchestrator.
 > The root [README.md](../../README.md) is the showcase and is shown by default;
-> all the detail lives here.
+> all the detail lives here. Also published as a browsable site:
+> <https://personamanagmentlayer.github.io/striart/>.
 > 🇫🇷 [Documentation française](../fr/README.md) — the [French README](../../README.fr.md) is the content reference.
 
 ## Contents
@@ -25,7 +26,7 @@
 
 ## Other documents
 
-- [Run Manager design (proposal)](run-manager-design.md) — not implemented: a durable Run Manager, resumable executions, an evidence bundle, a Planner, a deterministic Scheduler, and the build order.
+- [Run Manager design](run-manager-design.md) — shipped in v0.12.0: a durable, resumable Run Manager (`plan --resume`), an evidence bundle, a Planner (`striart draft`), a deterministic Scheduler, a declarative env allowlist, end-to-end observability (`striart trace`), and cooperative workers (`striart work`). Kept as the design record for how each priority landed.
 - [SECURITY.md](../../SECURITY.md) — threat model and trust boundaries.
 - [CONTRIBUTING.md](../../CONTRIBUTING.md) — contributor guide.
 - [CHANGELOG.md](../../CHANGELOG.md) — version history.
