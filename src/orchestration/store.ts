@@ -22,6 +22,7 @@ import { logger } from '../logger.ts';
 import { striartDir } from '../paths.ts';
 import { mkdirPrivate } from '../private-fs.ts';
 import { isProcessAlive } from '../process-tree.ts';
+import { RUN_ID_RE } from './ids.ts';
 import type {
   OrchestrationGroupState,
   OrchestrationNodeResult,
@@ -49,8 +50,7 @@ export function resumableResult(
   return result;
 }
 
-/** Forme d'un id de run — source unique (CLI : `src/cli/parse.ts`, `runIdParser`). */
-export const RUN_ID_RE = /^run-[0-9a-f]{12}$/;
+export { RUN_ID_RE };
 const GROUP_ID_RE = /^(review|team|pipeline|race)-[0-9a-f]{12}$/;
 
 export function orchestrationDir(root: string): string {
