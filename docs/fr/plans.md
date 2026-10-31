@@ -109,7 +109,37 @@ dépendances, `concurrency` bornée par `orchestration.maxConcurrency`) ;
 `--on-failure` les surchargent à l'application. **Niveau tâche** : `id`,
 `mode` (`task` par défaut, `review`, `race`, `team`, `pipeline`), `agent`,
 `after` (un id ou une liste ; un id défini plus haut, ou une référence
-d'exécution — agent ou tâche vivant, attendu avec délai borné).
+d'exécution — agent ou tâche vivant, attendu avec délai borné), `resources`
+(tous les modes — voir plus bas).
+
+### Ressources hors-Git (ordonnancement déterministe)
+
+`resources` : une liste optionnelle de 10 noms distincts et opaques au plus
+(80 caractères chacun au plus — `db`, `port:5432`, `s3:uploads`, tout ce qui
+a un sens pour toi ; Striart ne les interprète jamais comme un chemin ni une
+commande). Deux nœuds qui déclarent le MÊME nom ne tournent jamais en même
+temps, même sans `after` entre eux, sans collision prédite par le Router, et
+même en mode `parallel` avec une `concurrency` qui les laisserait sinon se
+chevaucher. Un conflit ne fait que RETARDER le lancement d'un nœud (revérifié
+à chaque passage de l'ordonnanceur) ; ce n'est jamais un échec ni un statut
+`SKIPPED` — le nœud tourne dès que la ressource se libère. C'est la garantie
+déterministe que demande la conception de
+[run-manager-design.md](conception-run-manager.md) : quoi que prédise (ou
+manque) le Router, une ressource externe partagée (base de données, port,
+fichier verrouillé, service externe) n'est jamais touchée par deux nœuds à
+la fois.
+
+Une application `version: 2` est **persistée** au fil de l'eau comme un run
+(`.striart/orchestration/runs/<id>.json`, pure observabilité). Interrompue
+(crash, `Ctrl+C`, process tué) avant que toutes les tâches aient atteint un
+statut terminal, `striart plan <fichier> --resume <run-id>` (l'id est affiché
+à l'interruption, et listé par `striart status --json` sous
+`orchestration.runs`) rejoue le **même fichier de plan** sans relancer les
+tâches déjà terminées — une tâche sautée uniquement à cause de l'interruption
+elle-même (jamais une vraie décision) est retentée, jamais figée sautée pour
+toujours. `--resume` exige le fichier de plan exact qui a produit ce run
+(mêmes tâches, même ordre) et refuse un run encore possédé par un process
+vivant, ou un plan `version: 1` (aucun état de run n'existe pour lui).
 
 | Mode | Champs propres | Bornes |
 |---|---|---|
@@ -118,6 +148,79 @@ d'exécution — agent ou tâche vivant, attendu avec délai borné).
 | `race` | `prompt`, `candidates` (`profile`, `timeout`), `pick`, `losers` | 2 à 10 candidats |
 | `team` | `prompt`, `cadence`, `rounds`, `roles` (`name`, `profile`, `timeout`, `prompt`, `files`) | 2 à 8 rôles ; en `parallel`, `files` est obligatoire par rôle ; `cadence: dynamic` refusée (`CADENCE_UNAVAILABLE`) |
 | `pipeline` | `handoff`, `steps` (`id`, `prompt`, `profile`, `timeout`) | 2 à 10 étapes ; pas de `prompt` au niveau tâche |
+
+### Preuve du nœud (evidence bundle)
+
+Chaque résultat de nœud (`result.nodes[i]`, aussi persisté dans le run — voir
+plus haut) porte une `evidence` : ce qui a VRAIMENT été produit et vérifié,
+construite depuis des données déjà mesurées par le noyau — jamais
+recalculée, jamais déclarée par l'agent lui-même.
+
+| Champ | Provenance |
+|---|---|
+| `objective` | La consigne propre du nœud (`null` pour `pipeline` : chaque étape a la sienne) |
+| `commit` | `{sha, mergeSha, alreadyMerged?}` du merge réellement arrivé, ou `null` si rien n'a été mergé |
+| `gate` | Le Test Gate exécuté pour ce merge (`success`, `exitCode`, `timedOut`, `log`) — présent même quand le gate a échoué (`GATE_FAILED`/`MERGE_BLOCKED`) : le journal est la preuve du POURQUOI, jamais tu derrière un commit null |
+| `semantic` | Si une fusion sémantique (LLM) a été employée à la place d'une fusion Git ordinaire |
+| `resolvedFiles` | Fichiers touchés par une résolution manuelle de conflit (vide hors conflit) |
+| `verdicts` | Verdicts de revue déjà collectés pour ce nœud (`review`, `team`) — le même tableau que `result.verdicts` |
+| `kept` | Travail conservé pour revue humaine au lieu d'être perdu (identique à `result.kept`) |
+| `usage` | Usage/coût connus pour l'agent du nœud (`src/tokens/ledger.ts`, `currentTotals`) — un cumul à vie de cet agent, pas isolé à ce seul nœud (aucune frontière plus fine n'existe encore) ; `null` si le nœud n'a jamais eu d'agent |
+
+Un nœud qui n'a jamais tourné (dépendance échouée, interruption, collision du
+Router avant tout lancement) ne porte AUCUNE `evidence` : son absence veut
+dire « jamais démarré », pas « démarré sans rien à dire ».
+
+### Chaîne d'observabilité
+
+En plus d'`evidence`, un résultat de nœud porte aussi `attempt` (combien de
+fois il a VRAIMENT été lancé — supérieur à 1 seulement pour une tâche
+autonome relancée après une collision du Router) et, pour une tâche
+autonome simple, `sessionLogPath` (le journal disque de la session qui a
+produit ce résultat, sous `.striart/logs/` — survit à la suppression du
+clone). Avec l'`id` du run lui-même et `resumeCount` (combien de fois
+`--resume` l'a VRAIMENT repris), c'est la chaîne `run_id → task_id → essai →
+agent/session → commit_sha` que demande la conception de
+[conception-run-manager.md](conception-run-manager.md).
+
+`striart trace <run-id>` affiche ce fil pour un run ; `striart trace` sans
+id affiche le bilan agrégé (taux de réussite, part des nœuds conservés pour
+une décision humaine, combien de runs ont VRAIMENT été repris, coût moyen
+par tâche réussie) sur les runs retenus par `orchestration.keepRuns` — voir
+[Commandes](commandes.md).
+
+### Workers coopératifs
+
+`striart work <fichier> [--run <run-id>]` permet à plusieurs process
+indépendants de vider le MÊME run ensemble, chacun réclamant et exécutant
+une tâche à la fois, sans jamais exécuter la même tâche deux fois. La
+garantie tient à une lecture-modification-écriture atomique sous le
+verrou d'état — la même primitive qui protège déjà tout fichier sous
+`.striart/`, pas une nouvelle couche de coordination : un worker qui
+constate que les dépendances d'une tâche sont satisfaites et que ses
+`resources` déclarées sont libres la réclame en une seule étape verrouillée ;
+un deuxième worker qui vise exactement la même tâche ou exactement la même
+ressource perd simplement cette course et cherche autre chose.
+
+Portée, dite sans détour : ce n'est **pas** un protocole réseau. « Plusieurs
+process » veut dire exactement cela — ce process, un autre process local,
+ou un process sur une autre machine qui a accès au même dossier
+`.striart/` (un système de fichiers partagé ou réseau) — jamais un worker
+qui se connecte lui-même à distance, et Striart n'embarque aucune
+authentification ni transport pour cela. Ce n'est non plus **pas** du
+multi-dépôt : un plan reste toujours appliqué au dépôt pour lequel il a été
+écrit ; rien ici ne permet à une tâche de viser un autre checkout. Les deux
+sont explicitement laissés à un incrément ultérieur, jamais supposés en
+silence.
+
+Une tâche sautée uniquement pour une interruption gracieuse (la même
+distinction `INTERRUPTED`/`STOPPED` que `--resume` fait déjà) reste
+réclamable par n'importe quel worker, y compris un qui rejoint après coup —
+un worker, c'est sinon exactement le contrôle de congruence de `--resume`
+(même fichier de plan, mêmes tâches) appliqué en continu plutôt qu'une
+seule fois. `onFailure: stop` n'a besoin d'aucun champ de plus : chaque
+worker le déduit en relisant l'état partagé, l'échec d'un seul arrête donc
+tous les autres de réclamer au passage suivant. Exige un plan `version: 2`.
 
 Les noms de rôles et de relecteurs sont en minuscules, chiffres et tirets
 (`author` et `striart` sont réservés). Un nom d'agent dérivé (`<agent>-<étape>`,

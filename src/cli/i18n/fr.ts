@@ -125,6 +125,8 @@ export const fr = {
     ticketId: (value: string) => `identifiant de ticket invalide « ${value} ».`,
     projectPath: (value: string) =>
       `chemin de projet invalide « ${value} » : un chemin relatif à la racine, en « / », sans « .. », sans lecteur ni caractère de contrôle.`,
+    runId: (value: string) =>
+      `identifiant de run invalide « ${value} » : de la forme run-xxxxxxxxxxxx (« striart status --json », section orchestration).`,
   },
 
   usageErrors: {
@@ -270,12 +272,34 @@ export const fr = {
         'striart plan plan.yaml --dry-run',
         'striart plan plan.yaml',
         'striart plan plan.yaml --mode parallel --concurrency 3',
+        'striart plan plan.yaml --resume run-0123456789ab',
       ],
       file: 'fichier YAML du plan',
       dryRun: 'valide et affiche le plan sans rien lancer',
       mode: 'plan v2 : impose l’enchaînement (sequential ou parallel)',
       concurrency: 'plan v2 : tâches simultanées en mode parallel',
       onFailure: 'plan v2 : après un échec, stop (rien ne démarre plus) ou skip-dependents',
+      resume:
+        'plan v2 : reprend un run interrompu (id affiché par « status --json ») — même fichier de plan, tâches déjà terminées non relancées',
+    },
+    draft: {
+      summary: 'Propose un plan v2 pour un objectif (Planner) — n’applique rien',
+      description:
+        'Tourne un objectif en fichier de plan "version: 2" validé (mêmes règles qu’un plan écrit à la main) : à relire, puis appliquer soi-même avec « striart plan ». Ne lance jamais un agent, jamais de merge.',
+      examples: [
+        'striart draft "Ajoute la pagination à l’API /users"',
+        'striart draft "Migre les tests vers Vitest" --out migration.yaml',
+      ],
+      objective: 'objectif en langage naturel à transformer en plan',
+      out: 'fichier de sortie (YAML) — défaut : striart-draft-<horodatage>.yaml',
+    },
+    work: {
+      summary: 'Worker coopératif : réclame et exécute les tâches d’un plan v2',
+      description:
+        'S’attache à un run existant (--run) ou en crée un, puis réclame et exécute les tâches une par une jusqu’à épuisement. Plusieurs « striart work » sur le même --run coopèrent sans jamais exécuter une tâche deux fois (lecture-modification-écriture atomique) — aucun protocole réseau, aucun dépôt distinct.',
+      examples: ['striart work plan.yaml', 'striart work plan.yaml --run run-0123456789ab'],
+      file: 'fichier YAML du plan (même fichier pour tous les workers d’un run)',
+      run: 'id du run à rejoindre — absent : ce worker en crée un et l’affiche',
     },
     orchestrate: {
       summary: 'Lance une tâche orchestrée : review, race, team ou pipeline',
@@ -406,9 +430,16 @@ export const fr = {
       ],
       since: 'début de période : 7d, 24h, 30m, today ou AAAA-MM-JJ (UTC)',
       until: 'fin de période (date AAAA-MM-JJ UTC incluse, ou durée)',
-      role: 'filtre par rôle : router, merger, memory, judge, review, agent',
+      role: 'filtre par rôle : router, merger, memory, judge, review, agent, planner',
       agent: 'filtre par agent',
       task: 'filtre par identifiant de tâche',
+    },
+    trace: {
+      summary: 'Observabilité de bout en bout : fil d’un run, ou bilan agrégé',
+      description:
+        'Avec un id de run, le fil run_id → tâche → essai → agent/session → commit. Sans id, le bilan agrégé (taux de réussite, interventions humaines, reprises après crash, coût moyen) sur les runs persistés.',
+      examples: ['striart trace', 'striart trace run-0123456789ab'],
+      runId: 'id du run à détailler (affiché par « plan », listé par « status --json »)',
     },
     dashboard: {
       summary: 'Tableau de bord web local, temps réel (127.0.0.1)',
@@ -731,6 +762,14 @@ export const fr = {
     },
   },
 
+  draft: {
+    running: 'Le Planner propose un plan',
+    written: (file: string, tasks: number, tokens: number) =>
+      `plan écrit : ${file} (${tasks} ${plural(tasks, 'tâche', 'tâches')}, ~${tokens} jetons de consignes). Rien n'a été lancé.`,
+    note: (note: string) => `Planner : ${note}`,
+    fileExists: (file: string) => `${file} existe déjà — rien n'a été écrasé.`,
+  },
+
   completion: {
     /** Première ligne (commentaire) de chaque script de complétion. */
     header: (shell: string, install: string) =>
@@ -775,6 +814,9 @@ export const fr = {
     colTransport: 'TRANSPORT',
     colTimeout: 'DÉLAI',
     colEnv: 'VARIABLES',
+    colEnvAllow: 'HÉRITAGE',
+    envAllowFull: 'complet',
+    envAllowNone: 'aucun',
     colInvocation: 'INVOCATION',
     usage: 'Utilisables avec --profile (run --autonomous / --on-main) ou dans un plan.',
     colPreset: 'PRESET',
@@ -916,6 +958,46 @@ export const fr = {
     skipped: (n: number) =>
       `${n} ${plural(n, 'ligne illisible ignorée', 'lignes illisibles ignorées')} dans le registre.`,
     none: '—',
+  },
+
+  trace: {
+    empty: 'aucun run orchestré persisté (striart plan sur un plan "version: 2").',
+    reportHeading: 'Observabilité — bilan agrégé',
+    totalRuns: (n: number) => `runs retenus : ${n}`,
+    totalNodes: (total: number, terminal: number) => `tâches : ${total} (${terminal} terminées)`,
+    mergedRate: (merged: number, terminal: number, rate: number) =>
+      `taux de réussite : ${merged}/${terminal} (${(rate * 100).toFixed(1)} %)`,
+    mergedRateNone: 'taux de réussite : — (aucune tâche terminée)',
+    humanRate: (rate: number) => `interventions humaines : ${(rate * 100).toFixed(1)} %`,
+    humanRateNone: 'interventions humaines : — (aucune tâche terminée)',
+    crashRecoveries: (n: number) => `reprises après interruption : ${n}`,
+    avgCost: (usd: number) =>
+      `coût moyen par tâche réussie : ${usd.toFixed(4)} USD (ratio de portefeuille, pas une attribution par tâche)`,
+    avgCostNone: 'coût moyen par tâche réussie : — (aucun prix connu ou aucune tâche réussie)',
+    runHeading: (runId: string, status: string) => `Run ${runId} — ${status}`,
+    runMeta: (mode: string, resumeCount: number) =>
+      `${mode}${resumeCount > 0 ? ` · repris ${resumeCount} ${plural(resumeCount, 'fois', 'fois')}` : ''}`,
+    colTask: 'TÂCHE',
+    colKind: 'TYPE',
+    colStatus: 'STATUT',
+    colAttempt: 'ESSAI',
+    colAgent: 'AGENT',
+    colCommit: 'COMMIT',
+    sessionLog: (task: string, logPath: string) => `${task} : journal — ${logPath}`,
+  },
+
+  work: {
+    running: 'Le worker réclame des tâches',
+    runId: (runId: string, joined: boolean) =>
+      joined ? `run rejoint : ${runId}` : `run créé : ${runId}`,
+    claimed: (n: number, interrupted: boolean, allDone: boolean) =>
+      `${n} ${plural(n, 'tâche réclamée', 'tâches réclamées')} par ce worker${
+        interrupted
+          ? ' — interrompu, d’autres restent peut-être réclamables'
+          : allDone
+            ? ' — run terminé'
+            : ' — plus rien à réclamer pour l’instant'
+      }.`,
   },
 
   history: {

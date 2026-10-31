@@ -82,7 +82,7 @@ describe('LLM par rôle', () => {
   });
 
   it('validation : rôle inconnu refusé', () => {
-    expect(() => validateConfig({ llmRoles: { planner: null } })).toThrowError(/llmRoles/);
+    expect(() => validateConfig({ llmRoles: { bogus: null } })).toThrowError(/llmRoles/);
     expect(() =>
       validateConfig({ llmRoles: { judge: { provider: 'ollama', model: 'x' } } }),
     ).not.toThrow();

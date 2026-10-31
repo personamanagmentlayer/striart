@@ -27,6 +27,8 @@ import { collabRulesInSessionInstructions } from '../agents/instructions.ts';
 import { logger } from '../logger.ts';
 import type { OrchestrationNodeResult, PlanNode } from '../types.js';
 import { composeTurnPrompt, messageItems } from './briefing.ts';
+import { buildEvidence, partialEvidenceFromMerge } from './evidence.ts';
+import type { PartialEvidence } from './evidence.ts';
 import { nodeResult } from './result.ts';
 import { createGroupState, finishGroupState, updateGroupState } from './store.ts';
 import { handoffDirective, handoffOf, newHandoffToken, runTeamFlow } from './team.ts';
@@ -94,6 +96,7 @@ export async function runPipelineNode(
   const agents: string[] = [];
   let previous: { step: string; mergeSha: string; files: string[] } | null = null;
   let result: OrchestrationNodeResult | null = null;
+  let partial: PartialEvidence = partialEvidenceFromMerge(null);
   for (const [i, step] of steps.entries()) {
     await updateGroupState(ctx.root, group.id, { round: i + 1, activeRoles: [step.id] });
     const start = await startOrchestratedClone(ctx, {
@@ -177,6 +180,7 @@ export async function runPipelineNode(
     }
     const artefact = await handoffOf(ctx, turn, handoffToken);
     const final = await finalizeClone(ctx, meta);
+    partial = final.evidence;
     if (final.status !== 'MERGED' || !final.merge) {
       result = nodeResult(node, {
         status: final.status,
@@ -220,5 +224,20 @@ export async function runPipelineNode(
   const final = result ?? nodeResult(node, { status: 'SKIPPED', detail: 'NO_STEP' });
   await closeCollabGroup(ctx.root, group.id).catch(() => {});
   await finishGroupState(ctx.root, group.id, final.status);
-  return { ...final, agent: agents.at(-1) ?? null, agents, group: group.id, rounds: agents.length };
+  const evidence = await buildEvidence(ctx.root, {
+    // Pas de consigne unique : chaque étape a la sienne (step.prompt).
+    objective: null,
+    partial,
+    verdicts: [],
+    agent: agents.at(-1) ?? null,
+    kept: final.kept,
+  });
+  return {
+    ...final,
+    agent: agents.at(-1) ?? null,
+    agents,
+    group: group.id,
+    rounds: agents.length,
+    evidence,
+  };
 }

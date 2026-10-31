@@ -47,6 +47,7 @@ export const USAGE_ROLES: readonly UsageRole[] = [
   'judge',
   'review',
   'agent',
+  'planner',
 ];
 const SOURCES: readonly UsageSource[] = ['api', 'agent-stream', 'acp', 'estimate', 'unmetered'];
 const OUTCOMES = ['ok', 'rejected', 'error', 'cache-hit', 'budget', 'stopped'] as const;

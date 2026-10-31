@@ -52,6 +52,52 @@ describe('profils enrichis (env + timeout par profil)', () => {
     expect(probe).toBe('valeur-du-profil');
   });
 
+  it("profile.envAllow (lot O, priorité 5) : un secret hérité non listé n'atteint jamais le process enfant", async () => {
+    const info = await createAgent({ root: repo.root, name: 'agent-a' });
+    const session = await runAgentSession({
+      root: repo.root,
+      agent: 'agent-a',
+      taskId: info.taskId,
+      cwd: info.path,
+      // Simule l'environnement HÉRITÉ (celui d'un process.env réel) : la
+      // valeur du secret vient d'ici, jamais de `profile.env`.
+      env: { ...process.env, STRIART_PROFILE_ENV_PROBE: 'secret-herite' },
+      profile: {
+        command: process.execPath,
+        args: [FAKE_AGENT, '{{prompt}}'],
+        envAllow: ['PATH'],
+      },
+      prompt: 'tâche',
+    });
+    expect(session.status).toBe('COMPLETED');
+    await expect(
+      readFile(path.join(info.path, 'profile-env-probe.txt'), 'utf8'),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('profile.envAllow ne retire jamais profile.env (ajouté APRÈS le filtre)', async () => {
+    const info = await createAgent({ root: repo.root, name: 'agent-a' });
+    const session = await runAgentSession({
+      root: repo.root,
+      agent: 'agent-a',
+      taskId: info.taskId,
+      cwd: info.path,
+      env: process.env,
+      profile: {
+        command: process.execPath,
+        args: [FAKE_AGENT, '{{prompt}}'],
+        // Liste vide : rien d'hérité ne passe — mais `env` du profil, lui, est
+        // toujours entier, puisqu'il s'applique après le filtre.
+        envAllow: [],
+        env: { STRIART_PROFILE_ENV_PROBE: 'valeur-du-profil' },
+      },
+      prompt: 'tâche',
+    });
+    expect(session.status).toBe('COMPLETED');
+    const probe = await readFile(path.join(info.path, 'profile-env-probe.txt'), 'utf8');
+    expect(probe).toBe('valeur-du-profil');
+  });
+
   it('profile.timeout prime sur le global (une session bloquée est tuée à SON délai)', async () => {
     // Profil au délai court + faux agent qui ne sort jamais → TIMEOUT rapide,
     // ce qui PROUVE que profile.timeout (1500 ms) l'emporte sur le global

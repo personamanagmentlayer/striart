@@ -31,7 +31,9 @@ supprimée : l'hôte est désormais le binaire natif `striart-native pty-host`
 | `striart run "<prompt>" --autonomous [--profile <p>] [--timeout <ms>]` | Mode autonome : Striart pilote l'outil de bout en bout. |
 | `striart run "<prompt>" --on-main [--profile <p>] [--timeout <ms>]` | Lance l'agent DIRECTEMENT sur le repo principal (pas de clone), sous session protégée. |
 | `striart attach <agent>` | Attache le terminal au pty possédé d'un agent (session ouverte par `--open`). |
-| `striart plan <fichier.yaml> [--dry-run] [--mode <m>] [--concurrency <n>] [--on-failure <p>]` | Tâches-as-code : applique un plan YAML versionné (v1, ou v2 : modes d'orchestration). |
+| `striart plan <fichier.yaml> [--dry-run] [--mode <m>] [--concurrency <n>] [--on-failure <p>] [--resume <run-id>]` | Tâches-as-code : applique un plan YAML versionné (v1, ou v2 : modes d'orchestration) ; `--resume` rejoue un run v2 interrompu sans relancer les tâches terminées. |
+| `striart draft "<objectif>" [--out <fichier>]` | Planner : propose un plan v2 validé pour un objectif — écrit un fichier, ne lance rien. |
+| `striart work <fichier.yaml> [--run <run-id>]` | Worker coopératif : réclame et exécute les tâches d'un plan v2 une par une ; plusieurs workers sur le même `--run` n'exécutent jamais une tâche deux fois. |
 | `striart profiles [--catalog \| --detect \| --import-acp <id>]` | Profils d'agents configurés ; catalogue des presets ; outils installés ; import d'un agent du registre ACP. |
 | **Orchestrer** | |
 | `striart watch [--no-merge]` | Surveille les commits, merge + Test Gate + rebase en continu. |
@@ -47,6 +49,7 @@ supprimée : l'hôte est désormais le binaire natif `striart-native pty-host`
 | `striart queue [--retry]` | Tâches démarrées et en attente, avec ce qui les bloque ; `--retry` démarre les débloquées. |
 | `striart history [--limit <n>]` | Historique des merges/rollbacks, reconstruit du graphe Git. |
 | `striart usage [--since <p>] [--until <p>] [--role <r>] [--agent <a>] [--task <id>]` | Consommation de tokens et coûts, depuis le registre `.striart/usage/`. |
+| `striart trace [run-id]` | Observabilité de bout en bout : le fil d'un run (run_id → tâche → essai → agent/session → commit), ou le bilan agrégé sans id de run. |
 | `striart dashboard [--port <p>] [--daemon \| --status \| --stop \| --link]` | Dashboard web local temps réel (127.0.0.1, SSE), à lien de connexion à usage unique, + pilotage. |
 | **Réparer et nettoyer** | |
 | `striart rollback` | Défait le dernier merge Striart (reset local ou revert). |
@@ -646,7 +649,7 @@ travail référencé, puis part automatiquement. Référence inconnue
 (`AFTER_UNKNOWN`) ou cycle (`AFTER_CYCLE`) → refus au lancement. C'est la
 brique sous-jacente des [plans YAML](plans.md).
 
-### `striart plan <fichier.yaml> [--dry-run] [--mode <m>] [--concurrency <n>] [--on-failure <p>]`
+### `striart plan <fichier.yaml> [--dry-run] [--mode <m>] [--concurrency <n>] [--on-failure <p>] [--resume <run-id>]`
 
 Voir [Plans — tâches-as-code](plans.md). Un plan `version: 1` est la file et
 `--after` rédigés en YAML ; un plan `version: 2` ajoute les modes
@@ -665,6 +668,55 @@ affichées « non appliquée (arrêt demandé) » ; la CLI sort en 130 (143 pour
 SIGTERM) ; le document `--json` rend `ok: false` (un plan interrompu n'a
 pas atteint son intention) et la ligne « plan appliqué » passe en
 avertissement. Un second Ctrl+C coupe net.
+
+`--resume <run-id>` (v2 seulement, incompatible avec `--dry-run`) rejoue le
+**même fichier de plan** après une interruption sans relancer les tâches
+déjà terminées — voir [Plans — tâches-as-code](plans.md). L'id du run est
+affiché à l'interruption et listé par `striart status --json` sous
+`orchestration.runs`.
+
+### `striart draft "<objectif>" [--out <fichier>]`
+
+Planner (voir [Plans — tâches-as-code](plans.md)) :
+tourne un objectif en langage naturel en fichier de plan `version: 2`,
+validé par l'EXACT même chemin qu'un plan écrit à la main (profil inconnu,
+mauvaise dépendance… tout est refusé pareil). Il **ne lance rien** — aucun
+agent, aucun merge — et écrit le plan dans `--out` (défaut
+`striart-draft-<horodatage>.yaml`), en refusant d'écraser un fichier déjà
+existant (`DRAFT_FILE_EXISTS`). L'étape d'approbation humaine est explicite
+et séparée : relire le fichier, puis `striart plan <fichier> --dry-run`,
+puis `striart plan <fichier>`. Si l'objectif est trop ambigu pour être
+planifié sans deviner, le Planner refuse plutôt que de supposer
+(`PLANNER_REFUSED`) ; un échec du LLM après nouvelles tentatives est
+`PLANNER_FAILED`. Utilise le rôle LLM `planner`
+(`config.llmRoles.planner`, voir [Configuration](configuration.md)).
+
+### `striart work <fichier.yaml> [--run <run-id>]`
+
+Worker coopératif (lot O, priorité 7 — voir [Plans —
+tâches-as-code](plans.md)) : s'attache à un run existant (`--run`) ou en
+crée un, puis réclame et exécute les tâches du plan UNE PAR UNE, en relisant
+l'état PARTAGÉ à chaque passage plutôt que sa seule mémoire. Plusieurs
+`striart work` lancés sur le MÊME `--run` — dans ce process, un autre
+process local, ou une autre machine qui partage `.striart/` — coopèrent
+sans risque : chaque tâche est réclamée par un seul d'entre eux (une
+lecture-modification-écriture atomique sous le verrou d'état, le même qui
+protège déjà tout `.striart/`), jamais deux fois. Il n'y a NI protocole
+réseau NI authentification : « distribué » veut dire ici des process
+séparés qui ont accès au même dossier `.striart/`, rien de plus — et aucun
+dépôt distinct non plus, un plan reste appliqué à CE dépôt.
+
+Sans `--run`, le premier `striart work` affiche l'id du run qu'il a créé
+pour que d'autres workers le rejoignent. `onFailure: stop` se déduit de
+l'état partagé (aucun champ de plus) : dès qu'un worker voit une tâche
+échouer, tous les autres sautent les tâches `pending` restantes. Une tâche
+sautée uniquement pour une interruption gracieuse (`Ctrl+C`, l'arrêt d'un
+autre worker) reste réclamable — exactement comme `striart plan --resume`,
+dont `striart work` réutilise tel quel le contrôle de congruence (`--run`
+doit décrire les mêmes tâches). Une fois la dernière tâche réclamée et plus
+rien à prendre pour aucun worker, le fil complet du run est affiché avec le
+même rendu que [`striart trace`](#striart-trace-run-id). Exige un plan
+`version: 2` (`PLAN_INVALID`, `WORKER_NEEDS_V2` sinon).
 
 ### `striart profiles [--catalog | --detect | --import-acp <id>]`
 
@@ -1030,18 +1082,18 @@ comment un conflit éventuel a été tranché (`resolution` : `auto`,
 
 Consommation de tokens et coûts, lue dans le registre **append-only**
 `.striart/usage/AAAA-MM-JJ.ndjson` (jour UTC) : un enregistrement par appel
-LLM de Striart (`router`, `merger`, `memory`, `judge`, `review`) et par
-session d'agent (`agent`). Le registre ne contient **jamais** de prompt, de
-réponse, de contenu de fichier ni de clé : chaque ligne est reconstruite
-champ par champ (liste blanche). Tableaux par rôle (avec un TOTAL), par
-agent, par tâche (20 premières), par modèle et par jour, puis le taux de
-succès du cache de prompt, les réponses servies par le cache de résultats et
-l'empreinte des consignes injectées.
+LLM de Striart (`router`, `merger`, `memory`, `judge`, `review`, `planner`)
+et par session d'agent (`agent`). Le registre ne contient **jamais** de
+prompt, de réponse, de contenu de fichier ni de clé : chaque ligne est
+reconstruite champ par champ (liste blanche). Tableaux par rôle (avec un
+TOTAL), par agent, par tâche (20 premières), par modèle et par jour, puis le
+taux de succès du cache de prompt, les réponses servies par le cache de
+résultats et l'empreinte des consignes injectées.
 
 - `--since` / `--until` : `7d`, `24h`, `30m`, `today` ou `AAAA-MM-JJ` (UTC,
   jour entier inclus). Période incohérente ou illisible :
   `USAGE_PERIOD_INVALID` (sortie 2).
-- `--role` : `router`, `merger`, `memory`, `judge`, `review` ou `agent`.
+- `--role` : `router`, `merger`, `memory`, `judge`, `review`, `agent` ou `planner`.
 - Le **coût** n'existe que pour un modèle dont le prix est déclaré
   (`tokens.pricing`, sans prix en dur : un prix change sans prévenir) ; un
   modèle Ollama local compte 0 USD. Les appels sans prix sont comptés à part
@@ -1058,6 +1110,33 @@ l'empreinte des consignes injectées.
   jetons estimés du Merger (conflit réel à trois voies), de l'arbre du
   Router (le dépôt, puis un monorepo synthétique de 10 000 fichiers), des
   consignes injectées (complet / compact) et de la Memory Layer.
+
+### `striart trace [run-id]`
+
+Observabilité de bout en bout des plans `version: 2` (voir [Plans —
+tâches-as-code](plans.md)) : le fil `run_id → task_id → essai →
+agent/session → commit_sha`, entièrement assemblé depuis ce que le Run
+Manager et la preuve du nœud persistent déjà — rien de nouveau n'est mesuré
+ici, seulement relié et, sans id, agrégé.
+
+- Avec un `run-id` (l'id affiché à l'interruption par `striart plan`, ou
+  listé par `striart status --json` sous `orchestration.runs`) : une ligne
+  par nœud de ce run — son id de tâche, son type, son statut, son **essai**
+  (combien de fois il a VRAIMENT été lancé — supérieur à 1 seulement pour
+  une tâche autonome relancée après une collision du Router), son agent et
+  son commit, plus le chemin du journal de session pour une relecture. Id
+  inconnu : `ORCHESTRATION_RUN_NOT_FOUND`.
+- Sans id : le bilan agrégé sur les runs retenus par
+  `orchestration.keepRuns` — taux de réussite, part des nœuds conservés
+  pour une décision humaine, combien de runs ont VRAIMENT été repris après
+  une interruption (`striart plan --resume`), et le coût moyen par tâche
+  réussie. Ce dernier chiffre divise le total GLOBAL du registre d'usage
+  par le nombre de nœuds réussis : un ratio de portefeuille, jamais une
+  attribution par tâche (l'`usage` de la preuve du nœud est lui-même un
+  cumul à vie de l'agent, pas isolé à un seul nœud — voir [Plans —
+  tâches-as-code](plans.md)). Les rollbacks et les défauts qui ont franchi
+  le Test Gate ne sont PAS encore suivis : le bilan ne fabrique jamais un
+  chiffre pour eux.
 
 ### `striart dashboard [--port <p>] [--daemon | --status | --stop | --link]`
 

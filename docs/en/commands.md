@@ -30,7 +30,9 @@ the native binary `striart-native pty-host` (see
 | `striart run "<prompt>" --autonomous [--profile <p>] [--timeout <ms>]` | Autonomous mode: Striart drives the tool end to end. |
 | `striart run "<prompt>" --on-main [--profile <p>] [--timeout <ms>]` | Runs the agent DIRECTLY on the main repo (no clone), under a protected session. |
 | `striart attach <agent>` | Attaches the terminal to an agent's owned pty (session opened by `--open`). |
-| `striart plan <file.yaml> [--dry-run] [--mode <m>] [--concurrency <n>] [--on-failure <p>]` | Tasks-as-code: applies a versioned YAML plan (v1, or v2: orchestration modes). |
+| `striart plan <file.yaml> [--dry-run] [--mode <m>] [--concurrency <n>] [--on-failure <p>] [--resume <run-id>]` | Tasks-as-code: applies a versioned YAML plan (v1, or v2: orchestration modes); `--resume` replays an interrupted v2 run without rerunning finished tasks. |
+| `striart draft "<objective>" [--out <file>]` | Planner: proposes a validated v2 plan for an objective — writes a file, starts nothing. |
+| `striart work <file.yaml> [--run <run-id>]` | Cooperative worker: claims and executes a v2 plan's tasks one at a time; several workers on the same `--run` never execute a task twice. |
 | `striart profiles [--catalog \| --detect \| --import-acp <id>]` | Configured agent profiles; preset catalog; installed tools; import of an ACP registry agent. |
 | **Orchestrating** | |
 | `striart watch [--no-merge]` | Watches commits, merge + Test Gate + rebase continuously. |
@@ -46,6 +48,7 @@ the native binary `striart-native pty-host` (see
 | `striart queue [--retry]` | Started and waiting tasks, with what blocks them; `--retry` starts the unblocked ones. |
 | `striart history [--limit <n>]` | Merge/rollback history, rebuilt from the Git graph. |
 | `striart usage [--since <p>] [--until <p>] [--role <r>] [--agent <a>] [--task <id>]` | Token usage and cost, from the `.striart/usage/` ledger. |
+| `striart trace [run-id]` | End-to-end observability: one run's chain (run_id → task → attempt → agent/session → commit), or the aggregate report without a run id. |
 | `striart dashboard [--port <p>] [--daemon \| --status \| --stop \| --link]` | Real-time local web dashboard (127.0.0.1, SSE) behind a one-time sign-in link, + control. |
 | **Repairing and cleaning** | |
 | `striart rollback` | Undoes the last Striart merge (local reset or revert). |
@@ -630,7 +633,7 @@ to finish (merge + stop), then starts automatically. Unknown reference
 (`AFTER_UNKNOWN`) or cycle (`AFTER_CYCLE`) → refused at launch. This is the
 building block underneath [YAML plans](plans.md).
 
-### `striart plan <file.yaml> [--dry-run] [--mode <m>] [--concurrency <n>] [--on-failure <p>]`
+### `striart plan <file.yaml> [--dry-run] [--mode <m>] [--concurrency <n>] [--on-failure <p>] [--resume <run-id>]`
 
 See [Plans — tasks-as-code](plans.md). A `version: 1` plan is the queue and
 `--after` written in YAML; a `version: 2` plan adds the orchestration modes
@@ -649,6 +652,53 @@ unpublished, clone kept); no further task starts. The result carries
 `--json` document returns `ok: false` (an interrupted plan did not reach
 its intent) and the "plan applied" line becomes a warning. A second Ctrl+C
 cuts immediately.
+
+`--resume <run-id>` (v2 only, incompatible with `--dry-run`) replays the
+**same plan file** after an interruption without rerunning tasks that
+already finished — see [Plans — tasks-as-code](plans.md). The run id is
+printed on interruption and listed by `striart status --json` under
+`orchestration.runs`.
+
+### `striart draft "<objective>" [--out <file>]`
+
+Planner (see [Plans — tasks-as-code](plans.md)): turns a
+natural-language objective into a `version: 2` plan file, validated by the
+exact same path as a hand-written plan (unknown profile, bad dependency, …
+all refused the same way). It **starts nothing** — no agent, no merge — and
+writes the plan to `--out` (default `striart-draft-<timestamp>.yaml`),
+refusing to overwrite an existing file (`DRAFT_FILE_EXISTS`). The human
+approval step is explicit and separate: review the file, then
+`striart plan <file> --dry-run`, then `striart plan <file>`. If the
+objective is too ambiguous to plan safely, the Planner refuses rather than
+guessing (`PLANNER_REFUSED`); an LLM failure after retries is
+`PLANNER_FAILED`. Uses the `planner` LLM role (`config.llmRoles.planner`,
+see [Configuration](configuration.md)).
+
+### `striart work <file.yaml> [--run <run-id>]`
+
+Cooperative worker (lot O, priority 7 — see [Plans —
+tasks-as-code](plans.md)): attaches to an existing run (`--run`) or creates
+one, then claims and executes the plan's tasks **one at a time**, re-reading
+the shared run state on every pass rather than only its own memory. Several
+`striart work` invocations started on the **same** `--run` — in this
+process, another local process, or another machine that shares `.striart/`
+— cooperate safely: each task is claimed by exactly one of them (an atomic
+read-modify-write under the state lock, the same one that already protects
+every file under `.striart/`), never twice. There is **no network protocol
+and no authentication**: "distributed" here means separate processes with
+access to the same `.striart/` directory, nothing more — and no separate
+repository either, a plan is still applied to this one.
+
+Without `--run`, the first `striart work` prints the run id it created so
+further workers can join it. `onFailure: stop` is derived from the shared
+state (no extra field): once any worker sees a task fail, every worker
+skips the remaining pending ones. A task skipped only for a graceful
+interruption (`Ctrl+C`, another worker's abort) stays claimable — exactly
+like `striart plan --resume`, whose congruence check (`--run`'s plan must
+describe the same tasks) `striart work` reuses as-is. Once the last task is
+claimed and every worker has nothing left to grab, the run's full chain is
+printed via the same rendering as [`striart trace`](#striart-trace-run-id).
+Needs a `version: 2` plan (`PLAN_INVALID`, `WORKER_NEEDS_V2` otherwise).
 
 ### `striart profiles [--catalog | --detect | --import-acp <id>]`
 
@@ -1004,17 +1054,17 @@ entries.
 
 Token usage and cost, read from the **append-only** ledger
 `.striart/usage/YYYY-MM-DD.ndjson` (UTC day): one record per Striart LLM call
-(`router`, `merger`, `memory`, `judge`, `review`) and per agent session
-(`agent`). The ledger **never** holds a prompt, a response, file content or a
-key: each line is rebuilt field by field (allow-list). Tables by role (with a
-TOTAL), agent, task (first 20), model and day, then the prompt-cache hit
-rate, the answers served by the result cache and the footprint of the
-injected instructions.
+(`router`, `merger`, `memory`, `judge`, `review`, `planner`) and per agent
+session (`agent`). The ledger **never** holds a prompt, a response, file
+content or a key: each line is rebuilt field by field (allow-list). Tables by
+role (with a TOTAL), agent, task (first 20), model and day, then the
+prompt-cache hit rate, the answers served by the result cache and the
+footprint of the injected instructions.
 
 - `--since` / `--until`: `7d`, `24h`, `30m`, `today` or `YYYY-MM-DD` (UTC,
   whole day included). Inconsistent or unreadable period:
   `USAGE_PERIOD_INVALID` (exit 2).
-- `--role`: `router`, `merger`, `memory`, `judge`, `review` or `agent`.
+- `--role`: `router`, `merger`, `memory`, `judge`, `review`, `agent` or `planner`.
 - **Cost** exists only for a model whose price is declared
   (`tokens.pricing`, no hard-coded price: a price changes without notice); a
   local Ollama model counts as 0 USD. Calls without a price are counted
@@ -1031,6 +1081,31 @@ injected instructions.
   estimated tokens of the Merger (a real three-way conflict), of the Router
   tree (the repository, then a synthetic 10,000-file monorepo), of the
   injected instructions (full / compact) and of the Memory Layer.
+
+### `striart trace [run-id]`
+
+End-to-end observability for `version: 2` plans (see [Plans —
+tasks-as-code](plans.md)): the chain `run_id → task_id → attempt →
+agent/session → commit_sha`, assembled entirely from data the Run Manager
+and the evidence bundle already persist — nothing new is measured here,
+only connected and, without an id, aggregated.
+
+- With a `run-id` (the id printed on interruption by `striart plan`, or
+  listed by `striart status --json` under `orchestration.runs`): one row per
+  node of that run — its task id, kind, status, **attempt** (how many times
+  it was actually launched — greater than 1 only for an autonomous task
+  retried after a Router collision), agent and commit, plus the session log
+  path for a replay. Unknown id: `ORCHESTRATION_RUN_NOT_FOUND`.
+- Without an id: the aggregate report over the runs retained by
+  `orchestration.keepRuns` — merged-task rate, the share of nodes kept for a
+  human decision, how many runs were actually resumed after an interruption
+  (`striart plan --resume`), and the average cost per merged task. That last
+  figure divides the **global** usage ledger total by the number of merged
+  nodes: a portfolio ratio, never a per-task attribution (the evidence
+  bundle's own `usage` is a lifetime total for an agent, not isolated to one
+  node — see [Plans — tasks-as-code](plans.md#evidence-bundle)). Rollbacks
+  and defects that crossed the Test Gate are **not** tracked yet: the report
+  never fabricates a number for them.
 
 ### `striart dashboard [--port <p>] [--daemon | --status | --stop | --link]`
 

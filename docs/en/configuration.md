@@ -108,7 +108,7 @@ export default {
   ollamaHost: 'http://localhost:11434',
   prompts: { router: null, merger: null },
   llm: null,                      // or { provider, model, … } — see below
-  llmRoles: { router: null, merger: null, memory: null, judge: null },
+  llmRoles: { router: null, merger: null, memory: null, judge: null, planner: null },
   llmResilience: {},              // backoff + circuit breaker — see below
   tokens: {},                     // accounting, ceilings, optimizations — see below
 
@@ -227,12 +227,14 @@ The unwrapping also applies to answers read back from the result cache.
 
 ### `llmRoles` — one LLM per role
 
-`llmRoles: { router, merger, memory, judge }` gives each role its own model;
-each entry is an `llm` specification (same fields) or `null` (= the global
-`llm` block, or Ollama). A cheap local model for the Router and a strong
-model for the Merger, for instance. `judge` is the LLM that ranks a `race`
-(`pick: judge`). Only these four roles exist (unknown key refused); the
-`review` reviewers are agents, not Striart LLM roles.
+`llmRoles: { router, merger, memory, judge, planner }` gives each role its
+own model; each entry is an `llm` specification (same fields) or `null` (=
+the global `llm` block, or Ollama). A cheap local model for the Router and a
+strong model for the Merger, for instance. `judge` is the LLM that ranks a
+`race` (`pick: judge`). `planner` is the LLM `striart draft` calls to turn an
+objective into a plan (see [Commands](commands.md)). Only these five roles
+exist (unknown key refused); the `review` reviewers are agents, not Striart
+LLM roles.
 
 ### `llmResilience` — retries, backoff and circuit breaker
 
@@ -592,6 +594,7 @@ name, `PROFILE_INVALID`):
 |---|---|
 | `command`, `args` | The tool and its argv. `{{prompt}}` mandatory in argv, forbidden in ACP. Optional slots: `{{striartInstructions}}` (the instructions text), `{{striartInstructionsFile}}` (path of the instructions file, outside the clone), `{{striartTestCommand}}` (the Test Gate command). |
 | `env` | Profile-specific variables merged over the environment (one key per tool). From a `.mjs`, `env: { KEY: process.env.SOURCE }` — never a plain-text secret. |
+| `envAllow` | `null` (default) inherits the whole process environment, unchanged. An array of exact names — even `[]` — restricts what is *inherited* to that list, applied before `env` (which always still applies in full: `envAllow` never removes what `env` adds). Defense in depth, not a sandbox — see [SECURITY.md](../../SECURITY.md). |
 | `timeout` | Max session time (ms, 1000 to 2147483647). Precedence: `--timeout` > `profile.timeout` > `autonomousTimeoutMs`. |
 | `preset`, `experimental` | Preset the profile derives from; "not verified in official documentation" flag. |
 | `writeMode` | `workspace` \| `read-only` \| `unrestricted`: what the invocation lets the tool write (declarative, displayed). |
@@ -601,10 +604,10 @@ name, `PROFILE_INVALID`):
 | `settingsFile` | `{ flag, json, claudeMdExcludes? }`: session settings file written by Striart **outside the clone** (`.striart/logs/`) and passed to the tool through `flag` (≤ 64 KiB). |
 | `acp` | ACP transport: `true` or an object (see below). |
 
-Without `env`, the session inherits the whole process environment — see
-[SECURITY.md](../../SECURITY.md). `striart profiles` lists the configured
-profiles (`env` names, never values), `--catalog` the presets, `--detect` the
-installed tools.
+Without `env` or `envAllow`, the session inherits the whole process
+environment — see [SECURITY.md](../../SECURITY.md). `striart profiles` lists
+the configured profiles (`env` names, never values), `--catalog` the
+presets, `--detect` the installed tools.
 
 ### `agentProfiles.<name>.acp` — the ACP transport
 

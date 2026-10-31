@@ -111,11 +111,16 @@ const PLAN_REASONS: Record<string, (d: Record<string, unknown>) => string> = {
   MODE_INVALID: () => '"mode" must be sequential or parallel.',
   OVERRIDES_NEED_V2: () =>
     '--mode, --concurrency and --on-failure need a "version: 2" plan (a version 1 plan chains through the queue and --after).',
+  WORKER_NEEDS_V2: () =>
+    '"striart work" needs a "version: 2" plan (a version 1 plan has no run state to claim nodes from).',
   CONCURRENCY_INVALID: (d) => `"concurrency" must be a whole number from 1 to ${str(d.max)}.`,
   ON_FAILURE_INVALID: () => '"onFailure" must be stop or skip-dependents.',
   KIND_UNKNOWN: (d) =>
     `${planTask(d)}unknown task mode ${str(d.kind)} (expected: task, review, pipeline, race, team).`,
   AFTER_INVALID: (d) => `${planTask(d)}"after" must be an id or a non-empty list of distinct ids.`,
+  RESOURCES_INVALID: (d) =>
+    `${planTask(d)}"resources" must be a list of distinct non-empty names (at most ${str(d.max)} characters each).`,
+  RESOURCES_TOO_MANY: (d) => `${planTask(d)}at most ${str(d.max)} declared resources.`,
   AGENT_INVALID: (d) =>
     `${planTask(d)}"agent" is not a valid agent name (letters, digits, - and _, at most ${str(d.max)} characters).`,
   COMMAND_AUTONOMOUS_CONFLICT: (d) =>
@@ -528,8 +533,24 @@ const ERRORS: Record<string, (d: Record<string, unknown>) => string> = {
   REVIEW_CORRUPT: (d) => `review request file is corrupted: ${str(d.path)}${because(d.cause)}`,
   ORCHESTRATION_STATE_CORRUPT: (d) =>
     `orchestration state file is corrupted: ${str(d.path)}${because(d.cause)}`,
+  ORCHESTRATION_RUN_NOT_FOUND: (d) =>
+    `unknown orchestration run "${str(d.runId)}" (see "striart status --json").`,
+  ORCHESTRATION_RUN_LIVE: (d) =>
+    `orchestration run "${str(d.runId)}" is still running (pid ${str(d.pid)}): wait for it to finish, or interrupt it cleanly before resuming it.`,
+  ORCHESTRATION_RESUME_MISMATCH: (d) =>
+    `the supplied plan does not match run "${str(d.runId)}" (different tasks): resume with the exact plan file that produced this run.`,
   RACE_JUDGE_FAILED: (d) =>
     `the race judge did not produce a valid ranking${llmTarget(d)}${llmBecause(d)}`,
+  PLANNER_FAILED: (d) =>
+    d.reason === 'NO_PROFILES'
+      ? 'no agent profile is configured: the Planner cannot propose any autonomous task.'
+      : d.reason === 'NOT_V2'
+        ? 'the Planner produced a plan that is not "version: 2" (internal contract violated).'
+        : d.reason === 'ABORTED'
+          ? 'the Planner was interrupted before making any call.'
+          : `the Planner did not produce a valid plan${llmTarget(d)}${llmBecause(d)}`,
+  PLANNER_REFUSED: (d) => `the Planner refused this objective: ${str(d.reason)}`,
+  DRAFT_FILE_EXISTS: (d) => `"${str(d.file)}" already exists: nothing was overwritten.`,
   ORCHESTRATE_USAGE: (d) =>
     d.reason === 'OPTION_NOT_FOR_MODE'
       ? `option ${str(d.option)} does not apply to "orchestrate ${str(d.mode)}".`
@@ -1156,6 +1177,8 @@ export const en: Messages = {
     ticketId: (value) => `invalid ticket id "${value}".`,
     projectPath: (value) =>
       `invalid project path "${value}": a path relative to the root, with "/" separators, no "..", no drive letter, no control character.`,
+    runId: (value) =>
+      `invalid run id "${value}": expected the form run-xxxxxxxxxxxx ("striart status --json", orchestration section).`,
   },
 
   usageErrors: {
@@ -1302,12 +1325,34 @@ export const en: Messages = {
         'striart plan plan.yaml --dry-run',
         'striart plan plan.yaml',
         'striart plan plan.yaml --mode parallel --concurrency 3',
+        'striart plan plan.yaml --resume run-0123456789ab',
       ],
       file: 'YAML plan file',
       dryRun: 'validate and show the plan without starting anything',
       mode: 'version 2 plan: force the chaining (sequential or parallel)',
       concurrency: 'version 2 plan: simultaneous tasks in parallel mode',
       onFailure: 'version 2 plan: after a failure, stop (nothing else starts) or skip-dependents',
+      resume:
+        'version 2 plan: resume an interrupted run (id shown by "status --json") — same plan file, already-finished tasks are not restarted',
+    },
+    draft: {
+      summary: 'Propose a version 2 plan for an objective (Planner) — applies nothing',
+      description:
+        'Turns an objective into a validated "version: 2" plan file (same rules as a hand-written plan): review it, then apply it yourself with "striart plan". Never starts an agent, never merges.',
+      examples: [
+        'striart draft "Add pagination to the /users API"',
+        'striart draft "Migrate the tests to Vitest" --out migration.yaml',
+      ],
+      objective: 'natural-language objective to turn into a plan',
+      out: 'output file (YAML) — default: striart-draft-<timestamp>.yaml',
+    },
+    work: {
+      summary: 'Cooperative worker: claims and executes a version 2 plan’s tasks',
+      description:
+        'Attaches to an existing run (--run) or creates one, then claims and executes tasks one at a time until exhausted. Several "striart work" on the same --run cooperate without ever executing a task twice (atomic read-modify-write) — no network protocol, no separate repository.',
+      examples: ['striart work plan.yaml', 'striart work plan.yaml --run run-0123456789ab'],
+      file: 'YAML plan file (same file for every worker of a run)',
+      run: 'the run id to join — omitted: this worker creates one and prints it',
     },
     orchestrate: {
       summary: 'Run an orchestrated task: review, race, team or pipeline',
@@ -1438,9 +1483,16 @@ export const en: Messages = {
       ],
       since: 'period start: 7d, 24h, 30m, today or YYYY-MM-DD (UTC)',
       until: 'period end (YYYY-MM-DD UTC, whole day included, or a duration)',
-      role: 'filter by role: router, merger, memory, judge, review, agent',
+      role: 'filter by role: router, merger, memory, judge, review, agent, planner',
       agent: 'filter by agent',
       task: 'filter by task id',
+    },
+    trace: {
+      summary: 'End-to-end observability: one run’s chain, or the aggregate report',
+      description:
+        'With a run id, the chain run_id → task → attempt → agent/session → commit. Without one, the aggregate report (merged-task rate, human interventions, crash recoveries, average cost) over the persisted runs.',
+      examples: ['striart trace', 'striart trace run-0123456789ab'],
+      runId: 'the run id to detail (shown by "plan", listed by "status --json")',
     },
     dashboard: {
       summary: 'Local real-time web dashboard (127.0.0.1)',
@@ -1747,6 +1799,14 @@ export const en: Messages = {
     },
   },
 
+  draft: {
+    running: 'The Planner is drafting a plan',
+    written: (file, tasks, tokens) =>
+      `plan written: ${file} (${tasks} ${plural(tasks, 'task', 'tasks')}, ~${tokens} instruction tokens). Nothing was started.`,
+    note: (note) => `Planner: ${note}`,
+    fileExists: (file) => `${file} already exists — nothing was overwritten.`,
+  },
+
   completion: {
     header: (shell, install) => `# striart — ${shell} completion. Install: ${install}`,
   },
@@ -1787,6 +1847,9 @@ export const en: Messages = {
     colTransport: 'TRANSPORT',
     colTimeout: 'TIMEOUT',
     colEnv: 'VARIABLES',
+    colEnvAllow: 'INHERITANCE',
+    envAllowFull: 'full',
+    envAllowNone: 'none',
     colInvocation: 'INVOCATION',
     usage: 'Use them with --profile (run --autonomous / --on-main) or in a plan.',
     colPreset: 'PRESET',
@@ -1921,6 +1984,46 @@ export const en: Messages = {
     instructions: (tokens: number) => `injected instructions: ~${tokens} tokens per session.`,
     skipped: (n: number) => `${n} unreadable ${plural(n, 'line', 'lines')} skipped in the ledger.`,
     none: '—',
+  },
+
+  trace: {
+    empty: 'no persisted orchestrated run (striart plan on a "version: 2" plan).',
+    reportHeading: 'Observability — aggregate report',
+    totalRuns: (n: number) => `retained runs: ${n}`,
+    totalNodes: (total: number, terminal: number) => `tasks: ${total} (${terminal} finished)`,
+    mergedRate: (merged: number, terminal: number, rate: number) =>
+      `merged-task rate: ${merged}/${terminal} (${(rate * 100).toFixed(1)}%)`,
+    mergedRateNone: 'merged-task rate: — (no finished task yet)',
+    humanRate: (rate: number) => `human interventions: ${(rate * 100).toFixed(1)}%`,
+    humanRateNone: 'human interventions: — (no finished task yet)',
+    crashRecoveries: (n: number) => `crash recoveries: ${n}`,
+    avgCost: (usd: number) =>
+      `average cost per merged task: $${usd.toFixed(4)} (a portfolio ratio, not a per-task attribution)`,
+    avgCostNone: 'average cost per merged task: — (no known price or no merged task)',
+    runHeading: (runId: string, status: string) => `Run ${runId} — ${status}`,
+    runMeta: (mode: string, resumeCount: number) =>
+      `${mode}${resumeCount > 0 ? ` · resumed ${resumeCount} ${plural(resumeCount, 'time', 'times')}` : ''}`,
+    colTask: 'TASK',
+    colKind: 'KIND',
+    colStatus: 'STATUS',
+    colAttempt: 'ATTEMPT',
+    colAgent: 'AGENT',
+    colCommit: 'COMMIT',
+    sessionLog: (task: string, logPath: string) => `${task}: log — ${logPath}`,
+  },
+
+  work: {
+    running: 'The worker is claiming tasks',
+    runId: (runId: string, joined: boolean) =>
+      joined ? `joined run: ${runId}` : `created run: ${runId}`,
+    claimed: (n: number, interrupted: boolean, allDone: boolean) =>
+      `${n} ${plural(n, 'task', 'tasks')} claimed by this worker${
+        interrupted
+          ? ' — interrupted, others may still be claimable'
+          : allDone
+            ? ' — run finished'
+            : ' — nothing left to claim right now'
+      }.`,
   },
 
   history: {

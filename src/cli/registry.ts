@@ -55,6 +55,8 @@ export const COMMANDS: readonly CommandSpec[] = Object.freeze([
   { name: 'run', group: 'launch', json: 'document' },
   { name: 'attach', group: 'launch', json: 'none', foreground: 'terminal' },
   { name: 'plan', group: 'launch', json: 'document' },
+  { name: 'draft', group: 'launch', json: 'document' },
+  { name: 'work', group: 'launch', json: 'document' },
   { name: 'profiles', group: 'launch', json: 'document' },
 
   { name: 'watch', group: 'orchestrate', json: 'stream', foreground: 'watch' },
@@ -68,6 +70,7 @@ export const COMMANDS: readonly CommandSpec[] = Object.freeze([
   { name: 'queue', group: 'observe', json: 'document' },
   { name: 'history', group: 'observe', json: 'document' },
   { name: 'usage', group: 'observe', json: 'document' },
+  { name: 'trace', group: 'observe', json: 'document' },
   { name: 'dashboard', group: 'observe', json: 'stream', foreground: 'server' },
 
   { name: 'rollback', group: 'repair', json: 'document' },

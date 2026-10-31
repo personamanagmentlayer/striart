@@ -314,6 +314,18 @@ export interface AgentProfile {
    */
   env?: Record<string, string>;
   /**
+   * Allégement de confiance (lot O, priorité 5 — SECURITY.md « frontières de
+   * confiance ») : `null` (défaut, inchangé) transmet tout l'environnement du
+   * process, comme aujourd'hui. Un tableau — même vide — RESTREINT ce qui est
+   * hérité à ces noms EXACTS, avant que `env` (ci-dessus) ne s'applique :
+   * `env` n'est jamais retiré par cette liste, même s'il n'y figure pas. Deux
+   * tableaux distincts : hérité (filtré par `envAllow`) puis propre au profil
+   * (`env`, toujours entier). Jamais STRIART_SESSION, posé après les deux et
+   * non surchargeable. Une défense en profondeur de PLUS (voir SECURITY.md),
+   * pas une sandbox : un outil déjà démarré garde ce qu'il a lu une fois.
+   */
+  envAllow?: string[] | null;
+  /**
    * Délai max de session PROPRE à ce profil (ms). Précédence :
    * `--timeout` explicite > `profile.timeout` > `config.autonomousTimeoutMs`.
    */
@@ -1250,6 +1262,13 @@ interface PlanNodeBase {
   agent: string | null;
   /** Dépendances : ids de plan définis plus haut, ou références d'exécution (agent/tâche vivants). */
   after: string[];
+  /**
+   * Ressources hors-Git (lot O, priorité 4) : base, port, fichier verrouillé,
+   * service externe — noms opaques. Deux nœuds qui en partagent un ne
+   * tournent jamais en même temps (src/orchestration/scheduler.ts), même
+   * sans dépendance ni collision prédite par le Router.
+   */
+  resources: string[];
 }
 
 export type PlanNode =
@@ -1386,6 +1405,60 @@ export interface OrchestrationNodeResult {
   info?: (AgentMeta & { name: string }) | null;
   /** Clones en échec que la sentinelle WHOLE_REPO du Router n'a pas attendus (additif). */
   relaxedBlockers?: RelaxedBlocker[];
+  /**
+   * Preuve du nœud (lot O, priorité 2) — src/orchestration/evidence.ts.
+   * Construite depuis des données déjà mesurées (jamais recalculées) :
+   * absente seulement pour un nœud qui n'a jamais tourné (dépendance
+   * échouée, interruption, collision du Router avant tout lancement).
+   */
+  evidence?: EvidenceBundle | null;
+  /**
+   * Observabilité (lot O, priorité 6) : combième lancement RÉEL de ce nœud a
+   * produit ce résultat — 1 pour un premier essai, davantage seulement pour
+   * une tâche autonome relancée après une collision du Router
+   * (`collisionPolicy: 'wait'`, src/orchestration/scheduler.ts). Absent pour
+   * les modes qui ne rejouent jamais un même lancement (review, race, team,
+   * pipeline) : à lire comme 1 quand absent.
+   */
+  attempt?: number;
+  /**
+   * Observabilité (lot O, priorité 6) : chemin du journal de LA session qui a
+   * produit ce résultat (`SessionResult.logPath`, sous `.striart/logs/` —
+   * survit à la suppression du clone). Seulement pour une tâche autonome
+   * simple (un seul agent, une seule session) ; absent pour review/race/
+   * team/pipeline, qui en comptent plusieurs.
+   */
+  sessionLogPath?: string | null;
+}
+
+/**
+ * Ce qu'un nœud de plan a VRAIMENT produit et vérifié (lot O, priorité 2) —
+ * jamais une déclaration de l'agent, toujours une mesure du noyau. Un nœud
+ * `MERGED`/`FINISHED` sans bundle exploitable est un bug de l'orchestrateur,
+ * jamais un succès silencieux (voir AGENTS.md — fail closed).
+ */
+export interface EvidenceBundle {
+  /** Consigne initiale du nœud (ce qui définissait « fait ») — absente pour un pipeline (consigne par étape). */
+  objective: string | null;
+  /** Commit de l'agent mergé et commit de merge sur la cible ; `null` si rien n'a été mergé. */
+  commit: { sha: string; mergeSha: string; alreadyMerged?: boolean } | null;
+  /** Test Gate exécuté pour ce merge — déjà mesuré par mergeAgentCommit, jamais relancé ici. */
+  gate: { success: boolean; exitCode: number | undefined; timedOut: boolean; log: string } | null;
+  /** Fusion sémantique (LLM) employée à la place d'une fusion Git ordinaire. */
+  semantic: boolean;
+  /** Fichiers d'un conflit résolu manuellement (vide hors conflit). */
+  resolvedFiles: string[];
+  /** Verdicts humains/IA déjà collectés (review, team) — jamais recalculés. */
+  verdicts: ReviewVerdictRecord[];
+  /** Travail conservé pour revue humaine au lieu d'être perdu (limitation déclarée). */
+  kept: boolean;
+  /**
+   * Usage et coût connus pour cet agent (src/tokens/ledger.ts, `currentTotals`
+   * — déjà mesuré, jamais recalculé). Cumul **de l'agent** depuis l'origine
+   * du registre, pas isolé à ce nœud seul (aucune frontière plus fine
+   * n'existe encore côté usage) ; `null` si le nœud n'a jamais eu d'agent.
+   */
+  usage: { tokens: number; costUsd: number; unpriced: number } | null;
 }
 
 export type CollabMessageKind = 'note' | 'question' | 'answer' | 'handoff' | 'verdict' | 'done';
@@ -1516,13 +1589,29 @@ export interface OrchestrationRunState {
   id: string;
   mode: OrchestrationMode;
   concurrency: number;
+  /** Politique d'échec EFFECTIVE de ce run (overrides déjà résolus) — reprise fidèle sans reconfig. */
+  onFailure: PlanFailurePolicy;
   status: 'running' | 'done' | 'interrupted';
+  /**
+   * Observabilité (lot O, priorité 6) : combien de fois ce run a été repris
+   * (`striart plan --resume`) après une interruption — un « crash recovery »
+   * compté au moment réel de la reprise, jamais déduit après coup de l'état
+   * courant (qui ne garde pas la trace d'une interruption une fois reprise).
+   */
+  resumeCount: number;
   nodes: Array<{
     id: string | null;
     kind: PlanNodeKind;
     state: 'pending' | 'running' | 'done' | 'skipped';
     status: OrchestrationStatus | null;
     agent: string | null;
+    /**
+     * Résultat complet du nœud une fois `state` à `done`/`skipped` — jamais
+     * recalculé, relu tel quel par `striart plan --resume` pour ne jamais
+     * relancer une tâche déjà terminée (merge compris). `null` tant que le
+     * nœud n'a pas fini — y compris après un crash en plein `running`.
+     */
+    result: OrchestrationNodeResult | null;
   }>;
   pid: number;
   startedAt: string;
@@ -1579,6 +1668,7 @@ export interface LlmRoles {
   merger: LlmSpec | null;
   memory: LlmSpec | null;
   judge: LlmSpec | null;
+  planner: LlmSpec | null;
 }
 
 /**
@@ -1673,7 +1763,7 @@ export interface McpSettings {
 // ---------------------------------------------------------------------------
 
 /** Rôle d'un appel dépensant des tokens (champ `role` du registre). */
-export type UsageRole = 'router' | 'merger' | 'memory' | 'judge' | 'review' | 'agent';
+export type UsageRole = 'router' | 'merger' | 'memory' | 'judge' | 'review' | 'agent' | 'planner';
 
 /** Origine d'un relevé : réponse API, flux structuré d'agent, estimation locale, session sans relevé. */
 export type UsageSource = 'api' | 'agent-stream' | 'acp' | 'estimate' | 'unmetered';

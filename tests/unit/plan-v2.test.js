@@ -91,7 +91,32 @@ describe('plan v2 — formes valides', () => {
     expect(plan.mode).toBe('sequential');
     expect(plan.concurrency).toBeNull();
     expect(plan.onFailure).toBeNull();
-    expect(plan.tasks[0]).toMatchObject({ kind: 'task', autonomous: false, after: [] });
+    expect(plan.tasks[0]).toMatchObject({
+      kind: 'task',
+      autonomous: false,
+      after: [],
+      resources: [],
+    });
+  });
+
+  it('"resources" (lot O, priorité 4) : liste distincte, portée à tous les modes', () => {
+    const plan = validatePlan(
+      v2([
+        { id: 'a', prompt: 'x', resources: ['db', 'port:5432'] },
+        {
+          id: 'b',
+          mode: 'pipeline',
+          after: 'a',
+          steps: [
+            { id: 's1', prompt: 'y' },
+            { id: 's2', prompt: 'z' },
+          ],
+          resources: ['db'],
+        },
+      ]),
+    );
+    expect(plan.tasks[0].resources).toEqual(['db', 'port:5432']);
+    expect(plan.tasks[1].resources).toEqual(['db']);
   });
 
   it('se lit depuis YAML (et depuis JSON, sous-ensemble de YAML)', () => {
@@ -275,6 +300,13 @@ describe('plan v2 — refus (raison stable + traduction anglaise)', () => {
         },
       ]),
       /"files"/,
+    ],
+    ['RESOURCES_INVALID', v2([{ prompt: 'x', resources: ['db', 'db'] }]), /"resources"/],
+    ['RESOURCES_INVALID', v2([{ prompt: 'x', resources: [''] }]), /"resources"/],
+    [
+      'RESOURCES_TOO_MANY',
+      v2([{ prompt: 'x', resources: Array.from({ length: 11 }, (_, i) => `r${i}`) }]),
+      /resources/,
     ],
   ];
 

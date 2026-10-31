@@ -16,18 +16,41 @@
 import { randomBytes } from 'node:crypto';
 import { readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
+import { StriartError } from '../errors.ts';
 import { UNCHANGED, readJson, updateJsonLocked } from '../json-file.ts';
 import { logger } from '../logger.ts';
 import { striartDir } from '../paths.ts';
 import { mkdirPrivate } from '../private-fs.ts';
 import { isProcessAlive } from '../process-tree.ts';
+import { RUN_ID_RE } from './ids.ts';
 import type {
   OrchestrationGroupState,
+  OrchestrationNodeResult,
   OrchestrationRunState,
   OrchestrationStatus,
 } from '../types.js';
 
-const RUN_ID_RE = /^run-[0-9a-f]{12}$/;
+/**
+ * Un nœud est réutilisable depuis un run persisté quand son résultat est
+ * VRAIMENT terminal. Un arrêt gracieux (`INTERRUPTED` au signal, `STOPPED`
+ * par la politique d'échec) n'est pas une décision : il n'a jamais tourné,
+ * la reprise (`--resume`) comme la réclamation par un worker doivent le
+ * relancer, jamais le figer en échec.
+ */
+export function resumableResult(
+  result: OrchestrationNodeResult | null,
+): OrchestrationNodeResult | null {
+  if (!result) return null;
+  if (
+    result.status === 'SKIPPED' &&
+    (result.detail === 'INTERRUPTED' || result.detail === 'STOPPED')
+  ) {
+    return null;
+  }
+  return result;
+}
+
+export { RUN_ID_RE };
 const GROUP_ID_RE = /^(review|team|pipeline|race)-[0-9a-f]{12}$/;
 
 export function orchestrationDir(root: string): string {
@@ -49,7 +72,7 @@ const now = () => new Date().toISOString();
 
 export async function createRunState(
   root: string,
-  init: Pick<OrchestrationRunState, 'mode' | 'concurrency' | 'nodes'>,
+  init: Pick<OrchestrationRunState, 'mode' | 'concurrency' | 'onFailure' | 'nodes'>,
   keep: number,
 ): Promise<OrchestrationRunState> {
   await mkdirPrivate(runsDir(root));
@@ -58,6 +81,7 @@ export async function createRunState(
     id: `run-${randomBytes(6).toString('hex')}`,
     ...init,
     status: 'running',
+    resumeCount: 0,
     pid: process.pid,
     startedAt: now(),
     updatedAt: now(),
@@ -68,6 +92,113 @@ export async function createRunState(
     () => state,
   );
   return state;
+}
+
+/** Lecture seule d'un run par id — `null` s'il n'existe pas (id bien formé mais absent). */
+export async function loadRunState(
+  root: string,
+  id: string,
+): Promise<OrchestrationRunState | null> {
+  return (await readJson(runPath(root, id), {
+    fallback: null,
+    code: 'ORCHESTRATION_STATE_CORRUPT',
+  })) as OrchestrationRunState | null;
+}
+
+/**
+ * Reprend un run existant (`striart plan --resume`) : remet `status` à
+ * `running` et `pid` au process courant, SANS toucher `nodes` (déjà la
+ * mémoire des tâches terminées que l'appelant va relire pour ne pas les
+ * relancer). Échoue si le run n'existe pas ou est illisible — jamais une
+ * reprise sur un état déduit par défaut.
+ */
+export async function reopenRunState(root: string, id: string): Promise<OrchestrationRunState> {
+  let reopened: OrchestrationRunState | null = null;
+  await updateJsonLocked(
+    runPath(root, id),
+    { fallback: null as OrchestrationRunState | null, code: 'ORCHESTRATION_STATE_CORRUPT' },
+    (s: OrchestrationRunState | null) => {
+      if (!s) return UNCHANGED;
+      reopened = {
+        ...s,
+        status: 'running',
+        // Un run persisté par une version antérieure (sans resumeCount) n'est
+        // pas un bug de lecture : il n'a simplement jamais été repris encore.
+        resumeCount: (s.resumeCount ?? 0) + 1,
+        pid: process.pid,
+        updatedAt: now(),
+      };
+      return reopened;
+    },
+  );
+  if (!reopened) {
+    throw new StriartError(`Run introuvable : "${id}".`, {
+      code: 'ORCHESTRATION_RUN_NOT_FOUND',
+      details: { runId: id },
+      hint: 'striart status --json (section orchestration) pour lister les runs connus.',
+    });
+  }
+  return reopened;
+}
+
+/**
+ * Réclame ATOMIQUEMENT le nœud `index` d'un run — CAS `pending` → `running`
+ * (lot O, priorité 7 : plusieurs workers qui coopèrent sur le MÊME run,
+ * éventuellement en process séparés). Rend `true` si CE process l'a
+ * obtenu, `false` si un autre l'a déjà pris (ou si l'index/le run est
+ * invalide) — jamais les deux à la fois, même pour deux tentatives
+ * strictement simultanées : la lecture-modification-écriture tout entière
+ * tourne sous le verrou d'état (`updateJsonLocked`), le même qui protège
+ * déjà tout l'état de `.striart/` entre process. Ne lève PAS d'erreur sur
+ * un échec de réclamation (c'est l'issue normale d'une course gagnée par
+ * un autre worker) — seulement sur une vraie panne d'E/S.
+ *
+ * Un nœud `pending`, mais aussi un nœud `skipped` dont le résultat n'est
+ * PAS vraiment terminal (`resumableResult` — un arrêt gracieux, jamais une
+ * décision), est réclamable : c'est la même règle que `--resume`, étendue
+ * à un worker qui rejoint le run après coup. Son résultat est effacé à la
+ * réclamation, pour que l'exécution qui suit parte propre.
+ *
+ * `resourcesOf(i)` donne les ressources hors-Git (priorité 4) du nœud `i` —
+ * connues du PLAN, jamais persistées dans l'état du run, donc fournies par
+ * l'appelant. Vérifiées ICI, SOUS LE MÊME VERROU que la réclamation : un
+ * nœud dont une ressource est déjà tenue par un AUTRE nœud `running` (ce
+ * worker ou un autre) n'est jamais réclamé en même temps — la garantie de
+ * la priorité 4, étendue à plusieurs workers sans fenêtre de course.
+ */
+export async function claimRunNode(
+  root: string,
+  id: string,
+  index: number,
+  resourcesOf: (i: number) => readonly string[] = () => [],
+): Promise<boolean> {
+  let claimed = false;
+  await updateJsonLocked(
+    runPath(root, id),
+    { fallback: null as OrchestrationRunState | null, code: 'ORCHESTRATION_STATE_CORRUPT' },
+    (s: OrchestrationRunState | null) => {
+      if (!s) return UNCHANGED;
+      const node = s.nodes[index];
+      if (!node || node.state === 'running' || resumableResult(node.result) !== null) {
+        return UNCHANGED;
+      }
+      const mine = resourcesOf(index);
+      if (mine.length > 0) {
+        const busy = new Set<string>();
+        s.nodes.forEach((n, i) => {
+          if (n.state === 'running') for (const r of resourcesOf(i)) busy.add(r);
+        });
+        if (mine.some((r) => busy.has(r))) return UNCHANGED;
+      }
+      claimed = true;
+      return {
+        ...s,
+        nodes: s.nodes.map((n, i) => (i === index ? { ...n, state: 'running', result: null } : n)),
+        updatedAt: now(),
+      };
+    },
+  );
+  return claimed;
 }
 
 /** Mise à jour best effort : l'état est de l'observabilité, jamais une raison d'échouer un nœud. */

@@ -14,7 +14,9 @@ import {
   agentNameParser,
   integerParser,
   nonEmptyParser,
+  outPathParser,
   projectPathParser,
+  runIdParser,
   ticketIdParser,
 } from './parse.ts';
 import { GROUP_ORDER, SHELLS, publicCommands } from './registry.ts';
@@ -114,6 +116,8 @@ export function buildProgram({
   const ticketId = ticketIdParser(m);
   const projectPath = projectPathParser(m);
   const nonEmpty = nonEmptyParser(m);
+  const runId = runIdParser(m);
+  const outPath = outPathParser(m);
 
   const groupTitle = (group: CommandGroup) => m.help.groups[group];
   const declared = new Set<string>();
@@ -276,6 +280,7 @@ export function buildProgram({
                 'skip-dependents',
               ]),
             )
+            .option('--resume <run-id>', c.plan.resume, runId)
             .action((file: string, o) =>
               dispatch(
                 'plan',
@@ -286,7 +291,36 @@ export function buildProgram({
                   mode: o.mode ?? null,
                   concurrency: o.concurrency ?? null,
                   onFailure: o.onFailure ?? null,
+                  resume: o.resume ?? null,
                 },
+              ),
+            ),
+        );
+        return;
+      case 'draft':
+        define('draft', (cmd) =>
+          cmd
+            .argument('<objective>', c.draft.objective, nonEmpty)
+            .option('--out <file>', c.draft.out, outPath)
+            .action((objective: string, o) =>
+              dispatch(
+                'draft',
+                lazy(() => import('./commands/draft.ts'), 'draft'),
+                { objective, out: o.out ?? null },
+              ),
+            ),
+        );
+        return;
+      case 'work':
+        define('work', (cmd) =>
+          cmd
+            .argument('<file>', c.work.file)
+            .option('--run <run-id>', c.work.run, runId)
+            .action((file: string, o) =>
+              dispatch(
+                'work',
+                lazy(() => import('./commands/work.ts'), 'work'),
+                { file, runId: o.run ?? null },
               ),
             ),
         );
@@ -549,6 +583,17 @@ export function buildProgram({
                 },
               ),
             ),
+        );
+        return;
+      case 'trace':
+        define('trace', (cmd) =>
+          cmd.argument('[run-id]', c.trace.runId, runId).action((runIdArg: string | undefined) =>
+            dispatch(
+              'trace',
+              lazy(() => import('./commands/trace.ts'), 'trace'),
+              { runId: runIdArg ?? null },
+            ),
+          ),
         );
         return;
       case 'dashboard':

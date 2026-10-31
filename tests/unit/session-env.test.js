@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { sessionNetworkEnv } from '../../src/session-env.ts';
+import { applyEnvAllowlist, sessionNetworkEnv } from '../../src/session-env.ts';
 
 const CA = '/corp/ca.pem';
 
@@ -51,5 +51,38 @@ describe('sessionNetworkEnv — réseau d’entreprise dans l’environnement d�
     const base = Object.freeze({ STRIART_PROXY_AUTH: 'u:p' });
     expect(() => sessionNetworkEnv(base, { caFile: CA })).not.toThrow();
     expect(base.STRIART_PROXY_AUTH).toBe('u:p');
+  });
+});
+
+/**
+ * Allégement de confiance (lot O, priorité 5 — `AgentProfile.envAllow`).
+ * `null` : comportement inchangé (hérite tout). Un tableau — même vide — ne
+ * garde que les noms exacts listés, jamais plus.
+ */
+describe('applyEnvAllowlist — restriction déclarée de l’environnement hérité', () => {
+  const base = { PATH: '/bin', OPENAI_API_KEY: 'sk-secret', HOME: '/home/u' };
+
+  it('null (défaut) : transmet tout, inchangé', () => {
+    expect(applyEnvAllowlist(base, null)).toEqual(base);
+  });
+
+  it('ne garde que les noms listés, un secret non listé disparaît', () => {
+    const out = applyEnvAllowlist(base, ['PATH']);
+    expect(out).toEqual({ PATH: '/bin' });
+    expect(out).not.toHaveProperty('OPENAI_API_KEY');
+  });
+
+  it('liste vide : rien n’est hérité', () => {
+    expect(applyEnvAllowlist(base, [])).toEqual({});
+  });
+
+  it('un nom listé mais absent de l’environnement est simplement omis', () => {
+    expect(applyEnvAllowlist({ PATH: '/bin' }, ['PATH', 'MISSING'])).toEqual({ PATH: '/bin' });
+  });
+
+  it('ne modifie pas l’objet d’entrée', () => {
+    const frozen = Object.freeze({ PATH: '/bin', SECRET: 'x' });
+    expect(() => applyEnvAllowlist(frozen, ['PATH'])).not.toThrow();
+    expect(frozen.SECRET).toBe('x');
   });
 });

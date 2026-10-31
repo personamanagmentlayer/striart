@@ -61,9 +61,10 @@ export const DEFAULT_LLM_ROLES: LlmRoles = Object.freeze({
   merger: null,
   memory: null,
   judge: null,
+  planner: null,
 });
 
-export const LLM_ROLE_NAMES = ['router', 'merger', 'memory', 'judge'] as const;
+export const LLM_ROLE_NAMES = ['router', 'merger', 'memory', 'judge', 'planner'] as const;
 export type LlmRoleName = (typeof LLM_ROLE_NAMES)[number];
 
 type Rec = Record<string, unknown>;

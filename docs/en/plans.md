@@ -105,9 +105,37 @@ on the previous one; a *supervised* task is **awaited** until its agent leaves
 the registry) or `parallel` (dependency graph, `concurrency` bounded by
 `orchestration.maxConcurrency`); `concurrency`; `onFailure`. `striart plan
 --mode`, `--concurrency` and `--on-failure` override them at application.
+
+A `version: 2` application is **persisted** as a run (`.striart/orchestration/runs/<id>.json`,
+observability only) as it progresses. If it is interrupted (crash, `Ctrl+C`,
+process killed) before every task reached a terminal status, `striart plan
+<file> --resume <run-id>` (the id is printed on interruption, and listed by
+`striart status --json` under `orchestration.runs`) replays the **same plan
+file** without rerunning tasks that already finished — a task skipped only
+because of the interruption itself (never a real decision) is retried, not
+left skipped forever. `--resume` requires the exact plan file that produced
+the run (same tasks, same order) and refuses a run still owned by a live
+process, or a `version: 1` plan (no run state exists for it).
 **Task level**: `id`, `mode` (`task` by default, `review`, `race`, `team`,
 `pipeline`), `agent`, `after` (an id or a list; an id defined earlier, or a
-runtime reference — a live agent or task, awaited with a bounded timeout).
+runtime reference — a live agent or task, awaited with a bounded timeout),
+`resources` (any node kind — see below).
+
+### Non-Git resources (deterministic scheduling)
+
+`resources`: an optional list of up to 10 distinct, opaque names (at most 80
+characters each — `db`, `port:5432`, `s3:uploads`, anything meaningful to
+you; Striart never interprets them as a path or a command). Two nodes that
+declare the **same** name never run at the same time, even with no `after`
+between them, no collision predicted by the Router, and even in `parallel`
+mode with a `concurrency` that would otherwise let them overlap. A conflict
+only *delays* a node's launch (checked again on every scheduler tick); it is
+never a failure and never a `SKIPPED` status — the node runs as soon as the
+resource frees up. This is the deterministic guarantee the design in
+[run-manager-design.md](run-manager-design.md) calls for: whatever the
+Router predicts (or misses), a shared external resource (a database, a
+port, a locked file, an external service) is never touched by two nodes at
+once.
 
 | Mode | Specific fields | Bounds |
 |---|---|---|
@@ -116,6 +144,77 @@ runtime reference — a live agent or task, awaited with a bounded timeout).
 | `race` | `prompt`, `candidates` (`profile`, `timeout`), `pick`, `losers` | 2 to 10 candidates |
 | `team` | `prompt`, `cadence`, `rounds`, `roles` (`name`, `profile`, `timeout`, `prompt`, `files`) | 2 to 8 roles; in `parallel`, `files` is mandatory per role; `cadence: dynamic` refused (`CADENCE_UNAVAILABLE`) |
 | `pipeline` | `handoff`, `steps` (`id`, `prompt`, `profile`, `timeout`) | 2 to 10 steps; no task-level `prompt` |
+
+### Evidence bundle
+
+Every node result (`result.nodes[i]`, also persisted in the run — see above)
+carries an `evidence` bundle: what was actually produced and checked, built
+from data the core already measured — never recomputed, never declared by
+the agent itself.
+
+| Field | Comes from |
+|---|---|
+| `objective` | The node's own prompt (`null` for `pipeline`: each step has its own) |
+| `commit` | `{sha, mergeSha, alreadyMerged?}` of the merge that actually landed, or `null` if nothing merged |
+| `gate` | The Test Gate that ran for that merge (`success`, `exitCode`, `timedOut`, `log`) — present even when the gate failed (`GATE_FAILED`/`MERGE_BLOCKED`): the log is the evidence of *why*, never withheld behind a null commit |
+| `semantic` | Whether a semantic (LLM) merge was used instead of an ordinary Git merge |
+| `resolvedFiles` | Files touched by a manual conflict resolution (empty outside a conflict) |
+| `verdicts` | Review verdicts already collected for this node (`review`, `team`) — the same array as `result.verdicts` |
+| `kept` | Work kept for human review instead of discarded (same as `result.kept`) |
+| `usage` | Tokens/cost known for the node's agent (`src/tokens/ledger.ts`, `currentTotals`) — a lifetime total for that agent, not isolated to this one node (no finer boundary exists yet); `null` if the node never had an agent |
+
+A node that never ran (dependency failed, interruption, a Router collision
+before any launch) carries no `evidence` at all — absence here means "never
+started", not "started and said nothing".
+
+### Observability chain
+
+Alongside `evidence`, a node result also carries `attempt` (how many times
+it was actually launched — greater than 1 only for an autonomous task
+retried after a Router collision) and, for a simple autonomous task,
+`sessionLogPath` (the on-disk log of the session that produced the result,
+under `.striart/logs/` — survives the clone's removal). Together with the
+run's own `id` and `resumeCount` (how many times `--resume` actually
+reopened it), this is the chain `run_id → task_id → attempt →
+agent/session → commit_sha` the design in
+[run-manager-design.md](run-manager-design.md) calls for.
+
+`striart trace <run-id>` renders that chain for one run; `striart trace`
+with no id renders the aggregate report (merged-task rate, the share of
+nodes kept for a human decision, how many runs were actually resumed,
+average cost per merged task) over the runs retained by
+`orchestration.keepRuns` — see [Commands](commands.md).
+
+### Cooperative workers
+
+`striart work <file> [--run <run-id>]` lets several independent processes
+drain the **same** run together, each claiming and executing one task at a
+time, without ever executing the same task twice. The guarantee is an
+atomic read-modify-write under the state lock — the same primitive that
+already protects every file under `.striart/` — not a new coordination
+layer: a worker that finds a task's dependencies satisfied and its
+declared `resources` free claims it in one locked step, and a second
+worker racing for the exact same task or the exact same resource simply
+loses that race and looks for something else.
+
+Scope, stated plainly: this is **not** a network protocol. "Several
+processes" means exactly that — this process, another local one, or a
+process on another machine that happens to have access to the same
+`.striart/` directory (a shared or networked filesystem) — never a worker
+that connects to anything over the wire, and Striart ships no
+authentication or transport for it. It is also **not** multi-repo: a plan
+is always applied to the one repository it was written for; nothing here
+lets a task target a different checkout. Both are explicitly left for a
+later increment, not silently assumed.
+
+A task skipped only because of a graceful interruption (the same
+`INTERRUPTED`/`STOPPED` distinction `--resume` already makes) stays
+claimable by any worker, including one that joins after the fact — a
+worker is otherwise exactly `--resume`'s congruence check (same plan file,
+same tasks) applied continuously instead of once. `onFailure: stop` needs
+no field of its own: every worker derives it by rereading the shared
+state, so one worker's failure stops every other from claiming more work
+on the next pass. Needs a `version: 2` plan.
 
 Role and reviewer names use lowercase letters, digits and dashes (`author`
 and `striart` are reserved). A derived agent name (`<agent>-<step>`,

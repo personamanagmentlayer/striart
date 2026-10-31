@@ -3302,6 +3302,7 @@ export async function applyPlan({
   signal = null,
   onProgress = null,
   overrides = {},
+  resume = null,
 }: {
   root: string;
   planText: string;
@@ -3309,6 +3310,7 @@ export async function applyPlan({
   signal?: AbortSignal | null;
   onProgress?: ((event: import('./orchestration/unit.ts').ProgressEvent) => void) | null;
   overrides?: PlanOverrides;
+  resume?: { runId: string } | null;
 }): Promise<{
   dryRun: boolean;
   version?: 1 | 2;
@@ -3343,10 +3345,17 @@ export async function applyPlan({
   await assertInitialized(root);
   const plan = parsePlan(planText); // lève PLAN_INVALID avant tout effet de bord
   const config = await loadConfig(root);
+  if (resume && dryRun) {
+    throw new StriartError('Plan invalide : --resume et --dry-run sont incompatibles.', {
+      code: 'PLAN_INVALID',
+      hint: 'striart plan <fichier> --resume <run-id> (sans --dry-run)',
+      details: { reason: 'RESUME_NEEDS_APPLY' },
+    });
+  }
   if (plan.version === 2) {
     validatePlanAgainstConfig(plan, config); // profils et plafonds, --dry-run compris
     if (dryRun) return { dryRun: true, version: 2, tasks: describePlanV2(plan) };
-    const v2 = await runPlanV2({ root, plan, config, signal, onProgress, overrides });
+    const v2 = await runPlanV2({ root, plan, config, signal, onProgress, overrides, resume });
     return {
       dryRun: false,
       version: 2,
@@ -3376,6 +3385,15 @@ export async function applyPlan({
         details: { reason: 'OVERRIDES_NEED_V2' },
       },
     );
+  }
+  // La reprise (Run Manager) n'existe que pour le scheduler v2 : le v1 n'a
+  // pas d'état de run persisté à relire.
+  if (resume) {
+    throw new StriartError('Plan invalide : --resume exige un plan "version: 2".', {
+      code: 'PLAN_INVALID',
+      hint: 'striart plan <fichier> --dry-run',
+      details: { reason: 'RESUME_NEEDS_V2' },
+    });
   }
 
   // Valide AVANT tout effet de bord que chaque tâche autonome référence un

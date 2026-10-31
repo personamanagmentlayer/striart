@@ -30,7 +30,7 @@ import type {
 type Rec = Record<string, unknown>;
 
 const PLAN_KEYS = ['version', 'mode', 'concurrency', 'onFailure', 'tasks'];
-const COMMON_KEYS = ['id', 'mode', 'agent', 'after'];
+const COMMON_KEYS = ['id', 'mode', 'agent', 'after', 'resources'];
 const NODE_KEYS: Record<PlanNode['kind'], string[]> = {
   task: ['prompt', 'autonomous', 'profile', 'command', 'timeout'],
   review: ['prompt', 'author', 'reviewers', 'quorum', 'maxRounds'],
@@ -49,6 +49,9 @@ export const PLAN_LIMITS = Object.freeze({
   concurrency: 64,
   /** Un nom dérivé (`<agent>-<étape>`, `<agent>-<n>`) doit rester un nom d'agent valide. */
   derivedAgentMax: 30,
+  /** Ressources hors-Git déclarées par un nœud (lot O, priorité 4) — borné contre un plan abusif. */
+  resources: 10,
+  resourceNameMax: 80,
 });
 
 /** Rôles réservés : l'auteur d'un review et Striart lui-même. */
@@ -196,7 +199,8 @@ function validateNode(item: unknown, i: number, ids: Set<string>): PlanNode {
     });
   }
   const after = parseAfter(item.after, where, at);
-  const base = { id, agent, after };
+  const resources = parseResources(item.resources, where, at);
+  const base = { id, agent, after, resources };
 
   const requirePrompt = (): string => {
     if (!nonEmptyString(item.prompt)) {
@@ -563,4 +567,33 @@ function parseAfter(v: unknown, where: string, at: Rec): string[] {
     });
   }
   return [...(list as string[])];
+}
+
+/**
+ * Ressources hors-Git déclarées par un nœud (lot O, priorité 4) — base,
+ * port, fichier verrouillé, service externe : un nom libre (opaque pour
+ * Striart), jamais interprété comme un chemin ni une commande. Deux nœuds
+ * qui déclarent le même nom ne tournent jamais en même temps, même sans
+ * dépendance ni collision prédite par le Router.
+ */
+function parseResources(v: unknown, where: string, at: Rec): string[] {
+  if (v === undefined || v === null) return [];
+  if (
+    !Array.isArray(v) ||
+    v.some((x) => !nonEmptyString(x) || x.length > PLAN_LIMITS.resourceNameMax) ||
+    new Set(v).size !== v.length
+  ) {
+    throw invalid(
+      `${where} : "resources" doit être une liste de noms distincts non vides (${PLAN_LIMITS.resourceNameMax} caractères au plus chacun).`,
+      { reason: 'RESOURCES_INVALID', max: PLAN_LIMITS.resourceNameMax, ...at },
+    );
+  }
+  if (v.length > PLAN_LIMITS.resources) {
+    throw invalid(`${where} : ${PLAN_LIMITS.resources} ressources déclarées au plus.`, {
+      reason: 'RESOURCES_TOO_MANY',
+      max: PLAN_LIMITS.resources,
+      ...at,
+    });
+  }
+  return [...(v as string[])];
 }

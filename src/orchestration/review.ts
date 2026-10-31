@@ -30,6 +30,8 @@ import type {
   ReviewVerdictRecord,
 } from '../types.js';
 import { composeTurnPrompt, feedbackItems, messageItems } from './briefing.ts';
+import { buildEvidence, partialEvidenceFromMerge } from './evidence.ts';
+import type { PartialEvidence } from './evidence.ts';
 import { awaitHumanReview, createHumanReview } from './human-review.ts';
 import { nodeResult } from './result.ts';
 import { createGroupState, finishGroupState, updateGroupState } from './store.ts';
@@ -243,8 +245,10 @@ export async function runReviewNode(
   });
 
   let result: OrchestrationNodeResult;
+  let partial: PartialEvidence = partialEvidenceFromMerge(null);
   if (outcome.status === 'APPROVED') {
     const final = await finalizeClone(ctx, meta);
+    partial = final.evidence;
     result = nodeResult(node, {
       status: final.status,
       detail: final.detail,
@@ -256,7 +260,22 @@ export async function runReviewNode(
   }
   await closeCollabGroup(ctx.root, group.id).catch(() => {});
   await finishGroupState(ctx.root, group.id, result.status);
-  return { ...result, agent: meta.name, agents: [meta.name], group: group.id, rounds, verdicts };
+  const evidence = await buildEvidence(ctx.root, {
+    objective: node.prompt,
+    partial,
+    verdicts,
+    agent: meta.name,
+    kept: result.kept,
+  });
+  return {
+    ...result,
+    agent: meta.name,
+    agents: [meta.name],
+    group: group.id,
+    rounds,
+    verdicts,
+    evidence,
+  };
 }
 
 type VerdictOrFailure =
