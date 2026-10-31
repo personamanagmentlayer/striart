@@ -2,6 +2,51 @@
 
 Format : [Keep a Changelog](https://keepachangelog.com/fr/), versionnage [SemVer](https://semver.org/lang/fr/).
 
+## [0.12.0] — 2026-10-31
+
+Run Manager (`docs/{en,fr}/run-manager-design.md`) : les sept priorités du
+plan, chacune son propre commit sur `feat/run-manager`.
+
+### Ajouté
+- **Run Manager durable** : `striart plan --resume <run-id>` reprend un run
+  `version: 2` interrompu sans rejouer les tâches déjà terminées. Un nœud
+  arrêté par grâce (`INTERRUPTED`/`STOPPED` — signal reçu, politique
+  `onFailure: stop`) n'est jamais une décision terminale ; seul un résultat
+  vraiment définitif est figé.
+- **Bundle de preuve** (Evidence Bundle) : chaque résultat de nœud porte
+  `evidence` (commit, verdict du Test Gate, usage de tokens) — toujours
+  construit depuis ce que le cœur a déjà mesuré, jamais recalculé ni déclaré
+  par l'agent.
+- **Planner** : `striart draft "<objectif>"` propose un plan `version: 2`
+  validé par le même validateur qu'un plan écrit à la main — il ne l'applique
+  jamais lui-même.
+- **Scheduler déterministe** : `resources` sur un nœud de plan sérialise deux
+  tâches qui touchent la même ressource non-Git, même en mode `parallel`.
+- **`agentProfiles.<nom>.envAllow`** (`string[] | null`) : restreint
+  l'environnement HÉRITÉ par la session d'un profil à une liste blanche
+  déclarée ; `profile.env` continue de s'appliquer en entier, et
+  `STRIART_SESSION` reste toujours fourni. `null` (défaut) conserve le
+  comportement actuel à l'identique — héritage complet, rien ne change sans
+  opt-in explicite.
+- **Observabilité de bout en bout** : `striart trace [run-id]` rend la
+  chaîne `run_id → task_id → attempt → agent/session → commit_sha` pour un
+  run, ou un rapport agrégé (taux de merge, interventions humaines,
+  récupérations après crash, coût moyen) sur les runs conservés.
+- **Workers coopératifs** : `striart work <fichier> [--run <run-id>]` —
+  plusieurs process indépendants peuvent drainer le même run ensemble, chacun
+  réclamant une tâche par CAS atomique sous le verrou d'état existant :
+  aucune tâche n'est jamais exécutée deux fois, et l'exclusivité des
+  ressources partagées (lot précédent) reste garantie entre workers. Ni
+  protocole réseau, ni authentification, ni exécution multi-dépôt : hors
+  périmètre, documenté comme tel plutôt que simulé.
+
+### Notes
+Priorités 5 et 7 touchent des invariants documentés (`SECURITY.md`) et ont
+été explicitement autorisées avant implémentation : chacune est scopée à ce
+qui peut être livré honnêtement (défense en profondeur déclarative pour la
+5, aucune prétention de sandbox OS ; coopération sur disque partagé pour la
+7, aucune prétention de protocole réseau).
+
 ## [0.11.0] — 2026-10-30
 
 Refonte de la couche CLI (décidée le 2026-10-19 après trois audits — DevX,
