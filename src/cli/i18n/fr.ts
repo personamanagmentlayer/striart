@@ -293,6 +293,14 @@ export const fr = {
       objective: 'objectif en langage naturel à transformer en plan',
       out: 'fichier de sortie (YAML) — défaut : striart-draft-<horodatage>.yaml',
     },
+    work: {
+      summary: 'Worker coopératif : réclame et exécute les tâches d’un plan v2',
+      description:
+        'S’attache à un run existant (--run) ou en crée un, puis réclame et exécute les tâches une par une jusqu’à épuisement. Plusieurs « striart work » sur le même --run coopèrent sans jamais exécuter une tâche deux fois (lecture-modification-écriture atomique) — aucun protocole réseau, aucun dépôt distinct.',
+      examples: ['striart work plan.yaml', 'striart work plan.yaml --run run-0123456789ab'],
+      file: 'fichier YAML du plan (même fichier pour tous les workers d’un run)',
+      run: 'id du run à rejoindre — absent : ce worker en crée un et l’affiche',
+    },
     orchestrate: {
       summary: 'Lance une tâche orchestrée : review, race, team ou pipeline',
       description:
@@ -976,6 +984,20 @@ export const fr = {
     colAgent: 'AGENT',
     colCommit: 'COMMIT',
     sessionLog: (task: string, logPath: string) => `${task} : journal — ${logPath}`,
+  },
+
+  work: {
+    running: 'Le worker réclame des tâches',
+    runId: (runId: string, joined: boolean) =>
+      joined ? `run rejoint : ${runId}` : `run créé : ${runId}`,
+    claimed: (n: number, interrupted: boolean, allDone: boolean) =>
+      `${n} ${plural(n, 'tâche réclamée', 'tâches réclamées')} par ce worker${
+        interrupted
+          ? ' — interrompu, d’autres restent peut-être réclamables'
+          : allDone
+            ? ' — run terminé'
+            : ' — plus rien à réclamer pour l’instant'
+      }.`,
   },
 
   history: {

@@ -41,16 +41,18 @@ import { nodeResult } from './result.ts';
 import { runReviewNode } from './review.ts';
 import { resolveCollabSettings, resolveOrchestrationSettings } from './settings.ts';
 import {
+  claimRunNode,
   createRunState,
   finishRunState,
   loadRunState,
   reopenRunState,
+  resumableResult,
   updateRunNode,
 } from './store.ts';
 import { runTeamNode } from './team.ts';
 import { emit, report } from './unit.ts';
 import type { AgentInfo, OrchestrationContext, ProgressEvent } from './unit.ts';
-import { waitUntil } from './wait.ts';
+import { sleepAbortable, waitUntil } from './wait.ts';
 
 export interface PlanOverrides {
   mode?: OrchestrationMode | null;
@@ -127,21 +129,27 @@ async function isWorkActive(root: string, ref: string): Promise<boolean> {
   return (await readQueue(root)).some((t) => t.id === ref || t.agent === ref);
 }
 
-/**
- * Un nœud est réutilisable depuis un run persisté quand son résultat est
- * VRAIMENT terminal. Un arrêt gracieux (`INTERRUPTED` au signal, `STOPPED`
- * par la politique d'échec) n'est pas une décision : il n'a jamais tourné,
- * la reprise doit le relancer, jamais le figer en échec.
- */
-function resumableResult(result: OrchestrationNodeResult | null): OrchestrationNodeResult | null {
-  if (!result) return null;
-  if (
-    result.status === 'SKIPPED' &&
-    (result.detail === 'INTERRUPTED' || result.detail === 'STOPPED')
-  ) {
-    return null;
-  }
-  return result;
+/** Dépendances locales (index du plan) et externes (référence hors plan) de chaque tâche. */
+function computeDeps(
+  plan: StriartPlanV2,
+  mode: OrchestrationMode,
+): Array<{ local: number[]; external: string[] }> {
+  const indexOfId = new Map(
+    plan.tasks.map((t, i) => [t.id, i] as const).filter(([id]) => id !== null) as Array<
+      [string, number]
+    >,
+  );
+  return plan.tasks.map((t, i) => {
+    const local = new Set<number>();
+    const external: string[] = [];
+    for (const ref of t.after) {
+      const at = indexOfId.get(ref);
+      if (at !== undefined) local.add(at);
+      else external.push(ref);
+    }
+    if (mode === 'sequential' && i > 0) local.add(i - 1);
+    return { local: [...local], external };
+  });
 }
 
 /** Le plan rejoué doit décrire exactement les mêmes nœuds que le run persisté (par index). */
@@ -242,23 +250,7 @@ export async function runPlanV2({
     seeded = plan.tasks.map(() => null);
   }
   const { mode, concurrency, onFailure } = run;
-
-  const indexOfId = new Map(
-    plan.tasks.map((t, i) => [t.id, i] as const).filter(([id]) => id !== null) as Array<
-      [string, number]
-    >,
-  );
-  const deps = plan.tasks.map((t, i) => {
-    const local = new Set<number>();
-    const external: string[] = [];
-    for (const ref of t.after) {
-      const at = indexOfId.get(ref);
-      if (at !== undefined) local.add(at);
-      else external.push(ref);
-    }
-    if (mode === 'sequential' && i > 0) local.add(i - 1);
-    return { local: [...local], external };
-  });
+  const deps = computeDeps(plan, mode);
 
   const results: Array<OrchestrationNodeResult | null> = seeded;
   const running = new Map<number, Promise<void>>();
@@ -396,6 +388,232 @@ export async function runPlanV2({
       .filter(({ n }) => n.status === 'SKIPPED' && n.detail === 'INTERRUPTED')
       .map(({ t }) => ({ id: t.id, agent: t.agent })),
   };
+}
+
+export interface WorkerResult {
+  runId: string;
+  /** `true` : attaché à un run déjà existant. `false` : ce worker l'a créé. */
+  joined: boolean;
+  /** Nœuds que CE worker a personnellement réclamés et exécutés (jamais ceux d'un autre). */
+  claimed: number;
+  /** Ce worker s'est arrêté sur un arrêt demandé — d'autres nœuds restent peut-être réclamables. */
+  interrupted: boolean;
+  /** Plus un seul nœud `pending`/`running` dans l'état PARTAGÉ : le run entier est terminal. */
+  allDone: boolean;
+}
+
+/**
+ * Worker coopératif (lot O, priorité 7) : s'attache à un run EXISTANT
+ * (`runId`) ou en crée un, puis réclame un par un — jamais plus d'un à la
+ * fois dans CE process — les nœuds `pending` dont les dépendances locales
+ * ont réussi, les exécute avec l'EXACTE même primitive que `runPlanV2`
+ * (`runNode`), et relit l'état PARTAGÉ à chaque passage plutôt que sa
+ * propre mémoire : il voit ainsi ce que d'autres workers ont terminé entre
+ * temps, sur ce même process, un autre process local, ou une autre machine
+ * qui partage `.striart/`.
+ *
+ * La distribution vient du nombre de workers lancés en parallèle — jamais
+ * d'un pool interne à cette fonction. `onFailure: 'stop'` est dérivé du
+ * même état partagé (aucun champ persisté de plus) : dès qu'un nœud y est
+ * `done` avec un statut en échec, tout worker qui relit l'état saute les
+ * `pending` restants, qu'il l'ait vu échouer lui-même ou non.
+ *
+ * Portée explicite (ce que cette fonction NE fait PAS) : aucun protocole
+ * réseau, aucune authentification, aucun transport entre machines — la
+ * coopération tient entièrement au verrou d'état déjà partagé par tout
+ * `.striart/` (`claimRunNode`, lecture-modification-écriture atomique).
+ * « Distant » veut dire : un process séparé qui a accès au même dossier
+ * `.striart/` (disque partagé, réseau de fichiers) — jamais un worker qui
+ * se connecte lui-même à distance. Aucun dépôt distinct non plus : un plan
+ * reste appliqué à CE dépôt (voir docs/{en,fr}/plans.md).
+ */
+export async function runWorker({
+  root,
+  plan,
+  config,
+  runId = null,
+  signal = null,
+  onProgress = null,
+}: {
+  root: string;
+  plan: StriartPlanV2;
+  config: StriartConfig;
+  runId?: string | null;
+  signal?: AbortSignal | null;
+  onProgress?: ((event: ProgressEvent) => void) | null;
+}): Promise<WorkerResult> {
+  const settings = resolveOrchestrationSettings(config);
+  const collab = resolveCollabSettings(config);
+  validatePlanAgainstConfig(plan, config);
+
+  let run: OrchestrationRunState;
+  let joined: boolean;
+  if (runId) {
+    const existing = await loadRunState(root, runId);
+    if (!existing) {
+      throw new StriartError(`Run introuvable : "${runId}".`, {
+        code: 'ORCHESTRATION_RUN_NOT_FOUND',
+        details: { runId },
+        hint: 'striart status --json (section orchestration) pour lister les runs connus.',
+      });
+    }
+    checkResumeCongruence(existing, plan, runId);
+    run = existing;
+    joined = true;
+  } else {
+    const mode = plan.mode;
+    const concurrency =
+      mode === 'sequential'
+        ? 1
+        : Math.min(plan.concurrency ?? settings.concurrency, settings.maxConcurrency);
+    run = await createRunState(
+      root,
+      {
+        mode,
+        concurrency,
+        onFailure: plan.onFailure ?? settings.onFailure,
+        nodes: plan.tasks.map((t) => ({
+          id: t.id,
+          kind: t.kind,
+          state: 'pending',
+          status: null,
+          agent: null,
+          result: null,
+        })),
+      },
+      settings.keepRuns,
+    );
+    joined = false;
+  }
+
+  const deps = computeDeps(plan, run.mode);
+  const resourcesOf = (i: number): readonly string[] => plan.tasks[i].resources;
+  const progress = (event: ProgressEvent) => {
+    if (onProgress) onProgress(event);
+  };
+  const skipClaimed = async (i: number, detail: string) => {
+    const result = nodeResult(plan.tasks[i], {
+      status: 'SKIPPED',
+      detail,
+      mode: modeOf(plan.tasks[i]),
+    });
+    await updateRunNode(root, run.id, i, { state: 'skipped', status: 'SKIPPED', result });
+  };
+
+  let claimedCount = 0;
+  for (;;) {
+    if (signal?.aborted)
+      return { runId: run.id, joined, claimed: claimedCount, interrupted: true, allDone: false };
+
+    const current = await loadRunState(root, run.id);
+    if (!current) {
+      // Rétention (orchestration.keepRuns) : un run purgé entre deux passages
+      // n'est jamais une panne, juste plus rien à réclamer ici.
+      return { runId: run.id, joined, claimed: claimedCount, interrupted: false, allDone: false };
+    }
+    // `resumableResult` : un arrêt gracieux (INTERRUPTED/STOPPED) n'est pas
+    // un échec — un nœud `skipped` pour cette seule raison reste réclamable
+    // (même règle que `--resume`, étendue à un worker qui rejoint après coup).
+    const results = current.nodes.map((n) => resumableResult(n.result));
+    const stopped =
+      current.onFailure === 'stop' && results.some((r) => r && !SUCCESS.has(r.status));
+
+    let claimedIndex = -1;
+    for (let i = 0; i < plan.tasks.length; i += 1) {
+      if (current.nodes[i].state === 'running' || results[i] !== null) continue;
+      const local = deps[i].local;
+      if (local.some((d) => results[d] && !SUCCESS.has(results[d]!.status))) {
+        if (await claimRunNode(root, run.id, i, resourcesOf))
+          await skipClaimed(i, 'DEPENDENCY_FAILED');
+        continue;
+      }
+      if (stopped) {
+        if (await claimRunNode(root, run.id, i, resourcesOf)) await skipClaimed(i, 'STOPPED');
+        continue;
+      }
+      if (!local.every((d) => results[d])) continue;
+      if (await claimRunNode(root, run.id, i, resourcesOf)) {
+        claimedIndex = i;
+        break;
+      }
+      // Un autre worker vient de prendre ce nœud (ou sa ressource) : on continue la recherche.
+    }
+
+    if (claimedIndex === -1) {
+      const refreshed = await loadRunState(root, run.id);
+      const allDone = Boolean(
+        refreshed?.nodes.every((n) => n.state !== 'running' && resumableResult(n.result) !== null),
+      );
+      if (allDone) {
+        await finishRunState(root, run.id, 'done');
+        return { runId: run.id, joined, claimed: claimedCount, interrupted: false, allDone: true };
+      }
+      if (!(await sleepAbortable(settings.pollIntervalMs, signal))) {
+        return { runId: run.id, joined, claimed: claimedCount, interrupted: true, allDone: false };
+      }
+      continue;
+    }
+
+    const node = plan.tasks[claimedIndex];
+    const ctx: OrchestrationContext = {
+      root,
+      config,
+      settings,
+      collab,
+      runId: run.id,
+      nodeId: node.id,
+      signal,
+      progress,
+    };
+    await emit(ctx, {
+      type: 'orchestration:node',
+      runId: run.id,
+      nodeId: node.id,
+      kind: node.kind,
+      phase: 'started',
+      status: null,
+      agent: node.agent,
+    });
+    let result: OrchestrationNodeResult;
+    try {
+      result = await runNode(ctx, node, deps[claimedIndex].external);
+    } catch (error) {
+      logger.error({ err: error, node: node.id }, 'Nœud de plan en erreur (worker)');
+      result = nodeResult(node, {
+        status: 'ERROR',
+        detail: error instanceof StriartError ? error.code : 'UNEXPECTED',
+        kept: true,
+      });
+    }
+    claimedCount += 1;
+    await updateRunNode(root, run.id, claimedIndex, {
+      state: 'done',
+      status: result.status,
+      agent: result.agent,
+      result,
+    });
+    report(ctx, {
+      type: 'node-finished',
+      nodeId: node.id,
+      kind: node.kind,
+      status: result.status,
+      agent: result.agent,
+    });
+    await emit(ctx, {
+      type: 'orchestration:node',
+      runId: run.id,
+      nodeId: node.id,
+      kind: node.kind,
+      phase: 'finished',
+      status: result.status,
+      agent: result.agent,
+      ...(SUCCESS.has(result.status)
+        ? {}
+        : {
+            message: `⛔ [Striart] Plan ${run.id}: task ${node.id ?? `#${claimedIndex + 1}`} (${node.kind}) ended ${result.status}.`,
+          }),
+    });
+  }
 }
 
 function modeOf(node: PlanNode): 'attended' | 'autonomous' {

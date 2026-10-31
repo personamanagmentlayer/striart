@@ -33,6 +33,7 @@ supprimée : l'hôte est désormais le binaire natif `striart-native pty-host`
 | `striart attach <agent>` | Attache le terminal au pty possédé d'un agent (session ouverte par `--open`). |
 | `striart plan <fichier.yaml> [--dry-run] [--mode <m>] [--concurrency <n>] [--on-failure <p>] [--resume <run-id>]` | Tâches-as-code : applique un plan YAML versionné (v1, ou v2 : modes d'orchestration) ; `--resume` rejoue un run v2 interrompu sans relancer les tâches terminées. |
 | `striart draft "<objectif>" [--out <fichier>]` | Planner : propose un plan v2 validé pour un objectif — écrit un fichier, ne lance rien. |
+| `striart work <fichier.yaml> [--run <run-id>]` | Worker coopératif : réclame et exécute les tâches d'un plan v2 une par une ; plusieurs workers sur le même `--run` n'exécutent jamais une tâche deux fois. |
 | `striart profiles [--catalog \| --detect \| --import-acp <id>]` | Profils d'agents configurés ; catalogue des presets ; outils installés ; import d'un agent du registre ACP. |
 | **Orchestrer** | |
 | `striart watch [--no-merge]` | Surveille les commits, merge + Test Gate + rebase en continu. |
@@ -689,6 +690,33 @@ planifié sans deviner, le Planner refuse plutôt que de supposer
 (`PLANNER_REFUSED`) ; un échec du LLM après nouvelles tentatives est
 `PLANNER_FAILED`. Utilise le rôle LLM `planner`
 (`config.llmRoles.planner`, voir [Configuration](configuration.md)).
+
+### `striart work <fichier.yaml> [--run <run-id>]`
+
+Worker coopératif (lot O, priorité 7 — voir [Plans —
+tâches-as-code](plans.md)) : s'attache à un run existant (`--run`) ou en
+crée un, puis réclame et exécute les tâches du plan UNE PAR UNE, en relisant
+l'état PARTAGÉ à chaque passage plutôt que sa seule mémoire. Plusieurs
+`striart work` lancés sur le MÊME `--run` — dans ce process, un autre
+process local, ou une autre machine qui partage `.striart/` — coopèrent
+sans risque : chaque tâche est réclamée par un seul d'entre eux (une
+lecture-modification-écriture atomique sous le verrou d'état, le même qui
+protège déjà tout `.striart/`), jamais deux fois. Il n'y a NI protocole
+réseau NI authentification : « distribué » veut dire ici des process
+séparés qui ont accès au même dossier `.striart/`, rien de plus — et aucun
+dépôt distinct non plus, un plan reste appliqué à CE dépôt.
+
+Sans `--run`, le premier `striart work` affiche l'id du run qu'il a créé
+pour que d'autres workers le rejoignent. `onFailure: stop` se déduit de
+l'état partagé (aucun champ de plus) : dès qu'un worker voit une tâche
+échouer, tous les autres sautent les tâches `pending` restantes. Une tâche
+sautée uniquement pour une interruption gracieuse (`Ctrl+C`, l'arrêt d'un
+autre worker) reste réclamable — exactement comme `striart plan --resume`,
+dont `striart work` réutilise tel quel le contrôle de congruence (`--run`
+doit décrire les mêmes tâches). Une fois la dernière tâche réclamée et plus
+rien à prendre pour aucun worker, le fil complet du run est affiché avec le
+même rendu que [`striart trace`](#striart-trace-run-id). Exige un plan
+`version: 2` (`PLAN_INVALID`, `WORKER_NEEDS_V2` sinon).
 
 ### `striart profiles [--catalog | --detect | --import-acp <id>]`
 

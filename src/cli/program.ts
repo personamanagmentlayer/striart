@@ -311,6 +311,20 @@ export function buildProgram({
             ),
         );
         return;
+      case 'work':
+        define('work', (cmd) =>
+          cmd
+            .argument('<file>', c.work.file)
+            .option('--run <run-id>', c.work.run, runId)
+            .action((file: string, o) =>
+              dispatch(
+                'work',
+                lazy(() => import('./commands/work.ts'), 'work'),
+                { file, runId: o.run ?? null },
+              ),
+            ),
+        );
+        return;
       case 'orchestrate': {
         const repeat = (value: string, previous: string[]) => [...previous, nonEmpty(value)];
         define('orchestrate', (cmd) =>

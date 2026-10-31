@@ -32,6 +32,7 @@ the native binary `striart-native pty-host` (see
 | `striart attach <agent>` | Attaches the terminal to an agent's owned pty (session opened by `--open`). |
 | `striart plan <file.yaml> [--dry-run] [--mode <m>] [--concurrency <n>] [--on-failure <p>] [--resume <run-id>]` | Tasks-as-code: applies a versioned YAML plan (v1, or v2: orchestration modes); `--resume` replays an interrupted v2 run without rerunning finished tasks. |
 | `striart draft "<objective>" [--out <file>]` | Planner: proposes a validated v2 plan for an objective — writes a file, starts nothing. |
+| `striart work <file.yaml> [--run <run-id>]` | Cooperative worker: claims and executes a v2 plan's tasks one at a time; several workers on the same `--run` never execute a task twice. |
 | `striart profiles [--catalog \| --detect \| --import-acp <id>]` | Configured agent profiles; preset catalog; installed tools; import of an ACP registry agent. |
 | **Orchestrating** | |
 | `striart watch [--no-merge]` | Watches commits, merge + Test Gate + rebase continuously. |
@@ -672,6 +673,32 @@ objective is too ambiguous to plan safely, the Planner refuses rather than
 guessing (`PLANNER_REFUSED`); an LLM failure after retries is
 `PLANNER_FAILED`. Uses the `planner` LLM role (`config.llmRoles.planner`,
 see [Configuration](configuration.md)).
+
+### `striart work <file.yaml> [--run <run-id>]`
+
+Cooperative worker (lot O, priority 7 — see [Plans —
+tasks-as-code](plans.md)): attaches to an existing run (`--run`) or creates
+one, then claims and executes the plan's tasks **one at a time**, re-reading
+the shared run state on every pass rather than only its own memory. Several
+`striart work` invocations started on the **same** `--run` — in this
+process, another local process, or another machine that shares `.striart/`
+— cooperate safely: each task is claimed by exactly one of them (an atomic
+read-modify-write under the state lock, the same one that already protects
+every file under `.striart/`), never twice. There is **no network protocol
+and no authentication**: "distributed" here means separate processes with
+access to the same `.striart/` directory, nothing more — and no separate
+repository either, a plan is still applied to this one.
+
+Without `--run`, the first `striart work` prints the run id it created so
+further workers can join it. `onFailure: stop` is derived from the shared
+state (no extra field): once any worker sees a task fail, every worker
+skips the remaining pending ones. A task skipped only for a graceful
+interruption (`Ctrl+C`, another worker's abort) stays claimable — exactly
+like `striart plan --resume`, whose congruence check (`--run`'s plan must
+describe the same tasks) `striart work` reuses as-is. Once the last task is
+claimed and every worker has nothing left to grab, the run's full chain is
+printed via the same rendering as [`striart trace`](#striart-trace-run-id).
+Needs a `version: 2` plan (`PLAN_INVALID`, `WORKER_NEEDS_V2` otherwise).
 
 ### `striart profiles [--catalog | --detect | --import-acp <id>]`
 

@@ -24,9 +24,30 @@ import { mkdirPrivate } from '../private-fs.ts';
 import { isProcessAlive } from '../process-tree.ts';
 import type {
   OrchestrationGroupState,
+  OrchestrationNodeResult,
   OrchestrationRunState,
   OrchestrationStatus,
 } from '../types.js';
+
+/**
+ * Un nœud est réutilisable depuis un run persisté quand son résultat est
+ * VRAIMENT terminal. Un arrêt gracieux (`INTERRUPTED` au signal, `STOPPED`
+ * par la politique d'échec) n'est pas une décision : il n'a jamais tourné,
+ * la reprise (`--resume`) comme la réclamation par un worker doivent le
+ * relancer, jamais le figer en échec.
+ */
+export function resumableResult(
+  result: OrchestrationNodeResult | null,
+): OrchestrationNodeResult | null {
+  if (!result) return null;
+  if (
+    result.status === 'SKIPPED' &&
+    (result.detail === 'INTERRUPTED' || result.detail === 'STOPPED')
+  ) {
+    return null;
+  }
+  return result;
+}
 
 /** Forme d'un id de run — source unique (CLI : `src/cli/parse.ts`, `runIdParser`). */
 export const RUN_ID_RE = /^run-[0-9a-f]{12}$/;
@@ -118,6 +139,66 @@ export async function reopenRunState(root: string, id: string): Promise<Orchestr
     });
   }
   return reopened;
+}
+
+/**
+ * Réclame ATOMIQUEMENT le nœud `index` d'un run — CAS `pending` → `running`
+ * (lot O, priorité 7 : plusieurs workers qui coopèrent sur le MÊME run,
+ * éventuellement en process séparés). Rend `true` si CE process l'a
+ * obtenu, `false` si un autre l'a déjà pris (ou si l'index/le run est
+ * invalide) — jamais les deux à la fois, même pour deux tentatives
+ * strictement simultanées : la lecture-modification-écriture tout entière
+ * tourne sous le verrou d'état (`updateJsonLocked`), le même qui protège
+ * déjà tout l'état de `.striart/` entre process. Ne lève PAS d'erreur sur
+ * un échec de réclamation (c'est l'issue normale d'une course gagnée par
+ * un autre worker) — seulement sur une vraie panne d'E/S.
+ *
+ * Un nœud `pending`, mais aussi un nœud `skipped` dont le résultat n'est
+ * PAS vraiment terminal (`resumableResult` — un arrêt gracieux, jamais une
+ * décision), est réclamable : c'est la même règle que `--resume`, étendue
+ * à un worker qui rejoint le run après coup. Son résultat est effacé à la
+ * réclamation, pour que l'exécution qui suit parte propre.
+ *
+ * `resourcesOf(i)` donne les ressources hors-Git (priorité 4) du nœud `i` —
+ * connues du PLAN, jamais persistées dans l'état du run, donc fournies par
+ * l'appelant. Vérifiées ICI, SOUS LE MÊME VERROU que la réclamation : un
+ * nœud dont une ressource est déjà tenue par un AUTRE nœud `running` (ce
+ * worker ou un autre) n'est jamais réclamé en même temps — la garantie de
+ * la priorité 4, étendue à plusieurs workers sans fenêtre de course.
+ */
+export async function claimRunNode(
+  root: string,
+  id: string,
+  index: number,
+  resourcesOf: (i: number) => readonly string[] = () => [],
+): Promise<boolean> {
+  let claimed = false;
+  await updateJsonLocked(
+    runPath(root, id),
+    { fallback: null as OrchestrationRunState | null, code: 'ORCHESTRATION_STATE_CORRUPT' },
+    (s: OrchestrationRunState | null) => {
+      if (!s) return UNCHANGED;
+      const node = s.nodes[index];
+      if (!node || node.state === 'running' || resumableResult(node.result) !== null) {
+        return UNCHANGED;
+      }
+      const mine = resourcesOf(index);
+      if (mine.length > 0) {
+        const busy = new Set<string>();
+        s.nodes.forEach((n, i) => {
+          if (n.state === 'running') for (const r of resourcesOf(i)) busy.add(r);
+        });
+        if (mine.some((r) => busy.has(r))) return UNCHANGED;
+      }
+      claimed = true;
+      return {
+        ...s,
+        nodes: s.nodes.map((n, i) => (i === index ? { ...n, state: 'running', result: null } : n)),
+        updatedAt: now(),
+      };
+    },
+  );
+  return claimed;
 }
 
 /** Mise à jour best effort : l'état est de l'observabilité, jamais une raison d'échouer un nœud. */

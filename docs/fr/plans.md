@@ -189,6 +189,39 @@ une décision humaine, combien de runs ont VRAIMENT été repris, coût moyen
 par tâche réussie) sur les runs retenus par `orchestration.keepRuns` — voir
 [Commandes](commandes.md).
 
+### Workers coopératifs
+
+`striart work <fichier> [--run <run-id>]` permet à plusieurs process
+indépendants de vider le MÊME run ensemble, chacun réclamant et exécutant
+une tâche à la fois, sans jamais exécuter la même tâche deux fois. La
+garantie tient à une lecture-modification-écriture atomique sous le
+verrou d'état — la même primitive qui protège déjà tout fichier sous
+`.striart/`, pas une nouvelle couche de coordination : un worker qui
+constate que les dépendances d'une tâche sont satisfaites et que ses
+`resources` déclarées sont libres la réclame en une seule étape verrouillée ;
+un deuxième worker qui vise exactement la même tâche ou exactement la même
+ressource perd simplement cette course et cherche autre chose.
+
+Portée, dite sans détour : ce n'est **pas** un protocole réseau. « Plusieurs
+process » veut dire exactement cela — ce process, un autre process local,
+ou un process sur une autre machine qui a accès au même dossier
+`.striart/` (un système de fichiers partagé ou réseau) — jamais un worker
+qui se connecte lui-même à distance, et Striart n'embarque aucune
+authentification ni transport pour cela. Ce n'est non plus **pas** du
+multi-dépôt : un plan reste toujours appliqué au dépôt pour lequel il a été
+écrit ; rien ici ne permet à une tâche de viser un autre checkout. Les deux
+sont explicitement laissés à un incrément ultérieur, jamais supposés en
+silence.
+
+Une tâche sautée uniquement pour une interruption gracieuse (la même
+distinction `INTERRUPTED`/`STOPPED` que `--resume` fait déjà) reste
+réclamable par n'importe quel worker, y compris un qui rejoint après coup —
+un worker, c'est sinon exactement le contrôle de congruence de `--resume`
+(même fichier de plan, mêmes tâches) appliqué en continu plutôt qu'une
+seule fois. `onFailure: stop` n'a besoin d'aucun champ de plus : chaque
+worker le déduit en relisant l'état partagé, l'échec d'un seul arrête donc
+tous les autres de réclamer au passage suivant. Exige un plan `version: 2`.
+
 Les noms de rôles et de relecteurs sont en minuscules, chiffres et tirets
 (`author` et `striart` sont réservés). Un nom d'agent dérivé (`<agent>-<étape>`,
 `<agent>-<n>`) doit rester un nom valide : `agent` est limité à 30 caractères

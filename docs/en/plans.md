@@ -185,6 +185,37 @@ nodes kept for a human decision, how many runs were actually resumed,
 average cost per merged task) over the runs retained by
 `orchestration.keepRuns` — see [Commands](commands.md).
 
+### Cooperative workers
+
+`striart work <file> [--run <run-id>]` lets several independent processes
+drain the **same** run together, each claiming and executing one task at a
+time, without ever executing the same task twice. The guarantee is an
+atomic read-modify-write under the state lock — the same primitive that
+already protects every file under `.striart/` — not a new coordination
+layer: a worker that finds a task's dependencies satisfied and its
+declared `resources` free claims it in one locked step, and a second
+worker racing for the exact same task or the exact same resource simply
+loses that race and looks for something else.
+
+Scope, stated plainly: this is **not** a network protocol. "Several
+processes" means exactly that — this process, another local one, or a
+process on another machine that happens to have access to the same
+`.striart/` directory (a shared or networked filesystem) — never a worker
+that connects to anything over the wire, and Striart ships no
+authentication or transport for it. It is also **not** multi-repo: a plan
+is always applied to the one repository it was written for; nothing here
+lets a task target a different checkout. Both are explicitly left for a
+later increment, not silently assumed.
+
+A task skipped only because of a graceful interruption (the same
+`INTERRUPTED`/`STOPPED` distinction `--resume` already makes) stays
+claimable by any worker, including one that joins after the fact — a
+worker is otherwise exactly `--resume`'s congruence check (same plan file,
+same tasks) applied continuously instead of once. `onFailure: stop` needs
+no field of its own: every worker derives it by rereading the shared
+state, so one worker's failure stops every other from claiming more work
+on the next pass. Needs a `version: 2` plan.
+
 Role and reviewer names use lowercase letters, digits and dashes (`author`
 and `striart` are reserved). A derived agent name (`<agent>-<step>`,
 `<agent>-<n>`) must stay a valid name: `agent` is limited to 30 characters for

@@ -40,7 +40,7 @@ export interface PlanData extends PlanResult {
   sessionFailures: Array<{ agent: string; code: string }>;
 }
 
-async function readPlan(ctx: Ctx, file: string) {
+export async function readPlan(ctx: Ctx, file: string) {
   const absolute = path.resolve(ctx.cwd, file);
   try {
     return { absolute, text: await readFile(absolute, 'utf8') };
@@ -62,7 +62,7 @@ async function readPlan(ctx: Ctx, file: string) {
  * SUPERVISÉE démarrée reçoit sa session tout de suite : le plan l'attend
  * jusqu'à la sortie de son agent, l'humain doit pouvoir s'y mettre.
  */
-function progressRenderer(
+export function progressRenderer(
   ctx: Ctx,
   root: string,
   sessions: Record<string, AttendedSession>,

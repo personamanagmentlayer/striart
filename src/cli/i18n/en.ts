@@ -111,6 +111,8 @@ const PLAN_REASONS: Record<string, (d: Record<string, unknown>) => string> = {
   MODE_INVALID: () => '"mode" must be sequential or parallel.',
   OVERRIDES_NEED_V2: () =>
     '--mode, --concurrency and --on-failure need a "version: 2" plan (a version 1 plan chains through the queue and --after).',
+  WORKER_NEEDS_V2: () =>
+    '"striart work" needs a "version: 2" plan (a version 1 plan has no run state to claim nodes from).',
   CONCURRENCY_INVALID: (d) => `"concurrency" must be a whole number from 1 to ${str(d.max)}.`,
   ON_FAILURE_INVALID: () => '"onFailure" must be stop or skip-dependents.',
   KIND_UNKNOWN: (d) =>
@@ -1344,6 +1346,14 @@ export const en: Messages = {
       objective: 'natural-language objective to turn into a plan',
       out: 'output file (YAML) — default: striart-draft-<timestamp>.yaml',
     },
+    work: {
+      summary: 'Cooperative worker: claims and executes a version 2 plan’s tasks',
+      description:
+        'Attaches to an existing run (--run) or creates one, then claims and executes tasks one at a time until exhausted. Several "striart work" on the same --run cooperate without ever executing a task twice (atomic read-modify-write) — no network protocol, no separate repository.',
+      examples: ['striart work plan.yaml', 'striart work plan.yaml --run run-0123456789ab'],
+      file: 'YAML plan file (same file for every worker of a run)',
+      run: 'the run id to join — omitted: this worker creates one and prints it',
+    },
     orchestrate: {
       summary: 'Run an orchestrated task: review, race, team or pipeline',
       description:
@@ -2000,6 +2010,20 @@ export const en: Messages = {
     colAgent: 'AGENT',
     colCommit: 'COMMIT',
     sessionLog: (task: string, logPath: string) => `${task}: log — ${logPath}`,
+  },
+
+  work: {
+    running: 'The worker is claiming tasks',
+    runId: (runId: string, joined: boolean) =>
+      joined ? `joined run: ${runId}` : `created run: ${runId}`,
+    claimed: (n: number, interrupted: boolean, allDone: boolean) =>
+      `${n} ${plural(n, 'task', 'tasks')} claimed by this worker${
+        interrupted
+          ? ' — interrupted, others may still be claimable'
+          : allDone
+            ? ' — run finished'
+            : ' — nothing left to claim right now'
+      }.`,
   },
 
   history: {

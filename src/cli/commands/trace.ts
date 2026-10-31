@@ -1,6 +1,54 @@
 import { buildObservabilityReport, traceRun } from '../../orchestration/observability.ts';
 import type { ObservabilityReport, RunTrace } from '../../orchestration/observability.ts';
-import type { CommandModule } from '../context.ts';
+import type { CommandModule, Ctx } from '../context.ts';
+
+/** Rendu du fil d'UN run (table des nœuds + journaux de session) — réutilisé par `striart work`. */
+export function renderRunTrace(ctx: Ctx, t: RunTrace): void {
+  const { out, m } = ctx;
+  out.heading(m.trace.runHeading(t.runId, t.status));
+  out.detail(m.trace.runMeta(t.mode, t.resumeCount));
+  out.table(
+    [
+      {
+        key: 'task',
+        header: m.trace.colTask,
+        value: (n) => n.taskId ?? m.plan.derivedName,
+        priority: 9,
+      },
+      { key: 'kind', header: m.trace.colKind, value: (n) => m.plan.kind(n.kind), priority: 6 },
+      {
+        key: 'status',
+        header: m.trace.colStatus,
+        value: (n) => n.status ?? n.state,
+        priority: 8,
+      },
+      {
+        key: 'attempt',
+        header: m.trace.colAttempt,
+        value: (n) => (n.attempt === null ? '' : String(n.attempt)),
+        priority: 4,
+      },
+      {
+        key: 'agent',
+        header: m.trace.colAgent,
+        value: (n) => (n.agent ? out.untrusted(n.agent) : ''),
+        priority: 7,
+      },
+      {
+        key: 'commit',
+        header: m.trace.colCommit,
+        value: (n) => (n.commit ? n.commit.sha.slice(0, 10) : ''),
+        priority: 5,
+        shrink: { min: 10 },
+      },
+    ],
+    t.nodes,
+  );
+  for (const n of t.nodes) {
+    if (n.sessionLogPath)
+      out.detail(m.trace.sessionLog(n.taskId ?? m.plan.derivedName, n.sessionLogPath));
+  }
+}
 
 export interface TraceInput {
   runId: string | null;
@@ -56,49 +104,6 @@ export const trace: CommandModule<TraceInput, TraceData> = {
       out.hint('striart trace <run-id>');
       return;
     }
-    const t = data.trace;
-    out.heading(m.trace.runHeading(t.runId, t.status));
-    out.detail(m.trace.runMeta(t.mode, t.resumeCount));
-    out.table(
-      [
-        {
-          key: 'task',
-          header: m.trace.colTask,
-          value: (n) => n.taskId ?? m.plan.derivedName,
-          priority: 9,
-        },
-        { key: 'kind', header: m.trace.colKind, value: (n) => m.plan.kind(n.kind), priority: 6 },
-        {
-          key: 'status',
-          header: m.trace.colStatus,
-          value: (n) => n.status ?? n.state,
-          priority: 8,
-        },
-        {
-          key: 'attempt',
-          header: m.trace.colAttempt,
-          value: (n) => (n.attempt === null ? '' : String(n.attempt)),
-          priority: 4,
-        },
-        {
-          key: 'agent',
-          header: m.trace.colAgent,
-          value: (n) => (n.agent ? out.untrusted(n.agent) : ''),
-          priority: 7,
-        },
-        {
-          key: 'commit',
-          header: m.trace.colCommit,
-          value: (n) => (n.commit ? n.commit.sha.slice(0, 10) : ''),
-          priority: 5,
-          shrink: { min: 10 },
-        },
-      ],
-      t.nodes,
-    );
-    for (const n of t.nodes) {
-      if (n.sessionLogPath)
-        out.detail(m.trace.sessionLog(n.taskId ?? m.plan.derivedName, n.sessionLogPath));
-    }
+    renderRunTrace(ctx, data.trace);
   },
 };
