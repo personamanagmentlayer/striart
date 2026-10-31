@@ -3,8 +3,6 @@
 > Documentation complète de Striart, l'orchestrateur Git multi-agents.
 > Le [README français](../../README.fr.md) à la racine est la vitrine (référence) ;
 > [README.md](../../README.md) y est désormais la version anglaise par défaut. Tout le détail vit ici.
-> Aussi publiée comme site navigable :
-> <https://personamanagmentlayer.github.io/striart/>.
 > 🇬🇧 [English documentation](../en/README.md).
 
 ## Sommaire

@@ -2,8 +2,7 @@
 
 > Complete documentation for Striart, the multi-agent Git orchestrator.
 > The root [README.md](../../README.md) is the showcase and is shown by default;
-> all the detail lives here. Also published as a browsable site:
-> <https://personamanagmentlayer.github.io/striart/>.
+> all the detail lives here.
 > 🇫🇷 [Documentation française](../fr/README.md) — the [French README](../../README.fr.md) is the content reference.
 
 ## Contents

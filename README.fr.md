@@ -137,8 +137,7 @@ anglais (`STRIART_LANG`), complétion bash/zsh/fish/PowerShell
 ## Documentation
 
 La documentation complète vit dans **[docs/fr/](docs/fr/README.md)**
-(🇬🇧 [docs/en/](docs/en/README.md)), et est aussi publiée comme site
-navigable : **<https://personamanagmentlayer.github.io/striart/>**.
+(🇬🇧 [docs/en/](docs/en/README.md)) :
 
 | Page | Contenu |
 |---|---|

@@ -58,7 +58,8 @@ describe('watchers de .striart/ — le bruit des verrous ne rafraîchit rien (in
     const feed = createChangeFeed(repo.root, { debounceMs: 50 });
     const batches = [];
     const off = feed.subscribe((batch) => batches.push(batch));
-    await settle(600);
+    await settle(600); // le scan initial du flux (comme pour ControlHub ci-dessus) — pas mesuré
+    batches.length = 0; // un lot né du scan initial, pas encore arrivé sur un ordonnanceur chargé, ne compte pas comme bruit
     await makeNoise(repo.root);
     await settle(1200);
     // Les lots reçus accompagnent l'échec : quel chemin a déclenché le rafraîchissement ?
