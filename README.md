@@ -137,7 +137,9 @@ Scriptable exit codes (0 success, 1 failure, 2 usage, 3 refused by a guard),
 ## Documentation
 
 The complete documentation lives in **[docs/en/](docs/en/README.md)**
-(🇫🇷 [docs/fr/](docs/fr/README.md) — the French version is the reference):
+(🇫🇷 [docs/fr/](docs/fr/README.md) — the French version is the reference),
+and is also published as a browsable site:
+**<https://personamanagmentlayer.github.io/striart/>**.
 
 | Page | Content |
 |---|---|

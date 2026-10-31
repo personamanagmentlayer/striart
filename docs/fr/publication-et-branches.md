@@ -50,6 +50,14 @@ testé). Le job final **`ci-ok`** échoue si un job amont est rouge, annulé ou 
 c'est le seul contrôle à exiger. Une pull request obsolète est annulée par
 nouvelle poussée ; un push n'est jamais annulé.
 
+Un workflow séparé `Docs` (`.github/workflows/docs.yml`) reconstruit et publie
+`docs/` sur GitHub Pages à chaque push sur `main` qui touche `docs/**` —
+indépendant de `ci.yml`, jamais un contrôle exigé, et les pull requests ne le
+déclenchent pas (une PR qui ne touche que la doc se relit sur le diff, pas sur un
+aperçu déployé). Il construit avec Jekyll (`actions/jekyll-build-pages`, la même
+chaîne que l'hébergement Pages de GitHub lui-même) et publie sur
+<https://personamanagmentlayer.github.io/striart/>.
+
 ## Versions et tags
 
 - **SemVer** (`MAJEUR.MINEUR.CORRECTIF`). Tant que la majeure est `0`, une montée de

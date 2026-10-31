@@ -48,6 +48,13 @@ final **`ci-ok`** job fails if any upstream job is red, cancelled or skipped: it
 only check to require. An outdated pull request run is cancelled by a new push; a push
 run never is.
 
+A separate `Docs` workflow (`.github/workflows/docs.yml`) rebuilds and publishes
+`docs/` to GitHub Pages on every push to `main` that touches `docs/**` — independent
+from `ci.yml`, never a required check, and pull requests don't trigger it (a
+docs-only PR is reviewed on the diff, not a preview deploy). It builds with Jekyll
+(`actions/jekyll-build-pages`, the same toolchain GitHub's own Pages hosting uses) and
+publishes at <https://personamanagmentlayer.github.io/striart/>.
+
 ## Versions and tags
 
 - **SemVer** (`MAJOR.MINOR.PATCH`). While the major is `0`, a **minor bump may break

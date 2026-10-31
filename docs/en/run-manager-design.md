@@ -1,11 +1,16 @@
-# Design — Run Manager (proposal)
+# Design — Run Manager
 
 > [Documentation](README.md) · Design — Run Manager
 >
-> **Status: proposal, not implemented.** This document describes a target
-> architecture and a build order; nothing here has shipped. It is meant to
-> ground discussion and planning, not to be a frozen spec. 🇫🇷 [Version
-> française](../fr/conception-run-manager.md).
+> **Status: shipped (v0.12.0).** All seven priorities below landed on
+> `main` (PR #4) in the order this document lays out. Priorities 5 and 7
+> shipped **scoped** to what could be delivered honestly rather than as
+> originally sketched — see the note at the end of each of their sections.
+> The rest of this document is kept as the design record; for the shipped
+> behavior itself see [Plans](plans.md), [Commands](commands.md) (`striart
+> draft`, `plan --resume`, `trace`, `work`) and
+> [Configuration](configuration.md) (`agentProfiles.<name>.envAllow`).
+> 🇫🇷 [Version française](../fr/conception-run-manager.md).
 
 ## Why
 
@@ -249,6 +254,14 @@ If adopted, proposed execution profiles:
 read outside its scope, retrieve the orchestrator's secrets, push, or
 approve its own result.
 
+> **Shipped, scoped**: `agentProfiles.<name>.envAllow` (a declarative
+> inherited-environment allowlist) only — the real, honest,
+> platform-independent piece. Filesystem/network/process sandboxing for the
+> hosted tool is **not** implemented; SECURITY.md still calls the model
+> "defense in depth, not a sandbox". See
+> [Configuration](configuration.md#agent-profiles-agentprofiles) and
+> SECURITY.md.
+
 ## 6. End-to-end observability (priority 6)
 
 A shared identifier across the existing dashboard and registries:
@@ -270,6 +283,13 @@ gates.
 Out of scope for this document for now — entirely dependent on priorities
 1–6 (a non-durable Run Manager can't distribute without double execution).
 
+> **Shipped, scoped**: `striart work <file> [--run <run-id>]` —
+> cooperative workers (several independent processes sharing the same
+> `.striart/` directory, on one machine or several) draining one run
+> together via an atomic claim, never a network protocol, authentication,
+> or cross-repository execution. See [Plans](plans.md#cooperative-workers)
+> and [Commands](commands.md#striart-work-fileyaml---run-run-id).
+
 ## Build order
 
 | Priority | Increment | Verifiable result |
@@ -290,5 +310,7 @@ powerful LLM, that is the priority foundation.
 
 ## Scope of this branch
 
-This document alone. No code ships here: it exists to validate the target
-and the order before starting priority 1 in a separate branch.
+This document alone, originally — it was meant to validate the target and
+the order before starting priority 1 in a separate branch. The seven
+priorities above were then implemented, each its own commit, on
+`feat/run-manager`, and merged to `main` in PR #4 (v0.12.0).
